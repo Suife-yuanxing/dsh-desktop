@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>DeepSeek Harness - 启动失败</title>
+<style>
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0d1117; color: #e6edf3;
+         display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+  .card { max-width: 640px; padding: 40px; background: #161b22; border: 1px solid #30363d; border-radius: 12px; }
+  h1 { font-size: 20px; margin-top: 0; }
+  code { background: #21262d; padding: 2px 8px; border-radius: 4px; color: #79c0ff; }
+  .hint { color: #8b949e; font-size: 13px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>dsh 服务启动失败</h1>
+  <div id="reason"></div>
+  <h3>解决方法</h3>
+  <ol>
+    <li>确认已安装 Node.js(含 npx):<code>node -v</code></li>
+    <li>首次运行需联网下载 <code>@deepseek-ai/dsh</code> 包,请检查网络后重试</li>
+    <li>从托盘菜单选择「重启 dsh 服务」重试</li>
+    <li>查看日志:<code>%USERPROFILE%\.dsh\logs\desktop.log</code></li>
+  </ol>
+  <div class="hint">手动启动验证:<code>npx @deepseek-ai/dsh web</code></div>
+</div>
+<script>
+  const reason = new URLSearchParams(location.search).get('reason')
+  const map = {
+    'no-npx': '未找到可用的 Node.js / npx。请先安装 Node.js 22+ 后从托盘重启服务。',
+    'timeout': '等待服务就绪超时(120 秒)。首次启动需下载 npm 包,请确认网络后重试。',
+    'crash': 'dsh 服务多次崩溃,自动恢复已停止。请从托盘菜单「重启 dsh 服务」手动重试,或查看日志定位原因。',
+  }
+  document.getElementById('reason').textContent = map[reason] || '未知原因,请查看日志。'
+</script>
+</body>
+</html>

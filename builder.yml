@@ -1,0 +1,31 @@
+appId: local.dsh.desktop
+productName: DeepSeek Harness
+publish:
+  provider: github
+  owner: Suife-yuanxing
+  repo: dsh-desktop
+  releaseType: release
+directories:
+  output: dist
+  buildResources: .
+files:
+  - main.js
+  - preload.js
+  - error.html
+  - splash.html
+  - logo.png
+  - icon.ico
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  shortcutName: DeepSeek Harness
+portable:
+  artifactName: DeepSeek-Harness-Portable-${version}.exe

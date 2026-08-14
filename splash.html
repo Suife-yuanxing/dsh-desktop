@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>DeepSeek Harness</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #0d1117; color: #e6edf3;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 28px;
+    -webkit-app-region: no-drag;
+  }
+  img.logo { width: 96px; height: 96px; }
+  .spinner {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 3px solid #30363d; border-top-color: #4184f3;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .stage { font-size: 14px; color: #e6edf3; min-height: 20px; }
+  .elapsed { font-size: 12px; color: #8b949e; font-variant-numeric: tabular-nums; }
+  .brand { position: fixed; bottom: 18px; font-size: 12px; color: #484f58; letter-spacing: 0.5px; }
+</style>
+</head>
+<body>
+  <img class="logo" src="logo.png" alt="logo">
+  <div class="spinner"></div>
+  <div class="stage" id="stage">正在启动…</div>
+  <div class="elapsed" id="elapsed"></div>
+  <div class="brand">DeepSeek Harness</div>
+<script>
+  const STAGES = {
+    probe: '探测本地服务…',
+    spawn: '启动 dsh 服务…',
+    wait: '等待服务就绪(首次运行需下载依赖)…',
+    ready: '即将进入',
+    crash: 'dsh 服务异常退出,正在自动恢复…',
+  }
+  const elStage = document.getElementById('stage')
+  const elElapsed = document.getElementById('elapsed')
+  const t0 = Date.now()
+  setInterval(() => {
+    elElapsed.textContent = `已等待 ${Math.floor((Date.now() - t0) / 1000)} 秒`
+  }, 1000)
+  window.dshDesktop.onStage((stage) => { elStage.textContent = STAGES[stage] || stage })
+</script>
+</body>
+</html>
