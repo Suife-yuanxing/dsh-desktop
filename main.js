@@ -4,6 +4,7 @@
 const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const net = require('node:net')
+const http = require('node:http')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -503,6 +504,62 @@ async function newWindow() {
   win.loadURL(DSH_URL)
 }
 
+// ---------- 壳 HTTP API(Web UI 版本 tab 经此与壳通信,仅本机) ----------
+
+const SHELL_API_PORT = 30801
+const SHELL_API_ALLOWED_ORIGINS = new Set([
+  `http://127.0.0.1:${DSH_PORT}`, `http://localhost:${DSH_PORT}`,
+])
+
+function startShellApi() {
+  const server = http.createServer(async (req, res) => {
+    const origin = req.headers.origin || ''
+    // 无 Origin(本机 curl/诊断)放行;带 Origin(浏览器)必须匹配 dsh Web UI 源
+    const corsOk = !origin || SHELL_API_ALLOWED_ORIGINS.has(origin)
+    const base = {
+      'Access-Control-Allow-Origin': origin || `http://127.0.0.1:${DSH_PORT}`,
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    }
+    if (req.method === 'OPTIONS') { res.writeHead(204, base); res.end(); return }
+    const send = (code, data) => {
+      res.writeHead(code, { 'Content-Type': 'application/json', ...base })
+      res.end(JSON.stringify(data))
+    }
+    const url = new URL(req.url, `http://127.0.0.1:${SHELL_API_PORT}`)
+    if (!corsOk) return send(403, { error: 'origin not allowed' })
+    try {
+      if (req.method === 'GET' && url.pathname === '/state') {
+        return send(200, {
+          shellVersion: app.getVersion(),
+          dshVersion: cfg.dshVersion,
+          availableVersions,
+          switching,
+        })
+      }
+      if (req.method === 'POST' && url.pathname === '/switch') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { version } = JSON.parse(body || '{}')
+        if (typeof version !== 'string' || !version) return send(400, { accepted: false, error: '缺少 version' })
+        if (!availableVersions.includes(version)) return send(400, { accepted: false, error: '版本不在可用列表' })
+        if (version === cfg.dshVersion || switching) return send(409, { accepted: false, error: '已有切换在进行或版本未变' })
+        switchDshVersion(version) // 异步执行,预检+回滚由壳编排
+        return send(202, { accepted: true })
+      }
+      if (req.method === 'POST' && url.pathname === '/refresh') {
+        await fetchAvailableVersions()
+        return send(200, { availableVersions })
+      }
+      send(404, { error: 'not found' })
+    } catch (e) {
+      send(500, { error: e.message })
+    }
+  })
+  server.on('error', (e) => log(`壳 API 启动失败: ${e.message}`))
+  server.listen(SHELL_API_PORT, '127.0.0.1', () => log(`壳 API 就绪: 127.0.0.1:${SHELL_API_PORT}`))
+}
+
 // ---------- 设置窗口(dsh 版本/更新管理) ----------
 
 function openSettings() {
@@ -574,7 +631,6 @@ function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: '显示主界面', click: () => { const w = [...mainWindows][0]; if (w) { w.show(); w.focus() } } },
     { label: '新建窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => newWindow() },
-    { label: '设置', accelerator: 'CmdOrCtrl+,', click: () => openSettings() },
     { type: 'separator' },
     { label: '重载界面', click: () => { for (const w of mainWindows) if (!w.isDestroyed()) w.reload() } },
     { label: '重启 dsh 服务', click: () => restartDsh() },
@@ -715,6 +771,7 @@ if (!app.requestSingleInstanceLock()) {
     createTray()
     setupShellUpdater()
     setupSettingsIpc()
+    startShellApi()
     boot().then(() => {
       // 就绪后异步拉版本列表 + 启动时静默检查双更新
       fetchAvailableVersions()
