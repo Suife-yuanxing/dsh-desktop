@@ -17,7 +17,8 @@ const LOG_FILE = path.join(LOG_DIR, 'desktop.log')
 const CONFIG_FILE = path.join(DSH_HOME, 'desktop-config.json')
 const DEFAULT_DSH_VERSION = '0.1.0-rc.6' // 锁定到当前验证过的版本
 const RECOVERY_DELAYS = [1_000, 5_000, 15_000] // 崩溃自愈退避,3 次后停
-const GITHUB_DSH = 'https://github.com/deepseek-ai/deepseek-harness/releases'
+const GITHUB_DSH = 'https://github.com/deepseek-ai/deepseek-harness'
+const GITHUB_DSH_TAGS = `${GITHUB_DSH}/tags` // 官方仓库无 Releases,版本历史走 Tags
 const GITHUB_SHELL = 'https://github.com/Suife-yuanxing/dsh-desktop'
 
 // 壳自更新仅对 NSIS 安装版生效;便携版(process.env.PORTABLE_EXECUTABLE_DIR)不支持
@@ -252,6 +253,54 @@ async function fetchAvailableVersions() {
   } catch { /* 解析失败保持原列表 */ }
 }
 
+// 版本预检:npx 拉包并执行 --version,验证该版本可运行(旧 rc 可能包损坏/不兼容)
+function probeDshVersion(version) {
+  return new Promise((resolve) => {
+    const npx = resolveNpxCommand()
+    if (!npx) return resolve({ ok: false, error: '未找到 npx' })
+    const spec = `@deepseek-ai/dsh@${version}`
+    const child = spawn('cmd.exe', ['/c', npx, '-y', spec, '--version'],
+      { cwd: os.homedir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    let done = false
+    const finish = (v) => { if (!done) { done = true; resolve(v) } }
+    const timer = setTimeout(() => { try { child.kill() } catch {}; finish({ ok: false, error: '预检超时(60s),版本可能无法下载' }) }, 60_000)
+    child.stdout.on('data', (d) => { out += d })
+    child.stderr.on('data', (d) => { err += d })
+    child.on('exit', (code) => {
+      clearTimeout(timer)
+      if (code === 0) finish({ ok: true, version: out.trim().split(/\r?\n/).pop() })
+      else finish({ ok: false, error: `退出码 ${code}: ${(err || out).trim().slice(0, 160)}` })
+    })
+    child.on('error', (e) => { clearTimeout(timer); finish({ ok: false, error: e.message }) })
+  })
+}
+
+// 应用新版本:写锁→重启→60s 未就绪自动回滚旧版本(防止死版本进入崩溃循环)
+async function applyDshVersion(newVersion) {
+  const prevVersion = cfg.dshVersion
+  cfg.dshVersion = newVersion
+  saveConfig(cfg)
+  rebuildTray()
+  log(`dsh 版本锁切换为 ${newVersion}`)
+  await restartDsh()
+  // restartDsh 内 waitForPort(120s);此处缩短判定:60s 未就绪即回滚
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    if (await isPortUp()) return true
+    await sleep(2_000)
+  }
+  if (await isPortUp()) return true
+  log(`版本 ${newVersion} 60s 未就绪,自动回滚到 ${prevVersion}`)
+  notify('dsh 版本切换失败', `${newVersion} 启动超时,已自动回滚到 ${prevVersion}。`)
+  cfg.dshVersion = prevVersion
+  saveConfig(cfg)
+  rebuildTray()
+  await restartDsh()
+  return false
+}
+
 // dsh 运行时更新:npm 最新版 vs 版本锁;发现新版→确认→写锁→重启 dsh
 async function checkDshUpdate(manual) {
   if (cfg.dshVersion === 'latest') {
@@ -271,21 +320,23 @@ async function checkDshUpdate(manual) {
     type: 'info',
     title: 'dsh 有新版本',
     message: `发现 dsh 新版本 ${latest}(当前 ${cfg.dshVersion})`,
-    detail: 'rc 预览版可能包含不兼容变更,更新后如遇异常可在托盘「dsh 版本」切回旧版。',
-    buttons: ['更新并重启服务', '查看更新日志', '忽略'],
+    detail: '更新前会验证新版可运行,失败自动回滚;也可随时在托盘「dsh 版本」切回旧版。',
+    buttons: ['更新并重启服务', '查看版本历史', '忽略'],
     defaultId: 0,
     cancelId: 2,
   })
   if (response === 1) {
-    shell.openExternal(GITHUB_DSH)
+    shell.openExternal(GITHUB_DSH_TAGS)
     return
   }
   if (response !== 0) return
-  cfg.dshVersion = latest
-  saveConfig(cfg)
-  log(`dsh 版本锁更新为 ${latest},重启服务`)
-  rebuildTray()
-  restartDsh()
+  const probe = await probeDshVersion(latest)
+  if (!probe.ok) {
+    notify('dsh 更新', `新版本 ${latest} 验证失败(${probe.error}),已保持 ${cfg.dshVersion}。`)
+    log(`新版 ${latest} 预检失败: ${probe.error}`)
+    return
+  }
+  await applyDshVersion(latest)
 }
 
 // ---------- 壳自更新(electron-updater,仅 NSIS 安装版) ----------
@@ -456,16 +507,23 @@ async function switchDshVersion(v) {
     type: 'question',
     title: '切换 dsh 版本',
     message: `切换到 ${v} 并重启服务?`,
+    detail: '切换前会先验证该版本可运行;启动失败将自动回滚到当前版本。',
     buttons: ['切换并重启', '取消'],
     defaultId: 0,
     cancelId: 1,
   })
   if (response !== 0) { rebuildTray(); return }
-  cfg.dshVersion = v
-  saveConfig(cfg)
-  log(`dsh 版本锁切换为 ${v}`)
-  rebuildTray()
-  restartDsh()
+  // 预检:旧 rc 版本可能包损坏或与当前数据不兼容,先验证再切换
+  stage('probe')
+  notify('dsh 版本切换', `正在验证 ${v} ...`)
+  const probe = await probeDshVersion(v)
+  if (!probe.ok) {
+    notify('dsh 版本切换', `版本 ${v} 不可用(${probe.error}),已取消切换。`)
+    log(`版本 ${v} 预检失败: ${probe.error}`)
+    rebuildTray()
+    return
+  }
+  await applyDshVersion(v)
 }
 
 function buildTrayMenu() {
@@ -476,6 +534,7 @@ function buildTrayMenu() {
     { label: 'dsh 版本', submenu: buildVersionSubmenu() },
     { label: '检查 dsh 更新', click: () => checkDshUpdate(true) },
     { label: '检查壳更新', click: () => checkShellUpdate() },
+    { label: '下载壳的历史版本', click: () => shell.openExternal(`${GITHUB_SHELL}/releases`) },
     { type: 'separator' },
     { label: '重载界面', click: () => { for (const w of mainWindows) if (!w.isDestroyed()) w.reload() } },
     { label: '重启 dsh 服务', click: () => restartDsh() },
@@ -541,8 +600,8 @@ function setupAppMenu() {
     {
       label: '帮助',
       submenu: [
-        { label: 'dsh 更新日志', click: () => shell.openExternal(GITHUB_DSH) },
-        { label: '本项目主页', click: () => shell.openExternal(GITHUB_SHELL) },
+        { label: 'dsh 版本历史(官方仓库)', click: () => shell.openExternal(GITHUB_DSH_TAGS) },
+        { label: '本项目主页与版本下载', click: () => shell.openExternal(GITHUB_SHELL) },
         { type: 'separator' },
         {
           label: '关于',
