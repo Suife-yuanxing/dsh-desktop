@@ -6,7 +6,7 @@ publish:
   repo: dsh-desktop
   releaseType: release
 directories:
-  output: dist
+  output: dist-v0.3
   buildResources: .
 files:
   - main.js

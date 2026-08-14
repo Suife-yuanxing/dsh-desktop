@@ -8,7 +8,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win --config builder.yml"
   },
   "devDependencies": {
     "electron": "^33.0.0",
