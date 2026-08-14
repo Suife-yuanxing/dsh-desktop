@@ -13,6 +13,7 @@ files:
   - preload.js
   - error.html
   - splash.html
+  - settings.html
   - logo.png
   - icon.ico
 win:

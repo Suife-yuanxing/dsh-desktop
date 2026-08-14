@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>设置 - DeepSeek Harness</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #0d1117; color: #e6edf3;
+    padding: 20px 24px; font-size: 14px;
+  }
+  h2 { font-size: 13px; color: #8b949e; font-weight: 600; letter-spacing: 1px;
+      margin: 22px 0 10px; text-transform: uppercase; }
+  h2:first-child { margin-top: 0; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; }
+  .row + .row { border-top: 1px solid #21262d; }
+  .label { color: #e6edf3; }
+  .value { color: #8b949e; font-variant-numeric: tabular-nums; }
+  .versions { display: flex; flex-direction: column; gap: 6px; }
+  .ver {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 9px 12px; border: 1px solid #30363d; border-radius: 6px;
+    background: #0d1117; cursor: pointer; transition: border-color .15s;
+  }
+  .ver:hover { border-color: #4184f3; }
+  .ver.current { border-color: #238636; cursor: default; }
+  .ver.busy { opacity: .45; pointer-events: none; }
+  .ver .tag { font-size: 12px; color: #8b949e; }
+  .ver.current .tag { color: #3fb950; }
+  .btn {
+    background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  .btn:hover { border-color: #8b949e; }
+  .btn.primary { background: #238636; border-color: #238636; }
+  .btn.primary:hover { background: #2ea043; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .status {
+    margin-top: 14px; padding: 10px 12px; border-radius: 6px; font-size: 13px;
+    background: #161b22; border: 1px solid #30363d; color: #8b949e;
+    min-height: 20px; display: none; word-break: break-all;
+  }
+  .status.show { display: block; }
+  .status.ok { border-color: #238636; color: #3fb950; }
+  .status.fail { border-color: #da3633; color: #f85149; }
+  .status.busy { border-color: #4184f3; color: #79c0ff; }
+  .hint { font-size: 12px; color: #484f58; margin-top: 8px; line-height: 1.6; }
+  .empty { color: #8b949e; padding: 6px 0; }
+</style>
+</head>
+<body>
+  <h2>dsh 运行时版本</h2>
+  <div class="card">
+    <div class="versions" id="versions"><div class="empty">正在获取版本列表…</div></div>
+    <div class="actions">
+      <button class="btn" id="btn-refresh">刷新版本列表</button>
+      <button class="btn" id="btn-check-dsh">检查 dsh 更新</button>
+    </div>
+    <div class="hint">仅显示可安装的公开版本;切换前自动验证可用性,失败自动回滚。</div>
+  </div>
+
+  <h2>壳更新</h2>
+  <div class="card">
+    <div class="row"><span class="label">当前壳版本</span><span class="value" id="shell-version">-</span></div>
+    <div class="row"><span class="label">更新通道</span><span class="value" id="channel">-</span></div>
+    <div class="actions">
+      <button class="btn primary" id="btn-check-shell">检查壳更新</button>
+    </div>
+    <div class="hint">壳的历史版本可到 GitHub Releases 手动下载。</div>
+  </div>
+
+  <div class="status" id="status"></div>
+
+<script>
+  const api = window.dshDesktop.settings
+  const elVersions = document.getElementById('versions')
+  const elStatus = document.getElementById('status')
+  let state = { dshVersion: '', availableVersions: [], switching: false }
+
+  function setStatus(text, cls) {
+    elStatus.textContent = text
+    elStatus.className = 'status show ' + (cls || '')
+  }
+
+  function render() {
+    document.getElementById('shell-version').textContent = state.shellVersion || '-'
+    document.getElementById('channel').textContent = state.channel || '-'
+    if (!state.availableVersions.length) {
+      elVersions.innerHTML = '<div class="empty">暂无可用版本(仅展示 npm 公开发布后的版本)</div>'
+      return
+    }
+    elVersions.innerHTML = ''
+    for (const v of state.availableVersions) {
+      const isCurrent = v === state.dshVersion
+      const div = document.createElement('div')
+      div.className = 'ver' + (isCurrent ? ' current' : '') + (state.switching ? ' busy' : '')
+      const name = document.createElement('span')
+      name.className = 'label'
+      name.textContent = v
+      const tag = document.createElement('span')
+      tag.className = 'tag'
+      tag.textContent = isCurrent ? '当前使用' : (state.switching ? '切换中…' : '点击切换')
+      div.append(name, tag)
+      if (!isCurrent && !state.switching) {
+        div.addEventListener('click', () => {
+          if (!confirm(`切换 dsh 到 ${v} 并重启服务?\n切换前会验证该版本,失败将自动回滚。`)) return
+          setStatus(`正在验证 ${v} …`, 'busy')
+          api.switchVersion(v)
+        })
+      }
+      elVersions.append(div)
+    }
+  }
+
+  async function refresh() {
+    try {
+      const s = await api.get()
+      state = s
+      render()
+    } catch { /* 窗口初始化竞态时静默 */ }
+  }
+
+  api.onStatus((s) => {
+    setStatus(s.message, s.phase === 'ok' ? 'ok' : s.phase === 'fail' ? 'fail' : 'busy')
+    if (s.phase === 'ok' || s.phase === 'rollback' || s.phase === 'fail') setTimeout(refresh, 600)
+  })
+
+  document.getElementById('btn-refresh').addEventListener('click', () => {
+    setStatus('正在刷新版本列表…', 'busy')
+    api.refreshVersions()
+    setTimeout(refresh, 3000)
+  })
+  document.getElementById('btn-check-dsh').addEventListener('click', () => api.checkDshUpdate())
+  document.getElementById('btn-check-shell').addEventListener('click', () => api.checkShellUpdate())
+
+  refresh()
+</script>
+</body>
+</html>

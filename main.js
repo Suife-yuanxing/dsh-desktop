@@ -1,7 +1,7 @@
 // dsh-desktop 主进程 v0.3
 // v0.1 Electron 壳 | v0.2 启动页+崩溃自愈 | v0.3 多窗口+dsh版本锁+dsh更新+壳自更新+全中文菜单
 // dsh 运行时经 npx 调用(PATH→注册表),版本锁存于 ~/.dsh/desktop-config.json,插件化零破坏。
-const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell } = require('electron')
+const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const net = require('node:net')
 const fs = require('node:fs')
@@ -16,6 +16,7 @@ const LOG_DIR = path.join(DSH_HOME, 'logs')
 const LOG_FILE = path.join(LOG_DIR, 'desktop.log')
 const CONFIG_FILE = path.join(DSH_HOME, 'desktop-config.json')
 const DEFAULT_DSH_VERSION = '0.1.0-rc.6' // 锁定到当前验证过的版本
+const MIN_PUBLIC_DSH_VERSION = '0.1.0-rc.6' // 此前版本发布时 @deepseek-ai/* 依赖族未公开,今日 npx 已装不完整,一律不展示
 const RECOVERY_DELAYS = [1_000, 5_000, 15_000] // 崩溃自愈退避,3 次后停
 const GITHUB_DSH = 'https://github.com/deepseek-ai/deepseek-harness'
 const GITHUB_DSH_TAGS = `${GITHUB_DSH}/tags` // 官方仓库无 Releases,版本历史走 Tags
@@ -28,12 +29,14 @@ const autoUpdater = canShellSelfUpdate ? require('electron-updater').autoUpdater
 
 let splashWindow = null
 const mainWindows = new Set() // 共享同一 dsh 服务的多窗口
+let settingsWindow = null // 壳设置窗口(dsh 版本/更新管理)
 let tray = null
 let dshChild = null
 let quitting = false
 let restartAttempts = 0
 let recoveryTimer = null
-let availableVersions = [] // npm 上可选的 dsh 版本(异步拉取后填充菜单)
+let availableVersions = [] // npm 上可选的 dsh 版本(异步拉取后填充设置页)
+let switching = false // 版本切换互斥,防止并发触发
 
 // ---------- 配置(dsh 版本锁) ----------
 
@@ -240,15 +243,33 @@ function npmView(args) {
   })
 }
 
+// 解析 'x.y.z-rc.N' 为可比较数组;无 rc 后缀视为正式版(高于一切 rc)
+function parseDshVersion(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$/.exec(String(v || ''))
+  return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? Infinity : +m[4]] : null
+}
+
+function cmpDshVersion(a, b) {
+  const pa = parseDshVersion(a)
+  const pb = parseDshVersion(b)
+  if (!pa || !pb) return 0
+  for (let i = 0; i < 4; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i]
+  return 0
+}
+
 async function fetchAvailableVersions() {
   const raw = await npmView(['versions', '--json'])
   if (!raw) return
   try {
     const list = JSON.parse(raw)
     if (Array.isArray(list) && list.length) {
-      availableVersions = list.slice(-8).reverse() // 最近 8 个,新→旧
+      // 只保留 npm 公开发布起的可安装版本,旧 rc 装不完整,展示无意义
+      availableVersions = list
+        .filter((v) => cmpDshVersion(v, MIN_PUBLIC_DSH_VERSION) >= 0)
+        .slice(-8)
+        .reverse() // 最近 8 个,新→旧
       rebuildTray()
-      log(`已拉取 dsh 版本列表: ${availableVersions.join(', ')}`)
+      log(`已拉取 dsh 版本列表(仅公开可用): ${availableVersions.join(', ')}`)
     }
   } catch { /* 解析失败保持原列表 */ }
 }
@@ -277,9 +298,17 @@ function probeDshVersion(version) {
   })
 }
 
+// 设置页进度推送
+function settingsStatus(payload) {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.webContents.send('dsh-settings:status', payload)
+  }
+}
+
 // 应用新版本:写锁→重启→60s 未就绪自动回滚旧版本(防止死版本进入崩溃循环)
 async function applyDshVersion(newVersion) {
   const prevVersion = cfg.dshVersion
+  settingsStatus({ phase: 'apply', message: `正在切换到 ${newVersion} 并重启服务…` })
   cfg.dshVersion = newVersion
   saveConfig(cfg)
   rebuildTray()
@@ -294,6 +323,7 @@ async function applyDshVersion(newVersion) {
   if (await isPortUp()) return true
   log(`版本 ${newVersion} 60s 未就绪,自动回滚到 ${prevVersion}`)
   notify('dsh 版本切换失败', `${newVersion} 启动超时,已自动回滚到 ${prevVersion}。`)
+  settingsStatus({ phase: 'rollback', message: `${newVersion} 启动超时,已自动回滚到 ${prevVersion}。` })
   cfg.dshVersion = prevVersion
   saveConfig(cfg)
   rebuildTray()
@@ -473,68 +503,78 @@ async function newWindow() {
   win.loadURL(DSH_URL)
 }
 
-// ---------- 菜单(全中文) ----------
+// ---------- 设置窗口(dsh 版本/更新管理) ----------
 
-function buildVersionSubmenu() {
-  const items = [{
-    label: '最新版(跟踪 latest)',
-    type: 'radio',
-    checked: cfg.dshVersion === 'latest',
-    click: () => switchDshVersion('latest'),
-  }, { type: 'separator' }]
-  for (const v of availableVersions) {
-    items.push({
-      label: v,
-      type: 'radio',
-      checked: cfg.dshVersion === v,
-      click: () => switchDshVersion(v),
-    })
-  }
-  if (!availableVersions.some((v) => v === cfg.dshVersion) && cfg.dshVersion !== 'latest') {
-    // 当前锁定的版本不在列表里(如手动指定),单独列出保证可回显
-    items.push({ label: `${cfg.dshVersion}(当前锁定)`, type: 'radio', checked: true, enabled: false })
-  }
-  items.push({ type: 'separator' }, {
-    label: '刷新版本列表',
-    click: () => fetchAvailableVersions(),
-  })
-  return items
-}
-
-async function switchDshVersion(v) {
-  if (v === cfg.dshVersion) return
-  const { response } = await dialog.showMessageBox(dialogParent(), {
-    type: 'question',
-    title: '切换 dsh 版本',
-    message: `切换到 ${v} 并重启服务?`,
-    detail: '切换前会先验证该版本可运行;启动失败将自动回滚到当前版本。',
-    buttons: ['切换并重启', '取消'],
-    defaultId: 0,
-    cancelId: 1,
-  })
-  if (response !== 0) { rebuildTray(); return }
-  // 预检:旧 rc 版本可能包损坏或与当前数据不兼容,先验证再切换
-  stage('probe')
-  notify('dsh 版本切换', `正在验证 ${v} ...`)
-  const probe = await probeDshVersion(v)
-  if (!probe.ok) {
-    notify('dsh 版本切换', `版本 ${v} 不可用(${probe.error}),已取消切换。`)
-    log(`版本 ${v} 预检失败: ${probe.error}`)
-    rebuildTray()
+function openSettings() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.show()
+    settingsWindow.focus()
     return
   }
-  await applyDshVersion(v)
+  settingsWindow = new BrowserWindow({
+    width: 560,
+    height: 660,
+    minWidth: 480,
+    minHeight: 520,
+    maximizable: false,
+    fullscreenable: false,
+    icon: path.join(__dirname, 'icon.ico'),
+    title: '设置 - DeepSeek Harness',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+  settingsWindow.on('closed', () => { settingsWindow = null })
+  settingsWindow.loadFile('settings.html')
+}
+
+function setupSettingsIpc() {
+  ipcMain.handle('dsh-settings:get', () => ({
+    shellVersion: app.getVersion(),
+    dshVersion: cfg.dshVersion,
+    availableVersions,
+    channel: canShellSelfUpdate ? 'NSIS 安装版(支持自更新)' : isPortable ? '便携版(手动更新)' : '开发模式',
+    switching,
+  }))
+  ipcMain.on('dsh-settings:switch', (_e, v) => { switchDshVersion(v) })
+  ipcMain.on('dsh-settings:refresh-versions', () => { fetchAvailableVersions() })
+  ipcMain.on('dsh-settings:check-dsh-update', () => { checkDshUpdate(true) })
+  ipcMain.on('dsh-settings:check-shell-update', () => { checkShellUpdate() })
+}
+
+// ---------- 菜单(全中文) ----------
+
+// 版本切换(设置页驱动):预检→应用(带回滚),进度实时推送设置页
+async function switchDshVersion(v) {
+  if (v === cfg.dshVersion || switching) return
+  switching = true
+  try {
+    settingsStatus({ phase: 'probe', message: `正在验证 ${v} 可运行性(首次需下载依赖,请稍候)…` })
+    log(`版本 ${v} 预检开始`)
+    const probe = await probeDshVersion(v)
+    if (!probe.ok) {
+      settingsStatus({ phase: 'fail', message: `版本 ${v} 不可用,已取消切换(${probe.error})。` })
+      notify('dsh 版本切换', `版本 ${v} 不可用(${probe.error}),已取消切换。`)
+      log(`版本 ${v} 预检失败: ${probe.error}`)
+      return
+    }
+    const ok = await applyDshVersion(v)
+    if (ok) {
+      settingsStatus({ phase: 'ok', message: `已切换到 ${v}。` })
+      notify('dsh 版本切换', `已切换到 ${v}。`)
+    }
+  } finally {
+    switching = false
+  }
 }
 
 function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: '显示主界面', click: () => { const w = [...mainWindows][0]; if (w) { w.show(); w.focus() } } },
     { label: '新建窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => newWindow() },
-    { type: 'separator' },
-    { label: 'dsh 版本', submenu: buildVersionSubmenu() },
-    { label: '检查 dsh 更新', click: () => checkDshUpdate(true) },
-    { label: '检查壳更新', click: () => checkShellUpdate() },
-    { label: '下载壳的历史版本', click: () => shell.openExternal(`${GITHUB_SHELL}/releases`) },
+    { label: '设置', accelerator: 'CmdOrCtrl+,', click: () => openSettings() },
     { type: 'separator' },
     { label: '重载界面', click: () => { for (const w of mainWindows) if (!w.isDestroyed()) w.reload() } },
     { label: '重启 dsh 服务', click: () => restartDsh() },
@@ -562,6 +602,7 @@ function setupAppMenu() {
       label: '文件',
       submenu: [
         { label: '新建窗口', accelerator: 'CmdOrCtrl+N', click: () => newWindow() },
+        { label: '设置', accelerator: 'CmdOrCtrl+,', click: () => openSettings() },
         { type: 'separator' },
         { label: '退出', accelerator: 'CmdOrCtrl+Q', role: 'quit' },
       ],
@@ -673,6 +714,7 @@ if (!app.requestSingleInstanceLock()) {
     setupAppMenu()
     createTray()
     setupShellUpdater()
+    setupSettingsIpc()
     boot().then(() => {
       // 就绪后异步拉版本列表 + 启动时静默检查双更新
       fetchAvailableVersions()
@@ -689,9 +731,11 @@ if (!app.requestSingleInstanceLock()) {
     }
   })
 
-  // 全部主窗口关闭才退出(多开期间单个关窗不影响其他窗口)
+  // 主窗口全部关闭才退出(设置窗口等辅助窗口不拦截退出)
   app.on('window-all-closed', () => {
-    quitting = true
-    app.quit()
+    if (mainWindows.size === 0) {
+      quitting = true
+      app.quit()
+    }
   })
 }
