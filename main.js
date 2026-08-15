@@ -1,7 +1,7 @@
 // dsh-desktop 主进程 v0.3
 // v0.1 Electron 壳 | v0.2 启动页+崩溃自愈 | v0.3 多窗口+dsh版本锁+dsh更新+壳自更新+全中文菜单
 // dsh 运行时经 npx 调用(PATH→注册表),版本锁存于 ~/.dsh/desktop-config.json,插件化零破坏。
-const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain } = require('electron')
+const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain, net: electronNet } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const net = require('node:net')
 const http = require('node:http')
@@ -394,10 +394,39 @@ function setupShellUpdater() {
   autoUpdater.on('error', (e) => log(`壳更新出错: ${e.message}`))
 }
 
+// 便携版更新检查:拉 Release 的 latest.yml 比对版本(便携版无法应用内更新,仅提示下载)
+async function checkPortableUpdate() {
+  const url = `${GITHUB_SHELL}/releases/latest/download/latest.yml`
+  try {
+    // electronNet 走 Chromium 网络栈,遵循系统代理(直连 node:https 在代理环境下常失败)
+    const res = await electronNet.fetch(url, { signal: AbortSignal.timeout(15_000) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const m = /^version:\s*(\S+)/m.exec(await res.text())
+    if (!m) throw new Error('latest.yml 缺少 version 字段')
+    const latest = m[1]
+    if (latest === app.getVersion()) {
+      notify('检查更新', `便携版已是最新版 ${app.getVersion()}。`)
+      return
+    }
+    const { response } = await dialog.showMessageBox(dialogParent(), {
+      type: 'info',
+      title: '发现新版本',
+      message: `新版本 ${latest}(当前 ${app.getVersion()})`,
+      detail: '便携版不支持应用内更新,请到 GitHub Releases 下载新版。',
+      buttons: ['前往下载', '忽略'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (response === 0) shell.openExternal(`${GITHUB_SHELL}/releases/latest`)
+  } catch (e) {
+    log(`便携版更新检查失败: ${e.message}`)
+    notify('检查更新', `检查失败: ${e.message}`)
+  }
+}
+
 async function checkShellUpdate() {
   if (!autoUpdater) {
-    notify('检查更新', '便携版不支持自动更新,请到 GitHub Releases 手动下载新版。')
-    shell.openExternal(`${GITHUB_SHELL}/releases/latest`)
+    await checkPortableUpdate()
     return
   }
   try {
