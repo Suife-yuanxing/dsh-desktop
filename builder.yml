@@ -13,6 +13,7 @@ files:
   - preload.js
   - error.html
   - splash.html
+  - whale-data.js
   - settings.html
   - logo.png
   - icon.ico

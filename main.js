@@ -12,6 +12,7 @@ const path = require('node:path')
 const DSH_PORT = 3080
 const DSH_URL = `http://127.0.0.1:${DSH_PORT}`
 const START_TIMEOUT_MS = 120_000 // 首次 npx 需下载包,给足时间
+const SWITCH_TIMEOUT_MS = 60_000 // 版本切换的就绪预算,超时自动回滚
 const DSH_HOME = path.join(os.homedir(), '.dsh')
 const LOG_DIR = path.join(DSH_HOME, 'logs')
 const LOG_FILE = path.join(LOG_DIR, 'desktop.log')
@@ -213,12 +214,12 @@ function killDshTree() {
   })
 }
 
-async function restartDsh() {
+async function restartDsh(timeoutMs = START_TIMEOUT_MS) {
   restartAttempts = 0
   if (recoveryTimer) { clearTimeout(recoveryTimer); recoveryTimer = null }
   await killDshTree()
   if (startDsh()) {
-    const ok = await waitForPort(START_TIMEOUT_MS)
+    const ok = await waitForPort(timeoutMs)
     if (ok) loadUrlAll(DSH_URL)
   }
 }
@@ -314,21 +315,19 @@ async function applyDshVersion(newVersion) {
   saveConfig(cfg)
   rebuildTray()
   log(`dsh 版本锁切换为 ${newVersion}`)
-  await restartDsh()
-  // restartDsh 内 waitForPort(120s);此处缩短判定:60s 未就绪即回滚
-  const deadline = Date.now() + 60_000
-  while (Date.now() < deadline) {
-    if (await isPortUp()) return true
-    await sleep(2_000)
+  // 用切换专属预算重启:60s 内未就绪视为坏版本,避免死等 120s
+  await restartDsh(SWITCH_TIMEOUT_MS)
+  if (await isPortUp()) {
+    loadUrlAll(DSH_URL) // 显式刷新所有主窗口(兜底,不依赖 restartDsh 副作用)
+    return true
   }
-  if (await isPortUp()) return true
-  log(`版本 ${newVersion} 60s 未就绪,自动回滚到 ${prevVersion}`)
+  log(`版本 ${newVersion} ${SWITCH_TIMEOUT_MS / 1000}s 未就绪,自动回滚到 ${prevVersion}`)
   notify('dsh 版本切换失败', `${newVersion} 启动超时,已自动回滚到 ${prevVersion}。`)
   settingsStatus({ phase: 'rollback', message: `${newVersion} 启动超时,已自动回滚到 ${prevVersion}。` })
   cfg.dshVersion = prevVersion
   saveConfig(cfg)
   rebuildTray()
-  await restartDsh()
+  await restartDsh() // 回滚走完整启动预算
   return false
 }
 
@@ -442,6 +441,20 @@ function createSplash() {
   splashWindow.loadFile('splash.html')
 }
 
+// 无边框主窗拖拽区注入样式:dsh Web UI 的 CSS Modules 哈希类名保留原名后缀
+// (如 pI_x6G_logoRow),用 [class*="_xxx"] 匹配。侧栏顶行(60px)可拖拽,
+// 按钮排除;窗口顶部 6px 细条兜底,保证任意位置都有拖拽手柄。
+const TITLEBAR_DRAG_CSS = `
+  [class*="_logoRow"] { -webkit-app-region: drag; }
+  [class*="_logoRow"] button,
+  [class*="_logoRow"] a,
+  [class*="_logoRow"] [role="button"] { -webkit-app-region: no-drag; }
+  [class*="_frame"]::after {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+    -webkit-app-region: drag; z-index: 40;
+  }
+`
+
 function createMainWindow({ show = false } = {}) {
   const win = new BrowserWindow({
     width: 1400,
@@ -451,6 +464,11 @@ function createMainWindow({ show = false } = {}) {
     icon: path.join(__dirname, 'icon.ico'),
     title: 'DeepSeek Harness',
     show,
+    // Claude 式融合:去原生标题栏,窗口控制按钮以透明叠加层浮于 Web UI 之上;
+    // Web UI 为浅色主题,符号用深灰。快捷键仍由应用菜单承载(菜单不显示)。
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#00000000', symbolColor: '#3d444d', height: 36 },
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -459,6 +477,10 @@ function createMainWindow({ show = false } = {}) {
   })
   mainWindows.add(win)
   win.on('closed', () => mainWindows.delete(win))
+  // 每次主导航后注入拖拽区(insertCSS 不跨导航保留)
+  const injectDrag = () => win.webContents.insertCSS(TITLEBAR_DRAG_CSS).catch(() => {})
+  win.webContents.on('did-navigate', injectDrag)
+  win.webContents.on('did-navigate-in-page', injectDrag)
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url) // 外部链接走系统浏览器
     return { action: 'deny' }
@@ -599,6 +621,17 @@ function setupSettingsIpc() {
   ipcMain.on('dsh-settings:refresh-versions', () => { fetchAvailableVersions() })
   ipcMain.on('dsh-settings:check-dsh-update', () => { checkDshUpdate(true) })
   ipcMain.on('dsh-settings:check-shell-update', () => { checkShellUpdate() })
+  // 日志查看:返回 desktop.log 最近 N 行(默认 300,上限 2000)
+  ipcMain.handle('dsh-logs:tail', (_e, lines = 300) => {
+    const n = Math.max(1, Math.min(Number(lines) || 300, 2000))
+    try {
+      const arr = fs.readFileSync(LOG_FILE, 'utf8').split(/\r?\n/).filter(Boolean)
+      return { ok: true, file: LOG_FILE, lines: arr.slice(-n) }
+    } catch (e) {
+      return { ok: false, file: LOG_FILE, error: e.code === 'ENOENT' ? '日志文件尚未生成' : e.message }
+    }
+  })
+  ipcMain.on('dsh-logs:open-dir', () => { shell.openPath(LOG_DIR) })
 }
 
 // ---------- 菜单(全中文) ----------
@@ -753,6 +786,9 @@ async function boot() {
 }
 
 // ---------- 应用生命周期 ----------
+
+// 开发逃生门:DSH_DESKTOP_USER_DATA 指定独立 userData,可与正式版并行运行(单实例锁按 userData 区分)
+if (process.env.DSH_DESKTOP_USER_DATA) app.setPath('userData', process.env.DSH_DESKTOP_USER_DATA)
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()

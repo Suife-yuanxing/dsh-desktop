@@ -64,8 +64,17 @@ window.__ModuleLoader__.load({
 					body: JSON.stringify({ version: v }),
 				}).then(function (r) {
 					if (!r.accepted) { setMsg(r.error || "切换被拒绝"); setBusy(false); return; }
-					setMsg("已请求切换到 " + v + ",服务重启后本页可能需要刷新。");
-					setTimeout(function () { load(); setBusy(false); }, 3000);
+					setMsg("已请求切换到 " + v + ",完成后页面将自动刷新。");
+					// 轮询壳状态,切换结束(成功或回滚)后刷新视图
+					var poll = setInterval(function () {
+						api("/state").then(function (s) {
+							if (!s.switching) {
+								clearInterval(poll);
+								load();
+								setBusy(false);
+							}
+						}).catch(function () { /* 壳短暂重启,继续轮询 */ });
+					}, 2000);
 				}).catch(function (e) {
 					setMsg("请求失败: " + e.message);
 					setBusy(false);

@@ -4,48 +4,242 @@
 <meta charset="UTF-8">
 <title>DeepSeek Harness</title>
 <style>
+  :root {
+    --ink: #05070d;      /* 深空底色 */
+    --muted: #66707e;    /* 弱文本 */
+    --beacon: #4d6bfe;   /* DeepSeek 品牌蓝 */
+    --warn: #d29922;     /* 异常琥珀 */
+    --mono: Consolas, "Cascadia Mono", monospace;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; }
   body {
-    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-    background: #0d1117; color: #e6edf3;
-    display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 28px;
+    background: var(--ink);
+    font-family: Bahnschrift, "Segoe UI", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
     -webkit-app-region: no-drag;
   }
-  img.logo { width: 96px; height: 96px; }
-  .spinner {
-    width: 28px; height: 28px; border-radius: 50%;
-    border: 3px solid #30363d; border-top-color: #4184f3;
-    animation: spin 0.9s linear infinite;
+  /* 星空 + 鲸鱼粒子:单画布承载,窗口尺寸自适应 */
+  #sky { position: fixed; inset: 0; display: block; }
+
+  /* 阶段图注:贴近底部进度条 */
+  .cap {
+    position: fixed; left: 0; right: 0; bottom: 12px;
+    text-align: center; font-size: 11px;
+    letter-spacing: .1em; color: var(--muted);
+    transition: color .3s;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .stage { font-size: 14px; color: #e6edf3; min-height: 20px; }
-  .elapsed { font-size: 12px; color: #8b949e; font-variant-numeric: tabular-nums; }
-  .brand { position: fixed; bottom: 18px; font-size: 12px; color: #484f58; letter-spacing: 0.5px; }
+  .meta {
+    position: fixed; top: 10px; right: 14px;
+    font-family: var(--mono); font-size: 10px;
+    color: rgba(214, 224, 255, .30); letter-spacing: .05em;
+  }
+  /* 进度条:贴住窗口最底沿,2px 细线 */
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 2px;
+    background: rgba(160, 180, 255, .08);
+  }
+  .fill {
+    height: 100%; width: 8%;
+    background: linear-gradient(90deg, #2b46e8, var(--beacon) 55%, #9db4ff);
+    box-shadow: 0 0 10px rgba(77, 107, 254, .6);
+    transition: width 1.1s cubic-bezier(.25, .6, .25, 1), background .3s, box-shadow .3s;
+  }
+  body.crash .fill {
+    background: linear-gradient(90deg, #8a6416, var(--warn) 55%, #f0d488);
+    box-shadow: 0 0 10px rgba(210, 153, 34, .55);
+  }
+  body.crash .cap { color: var(--warn); }
 </style>
 </head>
 <body>
-  <img class="logo" src="logo.png" alt="logo">
-  <div class="spinner"></div>
-  <div class="stage" id="stage">正在启动…</div>
-  <div class="elapsed" id="elapsed"></div>
-  <div class="brand">DeepSeek Harness</div>
+  <canvas id="sky"></canvas>
+  <div class="cap" id="stage">正在启动…</div>
+  <div class="meta" id="meta"></div>
+  <div class="bar"><div class="fill" id="fill"></div></div>
+<script src="whale-data.js"></script>
 <script>
-  const STAGES = {
-    probe: '探测本地服务…',
-    spawn: '启动 dsh 服务…',
-    wait: '等待服务就绪(首次运行需下载依赖)…',
-    ready: '即将进入',
-    crash: 'dsh 服务异常退出,正在自动恢复…',
+  // ---------- 星空 + 鲸鱼粒子(canvas) ----------
+  var canvas = document.getElementById('sky')
+  var ctx = canvas.getContext('2d')
+  var W = 0, H = 0
+  var stars = [], parts = []
+  var whaleReady = false
+  var mouse = { x: -9999, y: -9999, on: false }
+
+  function resize() {
+    var dpr = window.devicePixelRatio || 1
+    W = window.innerWidth; H = window.innerHeight
+    canvas.width = Math.round(W * dpr)
+    canvas.height = Math.round(H * dpr)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    makeStars()
+    layoutWhale()
   }
-  const elStage = document.getElementById('stage')
-  const elElapsed = document.getElementById('elapsed')
-  const t0 = Date.now()
-  setInterval(() => {
-    elElapsed.textContent = `已等待 ${Math.floor((Date.now() - t0) / 1000)} 秒`
-  }, 1000)
-  window.dshDesktop.onStage((stage) => { elStage.textContent = STAGES[stage] || stage })
+
+  // 星星:小半径为主,少量亮星;各自相位闪烁
+  function makeStars() {
+    stars.length = 0
+    var n = Math.max(60, Math.round(W * H / 2100))
+    for (var i = 0; i < n; i++) {
+      stars.push({
+        x: Math.random() * W, y: Math.random() * H,
+        r: Math.random() < .88 ? .5 + Math.random() * .9 : 1.4 + Math.random() * .9,
+        tw: Math.random() * 6.2832, sp: .25 + Math.random() * 1.1,
+        base: .35 + Math.random() * .6,
+        c: Math.random() < .7 ? '255,255,255'
+          : (Math.random() < .5 ? '190,205,255' : '255,236,205'),
+      })
+    }
+  }
+
+  // 鲸鱼:数据 URI 取样像素 → 粒子主场(避开 file:// canvas 污染)
+  function buildWhale(uri) {
+    var img = new Image()
+    img.onload = function () {
+      var w = img.width, h = img.height
+      var off = document.createElement('canvas')
+      off.width = w; off.height = h
+      var o = off.getContext('2d')
+      o.drawImage(img, 0, 0, w, h)
+      var px
+      try { px = o.getImageData(0, 0, w, h).data }
+      catch (e) { return /* 取样失败:退化为纯星空 */ }
+      var step = 3
+      var palette = ['77,107,254', '127,155,255', '205,217,255', '157,180,255']
+      parts.length = 0
+      for (var y = 0; y < h; y += step) {
+        for (var x = 0; x < w; x += step) {
+          var i4 = (y * w + x) * 4
+          // 资产为不透明浅底图:按亮度识别鲸鱼主体(品牌蓝约 lum≈116),亮背景剔除
+          var lum = .299 * px[i4] + .587 * px[i4 + 1] + .114 * px[i4 + 2]
+          if (px[i4 + 3] > 110 && lum < 190) {
+            parts.push({
+              u: x / w, v: y / h,          // 归一化主场,随窗口重排
+              x: 0, y: 0, vx: 0, vy: 0,
+              sz: .7 + Math.random() * 1.15,
+              a: .5 + Math.random() * .5,
+              c: palette[(Math.random() * palette.length) | 0],
+            })
+          }
+        }
+      }
+      whaleReady = parts.length > 0
+      layoutWhale()
+      // 入场:粒子从四周随机位置聚拢成鲸
+      for (var k = 0; k < parts.length; k++) {
+        parts[k].x = W / 2 + (Math.random() - .5) * W * 1.4
+        parts[k].y = H / 2 + (Math.random() - .5) * H * 1.4
+      }
+    }
+    img.src = uri
+  }
+
+  // 粒子主场:居中略偏上(底部留给进度条)
+  function layoutWhale() {
+    if (!whaleReady) return
+    var bw = Math.min(W * .62, 210)
+    var bh = bw // 资产为方形取样
+    var cx = W / 2, cy = H / 2 - 26
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i]
+      p.hx = cx + (p.u - .5) * bw
+      p.hy = cy + (p.v - .5) * bh
+    }
+  }
+
+  // 每帧:星空闪烁 + 粒子弹簧归位/鼠标推开/整体沉浮波动
+  var R = 72, R2 = R * R
+  function frame(t) {
+    ctx.clearRect(0, 0, W, H)
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i]
+      var tw = .45 + .55 * Math.sin(t * .001 * s.sp + s.tw)
+      ctx.fillStyle = 'rgba(' + s.c + ',' + (s.base * tw).toFixed(3) + ')'
+      ctx.fillRect(s.x, s.y, s.r, s.r)
+    }
+    if (whaleReady) {
+      var bob = Math.sin(t * .0011) * 3.5
+      for (var j = 0; j < parts.length; j++) {
+        var p = parts[j]
+        var ty = p.hy + bob + Math.sin(t * .0015 + p.hx * .022) * 1.7
+        p.vx += (p.hx - p.x) * .05
+        p.vy += (ty - p.y) * .05
+        var dx = p.x - mouse.x, dy = p.y - mouse.y
+        var d2 = dx * dx + dy * dy
+        if (mouse.on && d2 < R2) {
+          var d = Math.sqrt(d2) || 1
+          var f = (1 - d / R) * 2.6
+          p.vx += dx / d * f
+          p.vy += dy / d * f
+        }
+        p.vx *= .86; p.vy *= .86
+        p.x += p.vx; p.y += p.vy
+        ctx.fillStyle = 'rgba(' + p.c + ',' + p.a.toFixed(2) + ')'
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, p.sz, 0, 6.2832)
+        ctx.fill()
+      }
+    }
+    requestAnimationFrame(frame)
+  }
+
+  window.addEventListener('mousemove', function (e) {
+    mouse.x = e.clientX; mouse.y = e.clientY; mouse.on = true
+  })
+  window.addEventListener('mouseleave', function () { mouse.on = false })
+  window.addEventListener('resize', resize)
+  resize()
+  requestAnimationFrame(frame)
+  if (window.WHALE_PNG) buildWhale(window.WHALE_PNG)
+
+  // ---------- 启动阶段 → 进度 ----------
+  var STAGES = {
+    probe: ['探测本地服务…', 10],
+    spawn: ['启动 dsh 服务…', 24],
+    wait: ['等待服务就绪(首次运行需下载依赖)…', 55],
+    ready: ['即将进入', 100],
+    crash: ['dsh 服务异常退出,正在自动恢复…', 12],
+  }
+  var elStage = document.getElementById('stage')
+  var elFill = document.getElementById('fill')
+  window.dshDesktop.onStage(function (name) {
+    var s = STAGES[name]
+    if (!s) return
+    document.body.classList.toggle('crash', name === 'crash')
+    elStage.textContent = s[0]
+    elFill.style.width = s[1] + '%'
+  })
+
+  // 右上角版本信息
+  window.dshDesktop.settings.get().then(function (s) {
+    document.getElementById('meta').textContent = 'dsh ' + s.dshVersion + ' · v' + s.shellVersion
+  }).catch(function () { /* 版本读取失败不影响启动页 */ })
+
+  // 诊断句柄(供开发期 CDP 验证)
+  window.__splash = {
+    counts: function () { return { stars: stars.length, parts: parts.length } },
+    bbox: function () {
+      if (!parts.length) return null
+      var u0 = 1, u1 = 0, v0 = 1, v1 = 0
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i]
+        if (p.u < u0) u0 = p.u
+        if (p.u > u1) u1 = p.u
+        if (p.v < v0) v0 = p.v
+        if (p.v > v1) v1 = p.v
+      }
+      return { u0: +u0.toFixed(3), u1: +u1.toFixed(3), v0: +v0.toFixed(3), v1: +v1.toFixed(3) }
+    },
+    disp: function () {
+      var m = 0
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i]
+        m = Math.max(m, Math.abs(p.x - p.hx) + Math.abs(p.y - p.hy))
+      }
+      return Math.round(m * 10) / 10
+    },
+  }
 </script>
 </body>
 </html>

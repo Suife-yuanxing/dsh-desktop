@@ -49,6 +49,15 @@
   .status.busy { border-color: #4184f3; color: #79c0ff; }
   .hint { font-size: 12px; color: #484f58; margin-top: 8px; line-height: 1.6; }
   .empty { color: #8b949e; padding: 6px 0; }
+  .logbox {
+    margin-top: 10px; max-height: 240px; overflow: auto;
+    background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+    padding: 10px 12px; font: 12px/1.55 Consolas, "Courier New", monospace;
+    color: #8b949e; white-space: pre-wrap; word-break: break-all;
+  }
+  .logbox .err { color: #f85149; }
+  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .toolbar label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #8b949e; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -70,6 +79,17 @@
       <button class="btn primary" id="btn-check-shell">检查壳更新</button>
     </div>
     <div class="hint">壳的历史版本可到 GitHub Releases 手动下载。</div>
+  </div>
+
+  <h2>日志</h2>
+  <div class="card">
+    <div class="toolbar">
+      <button class="btn" id="btn-log-refresh">刷新</button>
+      <label><input type="checkbox" id="chk-auto" checked>每 5 秒自动刷新</label>
+      <button class="btn" id="btn-log-dir">打开日志目录</button>
+    </div>
+    <pre class="logbox" id="logbox">正在读取日志…</pre>
+    <div class="hint">显示最近 300 行 · 文件 ~/.dsh/logs/desktop.log · 红色为错误行</div>
   </div>
 
   <div class="status" id="status"></div>
@@ -135,6 +155,32 @@
   })
   document.getElementById('btn-check-dsh').addEventListener('click', () => api.checkDshUpdate())
   document.getElementById('btn-check-shell').addEventListener('click', () => api.checkShellUpdate())
+
+  // ---------- 日志查看 ----------
+  const logsApi = window.dshDesktop.logs
+  const elLog = document.getElementById('logbox')
+  const chkAuto = document.getElementById('chk-auto')
+  let logTimer = null
+
+  async function loadLogs() {
+    try {
+      const r = await logsApi.tail(300)
+      if (!r.ok) { elLog.textContent = r.error; return }
+      elLog.textContent = r.lines.join('\n') || '(日志为空)'
+      elLog.scrollTop = elLog.scrollHeight // 滚到底部看最新
+    } catch (e) { elLog.textContent = '读取失败: ' + e.message }
+  }
+
+  function setAutoLogs(on) {
+    if (logTimer) { clearInterval(logTimer); logTimer = null }
+    if (on) logTimer = setInterval(loadLogs, 5000)
+  }
+
+  chkAuto.addEventListener('change', () => setAutoLogs(chkAuto.checked))
+  document.getElementById('btn-log-refresh').addEventListener('click', loadLogs)
+  document.getElementById('btn-log-dir').addEventListener('click', () => logsApi.openDir())
+  loadLogs()
+  setAutoLogs(true)
 
   refresh()
 </script>

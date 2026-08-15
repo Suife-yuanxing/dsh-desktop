@@ -1,0 +1,30 @@
+# 推送 v* 标签时自动构建 Windows 安装包/便携版并发布 GitHub Release。
+# 发版流程:改 package.json 版本 → 提交 → git tag v0.x.y → git push origin v0.x.y
+# electron-updater 依赖 Release 中的 latest.yml,由 electron-builder 自动上传。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: # 支持手动触发(产物仅上传到 Release,tag 缺省时以 package.json 版本为准)
+
+permissions:
+  contents: write # 创建 Release 并上传产物
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build & publish
+        run: npx electron-builder --win --config builder.yml --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
