@@ -1,3 +1,4 @@
 node_modules/
 dist/
+dist-v0.3/
 *.log
