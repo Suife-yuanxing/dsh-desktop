@@ -118,7 +118,7 @@
               u: x / w, v: y / h,          // 归一化主场,随窗口重排
               x: 0, y: 0, vx: 0, vy: 0,
               sz: .7 + Math.random() * 1.15,
-              a: .5 + Math.random() * .5,
+              a: .16 + Math.random() * .22, // 低不透明度:鲸鱼隐于星空,若隐若现
               c: palette[(Math.random() * palette.length) | 0],
             })
           }
@@ -135,12 +135,12 @@
     img.src = uri
   }
 
-  // 粒子主场:居中略偏上(底部留给进度条)
+  // 粒子主场:窗口正中心
   function layoutWhale() {
     if (!whaleReady) return
     var bw = Math.min(W * .62, 210)
     var bh = bw // 资产为方形取样
-    var cx = W / 2, cy = H / 2 - 26
+    var cx = W / 2, cy = H / 2
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i]
       p.hx = cx + (p.u - .5) * bw
@@ -148,8 +148,8 @@
     }
   }
 
-  // 每帧:星空闪烁 + 粒子弹簧归位/鼠标推开/整体沉浮波动
-  var R = 72, R2 = R * R
+  // 每帧:星空闪烁 + 粒子弹簧归位/鼠标掠过如水波漫开/整体沉浮波动
+  var R = 105, R2 = R * R
   function frame(t) {
     ctx.clearRect(0, 0, W, H)
     for (var i = 0; i < stars.length; i++) {
@@ -169,9 +169,10 @@
         var d2 = dx * dx + dy * dy
         if (mouse.on && d2 < R2) {
           var d = Math.sqrt(d2) || 1
-          var f = (1 - d / R) * 2.6
-          p.vx += dx / d * f
-          p.vy += dy / d * f
+          var k = 1 - d / R
+          var f = k * k * 1.9                     // 平方衰减:中心柔、边缘更柔,如水波漫开
+          p.vx += dx / d * f - dy / d * f * .35   // 径向推开 + 少量切向旋绕,似水流掠过
+          p.vy += dy / d * f + dx / d * f * .35
         }
         p.vx *= .86; p.vy *= .86
         p.x += p.vx; p.y += p.vy

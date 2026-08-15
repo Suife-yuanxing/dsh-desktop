@@ -1,4 +1,5 @@
 node_modules/
 dist/
-dist-v0.3/
+dist-v0.3*/
+dev-shots/
 *.log
