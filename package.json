@@ -8,6 +8,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "predist": "node scripts/check-dist-lock.mjs",
     "dist": "electron-builder --win --config builder.yml"
   },
   "devDependencies": {
