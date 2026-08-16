@@ -493,6 +493,64 @@ async function checkShellUpdate() {
   }
 }
 
+// ---------- 更新 tab(Web UI 经壳 API 驱动,无弹窗版检查/应用) ----------
+
+/** 无副作用的即时状态(不发网络请求)。 */
+function updatesStatePayload() {
+  return {
+    shellVersion: app.getVersion(),
+    dshVersion: cfg.dshVersion,
+    portable: isPortable,
+    canSelfUpdate: canShellSelfUpdate,
+    devShell: !app.isPackaged,
+    switching,
+    restarting,
+  }
+}
+
+/** 网络检查:壳(NSIS electron-updater / 便携版 latest.yml)+ dsh(npm latest)。 */
+async function updatesCheckPayload() {
+  const out = updatesStatePayload()
+  try {
+    if (canShellSelfUpdate && autoUpdater) {
+      const r = await autoUpdater.checkForUpdates()
+      out.shellLatest = r?.updateInfo?.version ?? null
+      // autoDownload=true:发现新版会自动开始下载,完成后走既有弹窗确认重启
+    } else if (isPortable) {
+      const res = await electronNet.fetch(`${GITHUB_SHELL}/releases/latest/download/latest.yml`, { signal: AbortSignal.timeout(15_000) })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const m = /^version:\s*(\S+)/m.exec(await res.text())
+      out.shellLatest = m ? m[1] : null
+    } else {
+      out.shellLatest = null
+      out.shellNote = '开发模式(源码运行),跳过壳更新检查'
+    }
+  } catch (e) { out.shellError = e.message }
+  if (out.shellLatest) out.shellUpdateAvailable = out.shellLatest !== app.getVersion()
+  if (cfg.dshVersion === 'latest') {
+    out.dshTracksLatest = true
+  } else {
+    const latest = await npmView(['version'])
+    if (latest) {
+      out.dshLatest = latest
+      out.dshUpdateAvailable = latest !== cfg.dshVersion
+    } else {
+      out.dshError = '查询 npm 失败,请检查网络'
+    }
+  }
+  return out
+}
+
+/** 应用 dsh 最新版(异步,前端轮询 /state 的 switching/restarting)。 */
+async function applyDshLatest() {
+  if (switching || restarting) return { ok: false, error: '已有切换或重启在进行' }
+  const latest = await npmView(['version'])
+  if (!latest) return { ok: false, error: '查询 npm 失败,请检查网络' }
+  if (latest === cfg.dshVersion) return { ok: true, note: '已是最新版' }
+  switchDshVersion(latest) // 内部自带预检+回滚+switching 互斥
+  return { ok: true, accepted: true }
+}
+
 // ---------- 窗口(共享服务多开) ----------
 
 function closeSplash() {
@@ -688,10 +746,15 @@ function readDisabledPlugins() {
 /**
  * 原子写 home patch(tmp+rename,dsh watcher 只会看到完整文件)。
  * 删行后若正文为空,必须落 `[]` 而不是只剩注释 —— 纯注释文件会让 dsh 启动即崩。
+ * 反向同样致命:还剩条目时绝不能留 `[]` 字面量行 —— `[]` 是完整 YAML 文档,
+ * 其后追加块序列项是非法文档,下次启动解析即崩。二者互斥,这里统一归一。
  */
 function writeHomePatch(lines) {
-  const bodyLeft = lines.some((l) => l.trim() !== '' && !/^\s*#/.test(l))
-  const out = bodyLeft ? lines.join('\n') : '[]\n'
+  const isEmptyRow = (l) => /^\[\s*\]\s*(?:#.*)?$/.test(l)
+  const hasEntries = lines.some((l) => l.trim() !== '' && !/^\s*#/.test(l) && !isEmptyRow(l))
+  const normalized = hasEntries ? lines.filter((l) => !isEmptyRow(l)) : lines
+  const bodyLeft = normalized.some((l) => l.trim() !== '' && !/^\s*#/.test(l))
+  const out = bodyLeft ? normalized.join('\n') : '[]\n'
   const tmp = HOME_PATCH_FILE + '.tmp'
   fs.writeFileSync(tmp, out)
   fs.renameSync(tmp, HOME_PATCH_FILE)
@@ -722,6 +785,66 @@ function togglePluginEntry(entryId, disable) {
     lines.splice(hit.start, hit.end)
     // 清掉删除后可能紧邻的重复空行
     while (lines[hit.start] !== undefined && lines[hit.start].trim() === '' && lines[hit.start + 1] !== undefined && lines[hit.start + 1].trim() === '') lines.splice(hit.start, 1)
+  }
+  try { writeHomePatch(lines) } catch (e) { return { ok: false, error: `写入失败: ${e.message}` } }
+  return { ok: true }
+}
+
+// ---------- 人设(persona)读写:home patch 的 system-prompt 行 ----------
+// 行格式由本壳独占管理(toggle 的管理行判定不含 config,互不干扰):
+//   - id: system-prompt
+//     config:
+//       persona: |-
+//         <6 空格缩进的正文行>
+// 恢复默认 = 删除该行。默认值与 web-app bundle 层一致。
+
+const PERSONA_ENTRY_ID = 'system-prompt'
+const DEFAULT_PERSONA = 'You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.'
+
+/** home patch 中 system-prompt 行是否为壳管理的标准格式。 */
+function isCanonicalPersonaRow(hit, lines) {
+  const block = lines.slice(hit.start, hit.end)
+  return block[0] === `- id: ${PERSONA_ENTRY_ID}`
+    && block[1] === '  config:'
+    && /^ {4}persona: \|-$/.test(block[2] ?? '')
+    && block.slice(3).every((l) => l === '' || l.startsWith('      '))
+}
+
+/** 读 persona 覆盖;persona 为 null 表示无覆盖(用默认)。 */
+function readPersonaOverride() {
+  const { entries, lines } = parseHomePatch()
+  const hit = entries.find((e) => e.id === PERSONA_ENTRY_ID)
+  if (!hit) return { persona: null }
+  if (!isCanonicalPersonaRow(hit, lines)) {
+    return { error: `cordis.patch.yml 中 ${PERSONA_ENTRY_ID} 行不是本工具的标准格式,请手动编辑该文件` }
+  }
+  const text = lines.slice(hit.start + 3, hit.end)
+    .map((l) => (l === '' ? '' : l.slice(6)))
+    .join('\n')
+  return { persona: text }
+}
+
+/** 写/删 persona 覆盖。text 为 null/空/等于默认时删除行(恢复默认)。 */
+function writePersonaOverride(text) {
+  const restore = text === null || text.trim() === '' || text === DEFAULT_PERSONA
+  const { entries, lines, valid } = parseHomePatch()
+  if (!valid) return { ok: false, error: 'cordis.patch.yml 含顶层数组以外的内容,为安全起见请手动编辑该文件' }
+  const hit = entries.find((e) => e.id === PERSONA_ENTRY_ID)
+  if (restore) {
+    if (!hit) return { ok: true }
+    if (!isCanonicalPersonaRow(hit, lines)) return { ok: false, error: `条目 ${PERSONA_ENTRY_ID} 有手写内容,请手动编辑` }
+    lines.splice(hit.start, hit.end)
+    while (lines[hit.start] !== undefined && lines[hit.start].trim() === '' && lines[hit.start + 1] !== undefined && lines[hit.start + 1].trim() === '') lines.splice(hit.start, 1)
+  } else {
+    const block = [`- id: ${PERSONA_ENTRY_ID}`, '  config:', '    persona: |-',
+      ...text.split('\n').map((l) => (l.trim() === '' ? '' : '      ' + l))]
+    if (hit) {
+      if (!isCanonicalPersonaRow(hit, lines)) return { ok: false, error: `条目 ${PERSONA_ENTRY_ID} 有手写内容,请手动编辑` }
+      lines.splice(hit.start, hit.end - hit.start, ...block)
+    } else {
+      if (lines.length && lines[lines.length - 1].trim() !== '') lines.push('')
+      lines.push(...block, '')
+    }
   }
   try { writeHomePatch(lines) } catch (e) { return { ok: false, error: `写入失败: ${e.message}` } }
   return { ok: true }
@@ -773,6 +896,49 @@ function startShellApi() {
         restarting = true
         restartDsh().finally(() => { restarting = false })
         return send(202, { accepted: true })
+      }
+      if (req.method === 'GET' && url.pathname === '/persona') {
+        const r = readPersonaOverride()
+        if (r.error) return send(400, { error: r.error })
+        return send(200, {
+          persona: r.persona ?? DEFAULT_PERSONA,
+          isDefault: r.persona === null,
+          defaultPersona: DEFAULT_PERSONA,
+        })
+      }
+      if (req.method === 'GET' && url.pathname === '/updates/state') {
+        return send(200, updatesStatePayload())
+      }
+      if (req.method === 'POST' && url.pathname === '/updates/check') {
+        return send(200, await updatesCheckPayload())
+      }
+      if (req.method === 'POST' && url.pathname === '/updates/apply-dsh') {
+        return send(200, await applyDshLatest())
+      }
+      if (req.method === 'POST' && url.pathname === '/updates/apply-shell') {
+        if (canShellSelfUpdate && autoUpdater) {
+          try { autoUpdater.checkForUpdates() } catch (e) { return send(400, { ok: false, error: e.message }) }
+          return send(202, { ok: true, started: true, note: '下载完成后将弹窗确认重启' })
+        }
+        if (isPortable) {
+          shell.openExternal(`${GITHUB_SHELL}/releases/latest`)
+          return send(200, { ok: true, opened: true, note: '便携版请从 GitHub Releases 下载新版' })
+        }
+        return send(400, { ok: false, error: '开发模式(源码运行)不支持壳自更新' })
+      }
+      if (req.method === 'POST' && url.pathname === '/updates/open-releases') {
+        shell.openExternal(`${GITHUB_SHELL}/releases/latest`)
+        return send(200, { ok: true })
+      }
+      if (req.method === 'POST' && url.pathname === '/persona') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { persona } = JSON.parse(body || '{}')
+        if (typeof persona !== 'string') return send(400, { ok: false, error: 'persona 必须为字符串' })
+        const r = writePersonaOverride(persona)
+        if (!r.ok) return send(400, r)
+        const after = readPersonaOverride()
+        return send(200, { ok: true, isDefault: after.persona === null, persona: after.persona ?? DEFAULT_PERSONA })
       }
       if (req.method === 'GET' && url.pathname === '/plugins') {
         return send(200, {
