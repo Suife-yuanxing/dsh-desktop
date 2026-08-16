@@ -40,7 +40,36 @@ window.__ModuleLoader__.load({
 			".skn_row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:8px 12px;cursor:pointer}",
 			".skn_row:hover{border-color:var(--dsw-alias-label-secondary)}",
 			".skn_cur{border-color:#238636}",
-			".sec_h{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);margin:10px 0 0}"
+			".sec_h{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);margin:10px 0 0}",
+			".cm_h2{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);margin:14px 0 2px}",
+			".cm_row{display:flex;align-items:center;gap:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:10px 14px}",
+			".cm_rowOff{opacity:.55}",
+			".cm_icon{width:32px;height:32px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:rgba(127,127,127,.12);color:var(--dsw-alias-label-secondary);font-size:14px;font-weight:600}",
+			".cm_main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}",
+			".cm_titleRow{display:flex;align-items:center;gap:8px;min-width:0}",
+			".cm_name{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+			".cm_src{font-size:11px;color:var(--dsw-alias-label-tertiary);background:rgba(127,127,127,.1);border-radius:99px;padding:1px 8px;flex-shrink:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+			".cm_desc{font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}",
+			".cm_side{display:flex;align-items:center;gap:10px;flex-shrink:0}",
+			".cm_del{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:7px;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;padding:0}",
+			".cm_del:hover{background:rgba(248,81,73,.12);color:#f85149}",
+			".cm_del svg{width:15px;height:15px;display:block}",
+			".cm_sw{position:relative;width:38px;height:22px;border-radius:11px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-fill-l2);cursor:pointer;padding:0;transition:background .18s,border-color .18s;flex-shrink:0}",
+			".cm_swDot{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.32,.72,0,1)}",
+			".cm_swOn{background:#d97757;border-color:#d97757}",
+			".cm_swOn .cm_swDot{transform:translateX(18px)}",
+			".cm_sw:disabled{opacity:.5;cursor:default}",
+			".cm_confirm{display:flex;align-items:center;gap:8px;margin-top:2px;flex-wrap:wrap}",
+			".cm_confirmTxt{font-size:12px;color:#f85149}",
+			".cm_btnDanger{background:transparent;border:1px solid #da3633;color:#f85149;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer}",
+			".cm_btnDanger:hover{background:rgba(248,81,73,.1)}",
+			".cm_btnGhost{background:transparent;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer}",
+			".cm_mini{display:flex;align-items:center;gap:8px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;padding:6px 12px;font-size:12px;color:var(--dsw-alias-label-secondary)}",
+			".cm_miniName{font-size:12px;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+			".cm_count{font-size:12px;color:var(--dsw-alias-label-tertiary)}",
+			".sk_thumb{width:52px;height:52px;border-radius:8px;object-fit:cover;flex-shrink:0;border:1px solid var(--dsw-alias-border-l2);background:rgba(127,127,127,.08)}",
+			".sk_thumbW{width:76px;height:52px}",
+			".cm_side input[type=range]{width:110px;accent-color:#d97757;cursor:pointer}"
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -193,7 +222,7 @@ window.__ModuleLoader__.load({
 				h("div", { className: "pm_msg" }, "切换即时生效(写入 ~/.dsh/cordis.patch.yml,由 dsh 热加载,无需重启)。核心插件与系统禁用项不可在此操作;启用 = 恢复组合默认。"));
 		}
 
-		var inject = ["slots", "locale", "remote", "remote.pluginInventory", "theme"];
+		var inject = ["slots", "locale", "remote", "remote.pluginInventory"];
 
 		// ---------- dsh HTTP RPC(POST /api/<method>,ClientRequest 信封,同源) ----------
 
@@ -280,26 +309,48 @@ window.__ModuleLoader__.load({
 				h("div", { className: "pm_msg" }, "保存写入 ~/.dsh/cordis.patch.yml 并热载入;对新发起的对话生效,进行中的对话不受影响。清空后保存等于恢复默认。"));
 		}
 
-		// ---------- 技能 tab(session.list 取上下文 → skill.list 列目录) ----------
+		// ---------- 技能 tab(壳 30801 扫描 user 级技能目录,启停/删除;runtime 并集补充其他来源) ----------
+		// 启停 = 壳把技能条目在 <root> 与 <root>-disabled 间移动(dsh chokidar 热刷新);
+		// 删除 = 递归删除条目目录/文件。工作区/内置来源仅只读展示。
+
+		var TRASH_SVG = '<svg viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>';
+		var SKILL_SRC_ZH = { "project-dsh": "工作区 .dsh/skills", "project-agents": "工作区 .agents/skills", custom: "自定义目录", bundled: "内置" };
+
+		function SkillSwitch(props) {
+			var h = react.createElement;
+			return h("button", {
+				className: "cm_sw" + (props.on ? " cm_swOn" : ""),
+				role: "switch", "aria-checked": props.on ? "true" : "false",
+				title: props.title, disabled: props.disabled, onClick: props.onClick,
+			}, h("span", { className: "cm_swDot" }));
+		}
 
 		function SkillsTab() {
 			var h = react.createElement;
 			var st = react.useState({ status: "loading" });
 			var setSt = st[1];
 			var q = react.useState("");
+			var busy = react.useState(null);
+			var setBusy = busy[1];
+			var msg = react.useState("");
+			var setMsg = msg[1];
+			var confirmDel = react.useState(null);
+			var setConfirmDel = confirmDel[1];
+
+			var applyEntries = function (entries) {
+				setSt(function (prev) { return { status: "ready", mine: entries || (prev.mine || []), others: prev.others || [] }; });
+			};
 
 			var load = function () {
 				setSt({ status: "loading" });
-				rpc("session.list", {}).then(function (v) {
+				// runtime 并集沿用"最近活跃会话上下文"取法,仅用于展示非 user 级来源
+				var runtimeP = rpc("session.list", {}).then(function (v) {
 					var items = (v && v.items) || [];
-					// 技能目录依会话 scope 而异(preset 扫描的工作区目录 + deployment 根),
-					// 单个会话看到的目录不全。取最近更新的几个非空会话 + 一个空会话,
-					// 按 name 去重合并,给出"部署当前可见技能"的并集视图。
 					var sorted = items.slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
 					var picked = sorted.filter(function (s) { return !s.blank; }).slice(0, 3);
 					var blankOne = sorted.filter(function (s) { return s.blank; })[0];
 					if (blankOne && picked.length < 4) picked.push(blankOne);
-					if (!picked.length) { setSt({ status: "no-session" }); return; }
+					if (!picked.length) return [];
 					return Promise.all(picked.map(function (s) {
 						return rpc("skill.list", { sessionId: s.sessionId }).then(function (sv) {
 							return (sv && sv.skills) || [];
@@ -312,44 +363,99 @@ window.__ModuleLoader__.load({
 								if (!byName[sk.name]) { byName[sk.name] = true; merged.push(sk); }
 							});
 						});
-						var cwds = picked.filter(function (s) { return s.cwd; }).map(function (s) { return s.cwd; });
-						setSt({ status: "ready", skills: merged, cwds: cwds });
+						return merged;
 					});
+				}).catch(function () { return []; });
+				Promise.all([api("/skills"), runtimeP]).then(function (r) {
+					var mine = (r[0] && r[0].entries) || [];
+					var mineNames = {};
+					mine.forEach(function (s) { mineNames[s.name] = true; });
+					var others = (r[1] || []).filter(function (s) { return !mineNames[s.name]; });
+					setSt({ status: "ready", mine: mine, others: others });
 				}).catch(function (e) { setSt({ status: "error", message: String((e && e.message) || e) }); });
 			};
 			react.useEffect(function () { load(); }, []);
+
+			var doToggle = function (s) {
+				setBusy(s.key); setMsg("");
+				api("/skills/toggle", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ source: s.source, name: s.entryName, disabled: !s.disabled }),
+				}).then(function (r) {
+					setBusy(null);
+					if (!r.ok) { setMsg(r.error || "操作被拒绝"); return; }
+					applyEntries(r.entries);
+					setMsg(s.disabled ? "已启用 " + s.name : "已禁用 " + s.name);
+				}).catch(function (e) { setBusy(null); setMsg("请求失败: " + e.message); });
+			};
+
+			var doDelete = function (s) {
+				setBusy(s.key); setMsg("正在删除 " + s.name + " …");
+				api("/skills/delete", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ source: s.source, name: s.entryName }),
+				}).then(function (r) {
+					setBusy(null); setConfirmDel(null);
+					if (!r.ok) { setMsg(r.error || "删除被拒绝"); return; }
+					applyEntries(r.entries);
+					setMsg("已删除 " + s.name);
+				}).catch(function (e) { setBusy(null); setConfirmDel(null); setMsg("请求失败: " + e.message); });
+			};
 
 			if (st[0].status === "loading") return h("div", { className: "pm_root" }, h("div", { className: "pm_msg" }, "正在读取技能目录…"));
 			if (st[0].status === "error") return h("div", { className: "pm_root" },
 				h("div", { className: "pm_msg pm_msgErr" }, "读取失败: " + st[0].message),
 				h("button", { className: "pm_btn", onClick: function () { load(); } }, "重试"));
-			if (st[0].status === "no-session") return h("div", { className: "pm_root" },
-				h("div", { className: "pm_msg" }, "暂无可用会话。技能目录与会话上下文绑定,请先创建一个会话再查看。"));
 
 			var query = q[0].trim().toLowerCase();
-			var rows = st[0].skills.filter(function (s) {
+			var mine = st[0].mine.filter(function (s) {
 				return !query || (s.name || "").toLowerCase().indexOf(query) >= 0 || (s.description || "").toLowerCase().indexOf(query) >= 0;
-			}).map(function (s) {
-				return h("div", { key: s.name, className: "pm_row" },
-					h("div", { className: "pm_left" },
-						h("span", { className: "pm_name", title: s.name }, "/" + s.name),
-						h("span", { className: "pm_id" }, s.description || ""),
-						s.whenToUse ? h("span", { className: "pm_id" }, s.whenToUse) : null),
-					h("div", { className: "pm_right" },
-						h("span", { className: s.modelInvocable ? "pm_tag pm_tagOn" : "pm_tag pm_tagSys" }, s.modelInvocable ? "模型可调" : "仅 /命令")));
 			});
-			if (!rows.length) rows = [h("div", { key: "empty", className: "pm_msg" }, query ? "无匹配技能" : "当前会话上下文无技能(技能来自 ~/.dsh/skills 与工作区技能目录,文件系统管理)")];
+			var rows = mine.map(function (s) {
+				var confirming = confirmDel[0] === s.key;
+				return h("div", { key: s.key, className: "cm_row" + (s.disabled ? " cm_rowOff" : "") },
+					h("div", { className: "cm_icon" }, (s.name || "?").charAt(0).toUpperCase()),
+					h("div", { className: "cm_main" },
+						h("div", { className: "cm_titleRow" },
+							h("span", { className: "cm_name", title: s.name }, s.name),
+							h("span", { className: "cm_src", title: s.sourceLabel + (s.disabled ? "(已禁用)" : "") }, s.sourceLabel),
+							s.modelInvocable ? null : h("span", { className: "cm_src" }, "仅 /命令")),
+						h("div", { className: "cm_desc", title: s.description }, s.description || ""),
+						confirming ? h("div", { className: "cm_confirm" },
+							h("span", { className: "cm_confirmTxt" }, "删除后无法恢复,确认删除 " + s.name + "？"),
+							h("button", { className: "cm_btnDanger", disabled: busy[0] === s.key, onClick: function () { doDelete(s); } }, "删除"),
+							h("button", { className: "cm_btnGhost", onClick: function () { setConfirmDel(null); } }, "取消")) : null),
+					confirming ? null : h("div", { className: "cm_side" },
+						h("button", { className: "cm_del", title: "删除", disabled: busy[0] === s.key, onClick: function () { setConfirmDel(s.key); },
+							"aria-label": "删除 " + s.name, dangerouslySetInnerHTML: { __html: TRASH_SVG } }),
+						h(SkillSwitch, {
+							on: !s.disabled, disabled: busy[0] === s.key,
+							title: s.disabled ? "启用" : "禁用",
+							onClick: function () { doToggle(s); },
+						})));
+			});
+			if (!rows.length) rows = [h("div", { key: "empty", className: "pm_msg" }, query ? "无匹配技能" : "用户技能目录为空。把技能目录(含 SKILL.md)放入 ~/.dsh/skills 即可在此管理。")];
 
+			var otherRows = st[0].others.map(function (s) {
+				return h("div", { key: "o-" + s.name, className: "cm_mini" },
+					h("span", { className: "cm_miniName", title: s.name }, "/" + s.name),
+					h("span", { className: "cm_src" }, SKILL_SRC_ZH[s.source] || s.source || "其他来源"));
+			});
+
+			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
 			return h("div", { className: "pm_root" },
 				h("label", { className: "pm_search" },
 					h("span", { className: "pm_tag" }, "搜索"),
 					h("input", { value: q[0], placeholder: "按名称或描述过滤", onChange: function (ev) { q[1](ev.currentTarget.value); } })),
-				h("div", { className: "pm_msg" }, "共 " + st[0].skills.length + " 个技能(最近活跃会话上下文的并集" + (st[0].cwds && st[0].cwds.length ? ",含工作区 " + st[0].cwds[0] : "") + ")。"),
+				h("div", { className: "cm_count" }, mine.length + " 个用户技能" + (st[0].others.length ? " · " + st[0].others.length + " 个其他来源" : "")),
 				h("div", { className: "pm_list" }, rows),
-				h("div", { className: "pm_msg" }, "技能为文件系统管理(~/.dsh/skills 与工作区技能目录),上游暂无启停 API;此处为目录视图。"));
+				otherRows.length ? h("div", { className: "cm_h2" }, "其他来源(随工作区/组合自动加载)") : null,
+				otherRows.length ? h("div", { className: "pm_list" }, otherRows) : null,
+				h("div", { className: msgCls }, msg[0]),
+				h("div", { className: "pm_msg" }, "开关 = 壳在 ~/.dsh/skills(~/.agents/skills)与其 -disabled 姊妹目录间移动技能,dsh 监听目录热生效,无需重启。"));
 		}
 
-		// ---------- MCP tab(inventory 过滤 mcp 行 + 配置指引) ----------
+		// ---------- MCP tab(inventory 过滤 mcp 行;启停走壳 plugins/toggle,删除仅壳管理的 insert 块) ----------
 
 		var MCP_SNIPPET = [
 			"# ~/.dsh/cordis.patch.yml 追加(每个 MCP server 一个条目):",
@@ -367,35 +473,121 @@ window.__ModuleLoader__.load({
 			var h = react.createElement;
 			var st = react.useState({ status: "loading" });
 			var setSt = st[1];
+			var busy = react.useState(null);
+			var setBusy = busy[1];
+			var msg = react.useState("");
+			var setMsg = msg[1];
+			var confirmDel = react.useState(null);
+			var setConfirmDel = confirmDel[1];
 
 			var load = function () {
 				setSt({ status: "loading" });
-				props.list().then(function (snap) {
-					setSt({ status: "ready", entries: (snap.entries || []).filter(function (e) { return /mcp/i.test(e.moduleName || "") || /mcp/i.test(e.entryId || ""); }) });
+				Promise.all([props.list(), api("/plugins"), api("/mcp")]).then(function (r) {
+					var entries = ((r[0] && r[0].entries) || []).filter(function (e) { return /mcp/i.test(e.moduleName || "") || /mcp/i.test(e.entryId || ""); });
+					var disabledSet = {};
+					((r[1] && r[1].disabled) || []).forEach(function (id) { disabledSet[id] = true; });
+					var managed = {};
+					var cfg = {};
+					((r[2] && r[2].managed) || []).forEach(function (m) { managed[m.id] = true; cfg[m.id] = m.config || {}; });
+					setSt({ status: "ready", entries: entries, disabledSet: disabledSet, managed: managed, cfg: cfg });
 				}).catch(function (e) { setSt({ status: "error", message: String((e && e.message) || e) }); });
 			};
 			react.useEffect(function () { load(); }, []);
+
+			var doToggle = function (e, pid, disable) {
+				setBusy(e.entryId);
+				setMsg((disable ? "正在禁用 " : "正在启用 ") + pid + " …");
+				api("/plugins/toggle", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ entryId: pid, disabled: disable }),
+				}).then(function (r) {
+					if (!r.ok) { setMsg(r.error || "操作被拒绝"); setBusy(null); return; }
+					// 轮询运行时状态翻转(dsh watcher 热应用有延迟)
+					var tries = 0;
+					var poll = setInterval(function () {
+						tries += 1;
+						props.list().then(function (snap) {
+							var row = (snap.entries || []).filter(function (x) { return x.entryId === e.entryId; })[0];
+							var flipped = row === undefined || row.enabled === !disable;
+							if (!flipped && tries < 30) return;
+							clearInterval(poll);
+							setBusy(null);
+							setMsg(flipped ? (disable ? "已禁用 " : "已启用 ") + pid : "状态切换较慢,已刷新当前列表");
+							load();
+						}).catch(function () {
+							if (tries >= 30) { clearInterval(poll); setBusy(null); setMsg("状态未知,已刷新当前列表"); load(); }
+						});
+					}, 500);
+				}).catch(function (err) { setMsg("请求失败: " + err.message); setBusy(null); });
+			};
+
+			var doDelete = function (pid) {
+				setBusy(pid);
+				setMsg("正在删除 " + pid + " …");
+				api("/mcp/delete", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ id: pid }),
+				}).then(function (r) {
+					setBusy(null); setConfirmDel(null);
+					if (!r.ok) { setMsg(r.error || "删除被拒绝"); return; }
+					setMsg("已删除 " + pid + ",正在刷新…");
+					load();
+				}).catch(function (e) { setBusy(null); setConfirmDel(null); setMsg("请求失败: " + e.message); });
+			};
 
 			if (st[0].status === "loading") return h("div", { className: "pm_root" }, h("div", { className: "pm_msg" }, "正在读取 MCP 实例…"));
 			if (st[0].status === "error") return h("div", { className: "pm_root" },
 				h("div", { className: "pm_msg pm_msgErr" }, "读取失败: " + st[0].message),
 				h("button", { className: "pm_btn", onClick: function () { load(); } }, "重试"));
 
-			var rows = st[0].entries.map(function (e) {
+			var s = st[0];
+			var rows = s.entries.map(function (e) {
+				var pid = patchIdOf(e.entryId);
+				var userOff = !!pid && !!s.disabledSet[pid];
+				var systemOff = !e.enabled && !userOff;
+				var manageable = !!pid && !systemOff;
+				var confirming = !!pid && confirmDel[0] === pid;
 				var phase = e.fiberPhase === null || e.fiberPhase === undefined ? "unobserved" : e.fiberPhase;
-				return h("div", { key: e.entryId, className: "pm_row" + (e.enabled ? "" : " pm_rowOff") },
-					h("div", { className: "pm_left" },
-						h("span", { className: "pm_name", title: e.moduleName }, shortName(e.moduleName)),
-						h("span", { className: "pm_id" }, e.entryId)),
-					h("div", { className: "pm_right" },
-						e.enabled ? h("span", { className: "pm_phase" + (phase === "failed" ? " pm_phaseFailed" : "") }, PHASE_ZH[phase] || phase) : null,
-						h("span", { className: e.enabled ? "pm_tag pm_tagOn" : "pm_tag pm_tagOff" }, e.enabled ? "已启用" : "已禁用")));
+				var cfg = pid ? s.cfg[pid] : null;
+				var displayName = pid ? pid.replace(/^mcp-/, "") : shortName(e.moduleName);
+				var descParts = [];
+				if (cfg) {
+					if (cfg.serverName) descParts.push("server: " + cfg.serverName);
+					if (cfg.transport) descParts.push(cfg.transport);
+					if (cfg.url) descParts.push(cfg.url);
+					if (cfg.command) descParts.push(cfg.command + (cfg.args && cfg.args.length ? " " + cfg.args.join(" ") : ""));
+				}
+				var desc = descParts.length ? descParts.join(" · ") : e.entryId;
+				return h("div", { key: e.entryId, className: "cm_row" + (e.enabled ? "" : " cm_rowOff") },
+					h("div", { className: "cm_icon" }, "M"),
+					h("div", { className: "cm_main" },
+						h("div", { className: "cm_titleRow" },
+							h("span", { className: "cm_name", title: displayName }, displayName),
+							pid ? h("span", { className: "cm_src", title: e.entryId }, "mcp") : h("span", { className: "cm_src", title: e.entryId }, "子树/动态"),
+							e.enabled && phase !== "unobserved" ? h("span", { className: "cm_src" + (phase === "failed" ? "" : "") },
+								phase === "failed" ? "失败" : PHASE_ZH[phase] || phase) : null,
+							userOff ? h("span", { className: "cm_src" }, "已禁用") : systemOff ? h("span", { className: "cm_src" }, "系统禁用") : null),
+						h("div", { className: "cm_desc", title: desc }, desc),
+						confirming ? h("div", { className: "cm_confirm" },
+							h("span", { className: "cm_confirmTxt" }, "将从 cordis.patch.yml 移除 " + pid + ",确认？"),
+							h("button", { className: "cm_btnDanger", disabled: busy[0] === pid, onClick: function () { doDelete(pid); } }, "删除"),
+							h("button", { className: "cm_btnGhost", onClick: function () { setConfirmDel(null); } }, "取消")) : null),
+					h("div", { className: "cm_side" },
+						!confirming && s.managed[pid] ? h("button", { className: "cm_del", title: "删除", disabled: busy[0] === e.entryId, onClick: function () { setConfirmDel(pid); },
+							"aria-label": "删除 " + displayName, dangerouslySetInnerHTML: { __html: TRASH_SVG } }) : null,
+						!confirming && manageable ? h(SkillSwitch, {
+							on: !userOff, disabled: busy[0] === e.entryId,
+							title: userOff ? "启用" : "禁用",
+							onClick: function () { doToggle(e, pid, !userOff); },
+						}) : null));
 			});
 			if (!rows.length) rows = [h("div", { key: "empty", className: "pm_msg" }, "当前组合未挂载任何 MCP 客户端实例。")];
 
+			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 || msg[0].indexOf("较慢") >= 0 ? " pm_msgOk" : "");
 			return h("div", { className: "pm_root" },
 				h("div", { className: "pm_list" }, rows),
-				h("div", { className: "pm_msg" }, "MCP 客户端(@deepseek-ai/dsh-mcp-client)经 composition 配置,每个实例连接一个 MCP server 并把工具注册为 mcp__<server>__<tool>:"),
+				h("div", { className: msgCls }, msg[0]),
+				h("div", { className: "pm_msg" }, "MCP 客户端(@deepseek-ai/dsh-mcp-client)每个实例连接一个 MCP server 并把工具注册为 mcp__<server>__<tool>。开关写 home patch 热载入;删除仅对本工具写入的条目生效。手动添加示例:"),
 				h("pre", { className: "sk_code" }, MCP_SNIPPET),
 				h("div", { className: "pm_msg" }, "保存后热载入。要求包可从 dsh 安装或 profile 解析(dsh plugin add);serverName 全局唯一。"));
 		}
@@ -497,54 +689,281 @@ window.__ModuleLoader__.load({
 				h("div", { className: "pm_msg" }, "壳更新从 GitHub(Suife-yuanxing/dsh-desktop)Releases 拉取:安装版自动下载并弹窗确认重启,便携版引导手动下载。dsh 更新先预检新版可运行性,失败自动回滚。"));
 		}
 
-		// ---------- 皮肤 tab(注册表 + ctx.theme.overrideTokens 官方覆盖层) ----------
+		// ---------- 皮肤 tab:自定义媒体导入 + Wallpaper Engine 接入 ----------
+		// 壳(30801)提供:资产上传 /skin/upload、静态服务 /skin/asset/*、
+		// WE 扫描 /skin/wallpapers(Steam 创意工坊 app 431960,video 壁纸可直接应用)。
+		// 应用状态持久化在壳 desktop-config.json 的 skin 字段,插件启动时恢复。
 
-		var SKIN_SOURCE = "dsh-desktop-skin";
-		var SKINS = [
-			{ id: "default", label: "默认", desc: "上游原生配色", tokens: null },
-			{ id: "amber", label: "琥珀", desc: "业务强调色 → 琥珀", tokens: { "--dsw-alias-state-business-primary": { light: "#b45309", dark: "#f59e0b" } } },
-			{ id: "violet", label: "紫罗兰", desc: "业务强调色 → 紫", tokens: { "--dsw-alias-state-business-primary": { light: "#6d28d9", dark: "#a78bfa" } } },
-		];
+		var BG_LAYER_ID = "dsh-desktop-skin-bg";
+		var BG_STYLE_ID = "dsh-desktop-skin-style";
+		var AUDIO_ID = "dsh-desktop-skin-audio";
+		var SKIN_KIND_ZH = { image: "图片", video: "视频", audio: "音频" };
 
-		var skinDisposer = null;
-
-		function currentSkinId() {
-			try {
-				var id = localStorage.getItem("dshDesktop.skin");
-				if (id && SKINS.some(function (s) { return s.id === id; })) return id;
-			} catch (e) { /* localStorage 不可用 */ }
-			return "default";
-		}
-
-		function applySkinById(ctx, id) {
-			var skin = SKINS.filter(function (s) { return s.id === id; })[0] || SKINS[0];
-			if (skinDisposer) { try { skinDisposer(); } catch (e) { /* 已失效 */ } skinDisposer = null; }
-			if (skin.tokens && ctx.theme && typeof ctx.theme.overrideTokens === "function") {
-				try { skinDisposer = ctx.theme.overrideTokens(SKIN_SOURCE, skin.tokens); } catch (e) { /* 皮肤层失败不阻塞 */ }
+		/** 将皮肤状态渲染为背景层(img/video)+ 透明化样式 + 氛围音频。 */
+		function applySkinVisual(state) {
+			state = state || {};
+			var style = document.getElementById(BG_STYLE_ID);
+			if (!style) {
+				style = document.createElement("style");
+				style.id = BG_STYLE_ID;
+				document.head.appendChild(style);
 			}
-			try { localStorage.setItem("dshDesktop.skin", skin.id); } catch (e) { /* 忽略 */ }
+			var hasBg = !!(state.bg && state.bg.url);
+			if (hasBg) {
+				var dim = typeof state.dim === "number" ? state.dim : 0.45;
+				style.textContent = [
+					"#" + BG_LAYER_ID + "{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}",
+					"#" + BG_LAYER_ID + " img,#" + BG_LAYER_ID + " video{width:100%;height:100%;object-fit:cover;display:block}",
+					"#" + BG_LAYER_ID + "::after{content:'';position:absolute;inset:0;background:rgba(0,0,0," + dim + ")}",
+					// 框架三列背景透明让背景透出;列内表面(气泡/卡片)自带背景保证可读
+					"#root{background:transparent!important}",
+					"#root>div[data-slot=root]{background:transparent!important}",
+					"#root>div[data-slot=root]>div{background:transparent!important}",
+					"#root>div[data-slot=root]>div>div{background:transparent!important}",
+				].join("");
+			} else {
+				style.textContent = "";
+			}
+			var layer = document.getElementById(BG_LAYER_ID);
+			if (hasBg) {
+				if (!layer) { layer = document.createElement("div"); layer.id = BG_LAYER_ID; document.body.prepend(layer); }
+				var wantTag = state.bg.kind === "video" ? "VIDEO" : "IMG";
+				var media = layer.firstElementChild;
+				if (!media || media.tagName !== wantTag) {
+					if (media) media.remove();
+					if (wantTag === "VIDEO") {
+						media = document.createElement("video");
+						media.autoplay = true; media.loop = true; media.muted = true; media.playsInline = true;
+					} else {
+						media = document.createElement("img");
+						media.alt = "";
+					}
+					layer.appendChild(media);
+				}
+				if (media.getAttribute("src") !== state.bg.url) media.setAttribute("src", state.bg.url);
+				if (wantTag === "VIDEO") { var vp = media.play(); if (vp && vp.catch) vp.catch(function () { /* 元素被移除/autoplay 受限 */ }); }
+			} else if (layer) {
+				layer.remove();
+			}
+			var audioEl = document.getElementById(AUDIO_ID);
+			if (state.audio && state.audio.url) {
+				if (!audioEl) {
+					audioEl = document.createElement("audio");
+					audioEl.id = AUDIO_ID;
+					audioEl.loop = true;
+					document.body.appendChild(audioEl);
+				}
+				if (audioEl.getAttribute("src") !== state.audio.url) audioEl.setAttribute("src", state.audio.url);
+				audioEl.volume = typeof state.volume === "number" ? state.volume : 0.35;
+				var ap = audioEl.play(); if (ap && ap.catch) ap.catch(function () { /* autoplay 受限时下次交互生效 */ });
+			} else if (audioEl) {
+				audioEl.remove();
+			}
 		}
 
-		function SkinTab(props) {
+		function fmtSize(n) {
+			if (!n) return "0 B";
+			if (n < 1024) return n + " B";
+			if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+			if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+			return (n / 1073741824).toFixed(2) + " GB";
+		}
+
+		function SkinTab() {
 			var h = react.createElement;
-			var sel = react.useState(props.current);
-			var rows = SKINS.map(function (s) {
-				var cur = sel[0] === s.id;
-				return h("div", {
-					key: s.id,
-					className: "skn_row" + (cur ? " skn_cur" : ""),
-					role: "radio", "aria-checked": cur ? "true" : "false", tabIndex: 0,
-					onClick: function () { if (!cur) { sel[1](s.id); props.onSelect(s.id); } },
-					onKeyDown: function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); if (!cur) { sel[1](s.id); props.onSelect(s.id); } } },
-				},
-					h("div", { className: "pm_left" },
-						h("span", { className: "pm_name" }, s.label),
-						h("span", { className: "pm_id" }, s.desc)),
-					h("div", { className: "pm_right" }, cur ? h("span", { className: "pm_tag pm_tagOn" }, "使用中") : null));
+			var st = react.useState({ status: "loading" });
+			var setSt = st[1];
+			var we = react.useState({ status: "loading" });
+			var setWe = we[1];
+			var msg = react.useState("");
+			var setMsg = msg[1];
+			var busy = react.useState(false);
+			var setBusy = busy[1];
+			var confirmDel = react.useState(null);
+			var setConfirmDel = confirmDel[1];
+			var fileRef = react.useRef(null);
+
+			var loadAssets = function () {
+				return api("/skin/assets").then(function (r) {
+					setSt({ status: "ready", assets: r.assets || [], state: r.state || {} });
+					applySkinVisual(r.state);
+				}).catch(function (e) { setSt({ status: "error", message: String((e && e.message) || e) }); });
+			};
+			var loadWallpapers = function () {
+				api("/skin/wallpapers").then(function (r) {
+					setWe({ status: "ready", installed: !!r.installed, wallpapers: r.wallpapers || [], root: r.root });
+				}).catch(function (e) { setWe({ status: "error", message: String((e && e.message) || e) }); });
+			};
+			react.useEffect(function () { loadAssets(); loadWallpapers(); }, []);
+
+			var patchState = function (patch, done) {
+				api("/skin/state", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(patch),
+				}).then(function (r) {
+					if (!r.ok) { setMsg(r.error || "保存失败"); return; }
+					applySkinVisual(r.state);
+					setSt(function (prev) { return { status: "ready", assets: prev.assets || [], state: r.state }; });
+					if (done) done();
+				}).catch(function (e) { setMsg("请求失败: " + e.message); });
+			};
+
+			var onFile = function (ev) {
+				var file = ev.currentTarget.files && ev.currentTarget.files[0];
+				ev.currentTarget.value = "";
+				if (!file) return;
+				setBusy(true);
+				setMsg("正在导入 " + file.name + "(" + fmtSize(file.size) + ")…");
+				fetch(SHELL_API + "/skin/upload", {
+					method: "POST",
+					headers: { "Content-Type": "application/octet-stream", "x-filename": encodeURIComponent(file.name) },
+					body: file,
+				}).then(function (r) { return r.json(); }).then(function (r) {
+					setBusy(false);
+					if (!r.ok) { setMsg(r.error || "导入被拒绝"); return; }
+					setSt(function (prev) { return { status: "ready", assets: r.assets || [], state: prev.state || {} }; });
+					setMsg("已导入 " + file.name + "。");
+					var kind = (r.assets || []).filter(function (a) { return a.name === file.name; })[0];
+					// 图片/视频导入后直接应用为背景,音频导入后待用户手动播放
+					if (kind && (kind.kind === "image" || kind.kind === "video")) {
+						patchState({ bg: { kind: kind.kind, url: SHELL_API + kind.url, name: kind.name } }, function () { setMsg("已导入并应用为背景: " + file.name); });
+					}
+				}).catch(function (e) { setBusy(false); setMsg("导入失败: " + e.message); });
+			};
+
+			var applyAsset = function (a) {
+				if (a.kind === "audio") {
+					patchState({ audio: { url: SHELL_API + a.url, name: a.name } }, function () { setMsg("开始循环播放 " + a.name); });
+				} else {
+					patchState({ bg: { kind: a.kind, url: SHELL_API + a.url, name: a.name } }, function () { setMsg("已应用背景 " + a.name); });
+				}
+			};
+
+			var applyWallpaper = function (w) {
+				patchState({ bg: { kind: "video", url: SHELL_API + w.videoUrl, name: "WE · " + w.title } }, function () { setMsg("已应用 Wallpaper Engine 壁纸: " + w.title); });
+			};
+
+			var doDelete = function (a) {
+				setBusy(true);
+				api("/skin/delete", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ name: a.name }),
+				}).then(function (r) {
+					setBusy(false); setConfirmDel(null);
+					if (!r.ok) { setMsg(r.error || "删除被拒绝"); return; }
+					setSt(function (prev) { return { status: "ready", assets: r.assets || [], state: prev.state || {} }; });
+					setMsg("已删除 " + a.name);
+				}).catch(function (e) { setBusy(false); setConfirmDel(null); setMsg("请求失败: " + e.message); });
+			};
+
+			if (st[0].status === "loading") return h("div", { className: "pm_root" }, h("div", { className: "pm_msg" }, "正在读取皮肤资产…"));
+			if (st[0].status === "error") return h("div", { className: "pm_root" },
+				h("div", { className: "pm_msg pm_msgErr" }, "读取失败(壳未运行?) " + st[0].message),
+				h("button", { className: "pm_btn", onClick: function () { loadAssets(); } }, "重试"));
+
+			var cur = st[0].state || {};
+			var assets = st[0].assets || [];
+
+			var bgRow = h("div", { className: "cm_row" },
+				h("div", { className: "cm_icon" }, "背"),
+				h("div", { className: "cm_main" },
+					h("div", { className: "cm_titleRow" },
+						h("span", { className: "cm_name" }, cur.bg ? cur.bg.name : "无背景"),
+						cur.bg ? h("span", { className: "cm_src" }, SKIN_KIND_ZH[cur.bg.kind] || cur.bg.kind) : h("span", { className: "cm_src" }, "默认")),
+					h("div", { className: "cm_desc" }, "遮罩浓度 " + Math.round((cur.dim === undefined ? 0.45 : cur.dim) * 100) + "%(压暗背景保证内容可读)")),
+				h("div", { className: "cm_side" },
+					h("input", {
+						type: "range", min: "0", max: "90", step: "5",
+						value: Math.round((cur.dim === undefined ? 0.45 : cur.dim) * 100),
+						title: "背景遮罩浓度", "aria-label": "背景遮罩浓度",
+						onChange: function (ev) { patchState({ dim: parseInt(ev.currentTarget.value, 10) / 100 }); },
+					}),
+					cur.bg ? h("button", { className: "pm_btn", onClick: function () { patchState({ bg: null }, function () { setMsg("已恢复默认背景"); }); } }, "关闭背景") : null));
+
+			var audioRow = h("div", { className: "cm_row" },
+				h("div", { className: "cm_icon" }, "音"),
+				h("div", { className: "cm_main" },
+					h("div", { className: "cm_titleRow" },
+						h("span", { className: "cm_name" }, cur.audio ? cur.audio.name : "无氛围音频"),
+						cur.audio ? h("span", { className: "cm_src" }, "循环") : null),
+					h("div", { className: "cm_desc" }, "音量 " + Math.round((cur.volume === undefined ? 0.35 : cur.volume) * 100) + "%")),
+				h("div", { className: "cm_side" },
+					cur.audio ? h("input", {
+						type: "range", min: "0", max: "100", step: "5",
+						value: Math.round((cur.volume === undefined ? 0.35 : cur.volume) * 100),
+						title: "氛围音频音量", "aria-label": "氛围音频音量",
+						onChange: function (ev) { patchState({ volume: parseInt(ev.currentTarget.value, 10) / 100 }); },
+					}) : null,
+					cur.audio ? h("button", { className: "pm_btn", onClick: function () { patchState({ audio: null }, function () { setMsg("已停止氛围音频"); }); } }, "停止") : null));
+
+			var assetRows = assets.map(function (a) {
+				var confirming = confirmDel[0] === a.name;
+				var isBg = !!(cur.bg && cur.bg.url && cur.bg.url.indexOf(encodeURIComponent(a.name)) >= 0 && cur.bg.url.indexOf("/skin/asset/") >= 0);
+				var isAudio = !!(cur.audio && cur.audio.url && cur.audio.url.indexOf(encodeURIComponent(a.name)) >= 0);
+				return h("div", { key: a.name, className: "cm_row" },
+					a.kind === "image"
+						? h("img", { className: "sk_thumb", src: SHELL_API + a.url, alt: "", loading: "lazy" })
+						: h("div", { className: "cm_icon" }, a.kind === "video" ? "▶" : "♪"),
+					h("div", { className: "cm_main" },
+						h("div", { className: "cm_titleRow" },
+							h("span", { className: "cm_name", title: a.name }, a.name),
+							h("span", { className: "cm_src" }, SKIN_KIND_ZH[a.kind] + " · " + fmtSize(a.size)),
+							isBg ? h("span", { className: "cm_src" }, "当前背景") : null,
+							isAudio ? h("span", { className: "cm_src" }, "播放中") : null),
+						confirming ? h("div", { className: "cm_confirm" },
+							h("span", { className: "cm_confirmTxt" }, "删除文件 " + a.name + "？"),
+							h("button", { className: "cm_btnDanger", disabled: busy[0], onClick: function () { doDelete(a); } }, "删除"),
+							h("button", { className: "cm_btnGhost", onClick: function () { setConfirmDel(null); } }, "取消")) : null),
+					confirming ? null : h("div", { className: "cm_side" },
+						h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { applyAsset(a); } },
+							a.kind === "audio" ? (isAudio ? "重启" : "播放") : "设为背景"),
+						h("button", { className: "cm_del", title: "删除", disabled: busy[0], onClick: function () { setConfirmDel(a.name); },
+							"aria-label": "删除 " + a.name, dangerouslySetInnerHTML: { __html: TRASH_SVG } })));
 			});
-			return h("div", { className: "pm_root", role: "radiogroup", "aria-label": "皮肤选择" },
-				h("div", { className: "pm_list" }, rows),
-				h("div", { className: "pm_msg" }, "皮肤经官方 theme.overrideTokens 覆盖层实现,浅色/深色自动适配,选择保存在本浏览器。皮肤内容暂定为强调色方案,后续扩充。"));
+			if (!assetRows.length) assetRows = [h("div", { key: "empty", className: "pm_msg" }, "尚无自定义资产。点击「导入文件」添加 jpg/png/gif、mp4/webm 或 mp3/wav 等。")];
+
+			var weBody;
+			if (we[0].status === "loading") weBody = h("div", { className: "pm_msg" }, "正在扫描 Wallpaper Engine 创意工坊…");
+			else if (we[0].status === "error") weBody = h("div", { className: "pm_msg pm_msgErr" }, "扫描失败: " + we[0].message);
+			else if (!we[0].installed) weBody = h("div", { className: "pm_msg" }, "未检测到 Wallpaper Engine(找不到 Steam 创意工坊目录 steamapps/workshop/content/431960)。安装 WE 并订阅壁纸后重试。");
+			else {
+				var wps = we[0].wallpapers || [];
+				var usable = wps.filter(function (w) { return w.supported; });
+				var wRows = usable.map(function (w) {
+					var isBg = !!(cur.bg && cur.bg.url && cur.bg.url.indexOf("/skin/we/" + w.id + "/") >= 0);
+					return h("div", { key: w.id, className: "cm_row" },
+						w.previewUrl ? h("img", { className: "sk_thumb sk_thumbW", src: SHELL_API + w.previewUrl, alt: "", loading: "lazy" }) : h("div", { className: "cm_icon" }, "W"),
+						h("div", { className: "cm_main" },
+							h("div", { className: "cm_titleRow" },
+								h("span", { className: "cm_name", title: w.title }, w.title),
+								h("span", { className: "cm_src" }, "video"),
+								isBg ? h("span", { className: "cm_src" }, "当前背景") : null),
+							h("div", { className: "cm_desc" }, "创意工坊 #" + w.id)),
+						h("div", { className: "cm_side" },
+							isBg ? h("button", { className: "pm_btn", onClick: function () { patchState({ bg: null }); } }, "关闭") :
+								h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { applyWallpaper(w); } }, "应用")));
+				});
+				var sceneCount = wps.length - usable.length;
+				weBody = h("div", { className: "pm_list" },
+					wRows.length ? wRows : [h("div", { key: "we-empty", className: "pm_msg" }, "创意工坊中没有视频类型壁纸。")],
+					sceneCount > 0 ? h("div", { className: "pm_msg" }, "另有 " + sceneCount + " 个场景(scene)壁纸:打包格式,暂不支持应用。") : null);
+			}
+
+			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
+			return h("div", { className: "pm_root" },
+				h("input", { ref: fileRef, type: "file", style: { display: "none" },
+					accept: ".jpg,.jpeg,.png,.gif,.webp,.bmp,.mp4,.webm,.mov,.mkv,.mp3,.wav,.ogg,.flac,.m4a",
+					onChange: onFile }),
+				h("div", { className: "ps_btns" },
+					h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { if (fileRef.current) fileRef.current.click(); } }, "导入文件"),
+					h("span", { className: "cm_count" }, assets.length + " 个资产")),
+				h("div", { className: "pm_list" }, [bgRow, audioRow]),
+				h("div", { className: "cm_h2" }, "自定义资产"),
+				h("div", { className: "pm_list" }, assetRows),
+				h("div", { className: "cm_h2" }, "Wallpaper Engine"),
+				weBody,
+				h("div", { className: msgCls }, msg[0]),
+				h("div", { className: "pm_msg" }, "导入的文件保存于 ~/.dsh/desktop-assets/ 并由壳(30801)提供本地静态服务;图片/视频设为背景,音频作循环氛围声。Wallpaper Engine 视频壁纸直接从 Steam 创意工坊目录读取,无需改动 WE 本体。状态持久化在壳配置,新窗口自动恢复。"));
 		}
 
 		function apply(ctx) {
@@ -599,13 +1018,13 @@ window.__ModuleLoader__.load({
 				label: () => t4("nav"),
 				locale: NS4,
 			}, function SkillsSectionHost() {
-				// 技能 + MCP 合并为一页两块
-				return react.createElement("div", { className: "pm_root" },
-					react.createElement("div", { className: "sec_h" }, "技能"),
-					react.createElement(SkillsTab),
-					react.createElement("div", { className: "sec_h" }, "MCP"),
-					react.createElement(McpTab, { list: list }));
-			}));
+			// 技能 + MCP 合并为一页两块(Claude GUI 式卡片排版)
+			return react.createElement("div", { className: "pm_root" },
+				react.createElement("div", { className: "cm_h2" }, "技能"),
+				react.createElement(SkillsTab),
+				react.createElement("div", { className: "cm_h2" }, "MCP 服务器"),
+				react.createElement(McpTab, { list: list }));
+		}));
 
 			ctx.effect(() => ctx.locale.register(NS6, {
 				zh: { nav: "皮肤" },
@@ -619,11 +1038,8 @@ window.__ModuleLoader__.load({
 				label: () => t6("nav"),
 				locale: NS6,
 			}, function SkinSectionHost() {
-				return react.createElement(SkinTab, {
-					current: currentSkinId(),
-					onSelect: function (id) { applySkinById(ctx, id); },
-				});
-			}));
+			return react.createElement(SkinTab);
+		}));
 
 			ctx.effect(() => ctx.locale.register(NS7, {
 				zh: { nav: "更新" },
@@ -640,9 +1056,12 @@ window.__ModuleLoader__.load({
 				return react.createElement(UpdateTab);
 			}));
 
-			// 皮肤:启动时恢复上次选择(官方 overrideTokens 覆盖层,随浅/深色自动重算)
-			applySkinById(ctx, currentSkinId());
-		}
+			// 皮肤:启动时从壳读取持久化状态并恢复背景/氛围音频(壳未运行则静默跳过)
+		try { localStorage.removeItem("dshDesktop.skin"); } catch (e) { /* 旧键清理 */ }
+		api("/skin/assets").then(function (r) {
+			applySkinVisual(r.state);
+		}).catch(function () { /* 壳不可用:保持默认 */ });
+	}
 
 		exports.apply = apply;
 		exports.inject = inject;

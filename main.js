@@ -705,7 +705,8 @@ const PROTECTED_ENTRY_IDS = new Set([
 function parseHomePatch() {
   let text = ''
   try { text = fs.readFileSync(HOME_PATCH_FILE, 'utf8') } catch { /* 不存在视作空 */ }
-  const lines = text.split('\n')
+  // CRLF 免疫:剥离行尾 \r,写回时统一 LF(下游 indexOf/正则均按精确行匹配)
+  const lines = text.split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l))
   const entries = []
   let valid = true
   let cur = null
@@ -852,6 +853,338 @@ function writePersonaOverride(text) {
   return { ok: true }
 }
 
+// ---------- 技能管理:user 级技能的启停与删除 ----------
+// dsh 的 skill-filesystem 只扫描固定根(~/.dsh/skills、~/.agents/skills 及工作区根),
+// 且以 chokidar 监听根目录(depth 1)——条目的增删移触发 invalidate 热刷新。
+// 因此"禁用"= 把技能条目移动到不在任何扫描根中的 <root>-disabled 姊妹目录。
+
+const SKILL_DISABLED_SUFFIX = '-disabled'
+const SKILL_USER_ROOTS = [
+  { source: 'user-dsh', label: '~/.dsh/skills', root: path.join(DSH_HOME, 'skills') },
+  { source: 'user-agents', label: '~/.agents/skills', root: path.join(os.homedir(), '.agents', 'skills') },
+]
+
+/** 技能条目名安全校验:单段、无路径分隔、不涉保留名。 */
+function isSafeSkillEntryName(name) {
+  return typeof name === 'string' && name.length > 0 && name.length <= 160
+    && !/[\\/:*?"<>|]/.test(name) && name !== '.' && name !== '..' && name !== '.system'
+}
+
+/** 轻量解析 SKILL.md / 平铺 .md 的 YAML frontmatter(name/description/when-to-use)。 */
+function parseSkillFrontmatter(file) {
+  let raw = ''
+  try { raw = fs.readFileSync(file, 'utf8') } catch { return null }
+  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+  if (!m) return null
+  const fmLines = m[1].split(/\r?\n/)
+  const fm = {}
+  for (let i = 0; i < fmLines.length; i++) {
+    const kv = fmLines[i].match(/^([A-Za-z0-9_-]+):\s?(.*)$/)
+    if (!kv || fm[kv[1]] !== undefined) continue
+    const val = kv[2].trim()
+    if (/^(>|[-+|][->+]?)$/.test(val)) {
+      // 块标量(>- 等):收集后续缩进行,折叠为单行
+      const block = []
+      for (let j = i + 1; j < fmLines.length; j++) {
+        if (fmLines[j].trim() === '') { block.push(''); continue }
+        if (/^ {2,}\S/.test(fmLines[j])) block.push(fmLines[j].trim())
+        else break
+      }
+      while (block.length && block[block.length - 1] === '') block.pop()
+      fm[kv[1]] = block.join(' ')
+    } else {
+      fm[kv[1]] = val.replace(/^['"]|['"]$/g, '')
+    }
+  }
+  if (!fm.name) return null
+  return {
+    name: fm.name,
+    description: fm.description || '',
+    whenToUse: fm['when-to-use'] || '',
+    modelInvocable: fm['disable-model-invocation'] !== 'true',
+  }
+}
+
+/** 扫描一个目录(启用根或禁用根),产出技能条目(目录含 SKILL.md 或平铺 .md)。 */
+function scanSkillDir(dir, source, label, disabled) {
+  const out = []
+  let entries = []
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return out }
+  for (const ent of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    let kind, file
+    if (ent.isDirectory()) { kind = 'dir'; file = path.join(dir, ent.name, 'SKILL.md') }
+    else if (ent.isFile() && ent.name.endsWith('.md')) { kind = 'file'; file = path.join(dir, ent.name) }
+    else continue
+    const fm = parseSkillFrontmatter(file)
+    out.push({
+      key: source + '|' + ent.name,
+      entryName: ent.name,
+      kind,
+      source,
+      sourceLabel: label,
+      disabled,
+      name: fm ? fm.name : ent.name.replace(/\.md$/, ''),
+      description: fm ? fm.description : '(frontmatter 缺失,dsh 已忽略此技能)',
+      whenToUse: fm ? fm.whenToUse : '',
+      modelInvocable: fm ? fm.modelInvocable : false,
+      valid: !!fm,
+    })
+  }
+  return out
+}
+
+/** GET /skills:用户级技能(启用 + 已禁用)全集。 */
+function listSkills() {
+  const entries = []
+  for (const r of SKILL_USER_ROOTS) {
+    entries.push(...scanSkillDir(r.root, r.source, r.label, false))
+    entries.push(...scanSkillDir(r.root + SKILL_DISABLED_SUFFIX, r.source, r.label, true))
+  }
+  return entries
+}
+
+/** 定位技能条目当前所在路径(启用根优先,其次禁用根)。 */
+function locateSkillEntry(source, name) {
+  const r = SKILL_USER_ROOTS.find((x) => x.source === source)
+  if (!r || !isSafeSkillEntryName(name)) return null
+  const enabled = path.join(r.root, name)
+  const off = path.join(r.root + SKILL_DISABLED_SUFFIX, name)
+  let at = null
+  try { fs.statSync(enabled); at = enabled } catch { /* 不在启用位置 */ }
+  if (!at) { try { fs.statSync(off); at = off } catch { /* 两处皆无 */ } }
+  return { def: r, enabled, off, at }
+}
+
+/** POST /skills/toggle:条目在 root 与 root-disabled 间移动,watcher 热刷新。 */
+function toggleSkillEntry(source, name, disable) {
+  const loc = locateSkillEntry(source, name)
+  if (!loc) return { ok: false, error: '无效的技能条目' }
+  const from = disable ? loc.enabled : loc.off
+  const to = disable ? loc.off : loc.enabled
+  if (!fs.existsSync(from)) return { ok: false, error: disable ? '技能不在启用目录中(可能已禁用,请刷新)' : '技能不在禁用目录中(可能已启用,请刷新)' }
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true })
+    fs.renameSync(from, to)
+  } catch (e) { return { ok: false, error: `移动失败: ${e.message}` } }
+  return { ok: true }
+}
+
+/** POST /skills/delete:删除技能条目(启用或禁用位置均可,递归)。 */
+function deleteSkillEntry(source, name) {
+  const loc = locateSkillEntry(source, name)
+  if (!loc || !loc.at) return { ok: false, error: '找不到该技能条目' }
+  try { fs.rmSync(loc.at, { recursive: true, force: true }) } catch (e) { return { ok: false, error: `删除失败: ${e.message}` } }
+  return { ok: true }
+}
+
+// ---------- MCP 管理:home patch 中壳写入的 insert 块(带 marker 注释) ----------
+// 启停复用插件 toggle 机制(insert 子条目 id 即组合顶层行 id,patch 管理行可覆盖
+// disabled 字段);删除仅对壳管理的 marker 块生效,preset 内置/手写行只提供启停。
+
+function mcpManagedMarkers(id) {
+  return [
+    `# --- dsh-desktop mcp: ${id} (auto-generated; do not edit) ---`,
+    `# --- end dsh-desktop mcp: ${id} ---`,
+  ]
+}
+
+/** GET /mcp:解析壳管理的 MCP insert 块,返回 [{ id, config }]。 */
+function listManagedMcp() {
+  const { lines } = parseHomePatch()
+  const out = []
+  const re = /^# --- dsh-desktop mcp: (\S+) \(auto-generated; do not edit\) ---$/
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(re)
+    if (!m) continue
+    const endMark = `# --- end dsh-desktop mcp: ${m[1]} ---`
+    const j = lines.indexOf(endMark, i + 1)
+    if (j < 0) continue
+    out.push({ id: m[1], config: parseMcpBlockConfig(lines.slice(i + 1, j)) })
+  }
+  return out
+}
+
+/** 从 insert 块行中提取 config 字段(serverName/transport/url/command/args)。 */
+function parseMcpBlockConfig(block) {
+  const cfg = {}
+  let cur = null
+  for (const l of block) {
+    let m
+    if ((m = l.match(/^\s+serverName:\s*(.+)$/))) { cfg.serverName = m[1].trim().replace(/^['"]|['"]$/g, ''); cur = null }
+    else if ((m = l.match(/^\s+transport:\s*(.+)$/))) { cfg.transport = m[1].trim(); cur = null }
+    else if ((m = l.match(/^\s+url:\s*(.+)$/))) { cfg.url = m[1].trim(); cur = null }
+    else if ((m = l.match(/^\s+command:\s*(.+)$/))) { cfg.command = m[1].trim(); cur = null }
+    else if ((m = l.match(/^\s+args:\s*(.*)$/))) { cfg.args = m[1].trim() ? [m[1].trim()] : []; cur = 'args' }
+    else if (cur === 'args' && (m = l.match(/^\s+-\s+(.+)$/))) cfg.args.push(m[1].trim())
+  }
+  return cfg
+}
+
+/** POST /mcp/delete:删除壳管理的 insert 块 + 同 id 的禁用管理行(若有)。 */
+function deleteManagedMcp(id) {
+  if (typeof id !== 'string' || !/^[\w.-]+$/.test(id)) return { ok: false, error: '非法 id' }
+  const { lines, valid } = parseHomePatch()
+  if (!valid) return { ok: false, error: 'cordis.patch.yml 含顶层数组以外的内容,为安全起见请手动编辑该文件' }
+  const [start, end] = mcpManagedMarkers(id)
+  const i = lines.indexOf(start)
+  if (i < 0) return { ok: false, error: '该 MCP 条目不是本工具写入的格式,请在 cordis.patch.yml 手动删除' }
+  const j = lines.indexOf(end, i + 1)
+  if (j < 0) return { ok: false, error: 'marker 不完整,请手动编辑 cordis.patch.yml' }
+  lines.splice(i, j - i + 1)
+  while (lines[i] !== undefined && lines[i].trim() === '' && lines[i + 1] !== undefined && lines[i + 1].trim() === '') lines.splice(i, 1)
+  try { writeHomePatch(lines) } catch (e) { return { ok: false, error: `写入失败: ${e.message}` } }
+  // 顺手清掉同 id 的禁用管理行(幂等,无行时为空操作)
+  togglePluginEntry(id, false)
+  return { ok: true }
+}
+
+// ---------- 皮肤资产 + Wallpaper Engine 接入 ----------
+// 自定义皮肤:用户导入的图片/视频/音频存 ~/.dsh/desktop-assets/,
+// 经壳静态服务(30801)供 WebUI 引用(跨源 CORS 已放行 3080)。
+// Wallpaper Engine:扫描 Steam 创意工坊内容目录(app 431960)的 project.json,
+// video 类型壁纸(mp4 + preview)可直接应用;scene 类型是打包格式,仅展示不可用。
+
+const SKIN_ASSETS_DIR = path.join(DSH_HOME, 'desktop-assets')
+const WE_APP_ID = '431960'
+
+const SKIN_MIME = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.flac': 'audio/flac', '.m4a': 'audio/mp4',
+}
+
+function skinKindOf(name) {
+  const ext = path.extname(name || '').toLowerCase()
+  if (!SKIN_MIME[ext]) return null
+  if (SKIN_MIME[ext].startsWith('image/')) return 'image'
+  if (SKIN_MIME[ext].startsWith('video/')) return 'video'
+  return 'audio'
+}
+
+/** 资产文件名安全校验(防路径穿越)。 */
+function isSafeAssetName(name) {
+  return typeof name === 'string' && /^[\w][\w .()-]{0,120}(\.[A-Za-z0-9]{1,8})$/.test(name) && !name.includes('..')
+}
+
+/** 扫描自定义资产目录。 */
+function listSkinAssets() {
+  let entries = []
+  try { entries = fs.readdirSync(SKIN_ASSETS_DIR, { withFileTypes: true }) } catch { /* 尚无目录 */ }
+  const out = []
+  for (const ent of entries) {
+    if (!ent.isFile()) continue
+    const kind = skinKindOf(ent.name)
+    if (!kind) continue
+    let size = 0
+    try { size = fs.statSync(path.join(SKIN_ASSETS_DIR, ent.name)).size } catch { /* 忽略 */ }
+    out.push({ name: ent.name, kind, size, url: `/skin/asset/${encodeURIComponent(ent.name)}` })
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** 定位 Wallpaper Engine 创意工坊目录(Steam 注册表 → steamapps/workshop/content/431960)。 */
+function findWallpaperEngineDir() {
+  const candidates = []
+  try {
+    const r = spawnSync('reg', ['query', 'HKCU\\Software\\Valve\\Steam', '/v', 'SteamPath'], { encoding: 'utf8', timeout: 4000 })
+    if (r.status === 0) {
+      const m = String(r.stdout).match(/SteamPath\s+REG_SZ\s+(\S+)/)
+      if (m) candidates.push(m[1])
+    }
+  } catch { /* reg 不可用 */ }
+  candidates.push('C:\\Program Files (x86)\\Steam', 'C:\\Program Files\\Steam', 'D:\\Steam', 'E:\\Steam')
+  for (const steam of candidates) {
+    const dir = path.join(steam, 'steamapps', 'workshop', 'content', WE_APP_ID)
+    try { if (fs.statSync(dir).isDirectory()) return dir } catch { /* 继续找 */ }
+  }
+  return null
+}
+
+/** 扫描 WE 创意工坊壁纸:解析 project.json,video 类型给出可直接应用的视频文件。 */
+function listWallpapers() {
+  const root = findWallpaperEngineDir()
+  if (!root) return { installed: false, wallpapers: [] }
+  let dirs = []
+  try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()) } catch { return { installed: true, wallpapers: [] } }
+  const out = []
+  for (const d of dirs) {
+    const dir = path.join(root, d.name)
+    let meta = null
+    try { meta = JSON.parse(fs.readFileSync(path.join(dir, 'project.json'), 'utf8')) } catch { continue }
+    const type = String(meta.type || '').toLowerCase()
+    const preview = ['preview.jpg', 'preview.gif', 'preview.png'].find((p) => fs.existsSync(path.join(dir, p)))
+    const entry = {
+      id: d.name,
+      title: String(meta.title || d.name),
+      type,
+      previewUrl: preview ? `/skin/we/${d.name}/preview` : null,
+      supported: false,
+      videoUrl: null,
+    }
+    if (type === 'video' || type === 'web') {
+      // video:找最大的视频文件;web:找入口 html(前端 iframe 嵌入)
+      let best = null
+      try {
+        for (const f of fs.readdirSync(dir)) {
+          const kind = skinKindOf(f)
+          if (kind === 'video') {
+            const s = fs.statSync(path.join(dir, f)).size
+            if (!best || s > best.size) best = { file: f, size: s }
+          }
+        }
+      } catch { /* 忽略 */ }
+      if (best) { entry.supported = true; entry.videoUrl = `/skin/we/${d.name}/video`; entry.videoFile = best.file }
+    }
+    out.push(entry)
+  }
+  out.sort((a, b) => a.title.localeCompare(b.title))
+  return { installed: true, root, wallpapers: out }
+}
+
+/** WE 壁纸目录内文件定位(preview/video)。 */
+function wallpaperFileOf(id, kind) {
+  if (!/^\d+$/.test(String(id))) return null
+  const root = findWallpaperEngineDir()
+  if (!root) return null
+  const dir = path.join(root, String(id))
+  try { if (!fs.statSync(dir).isDirectory()) return null } catch { return null }
+  try {
+    if (kind === 'preview') {
+      const p = ['preview.jpg', 'preview.gif', 'preview.png'].find((x) => fs.existsSync(path.join(dir, x)))
+      return p ? { file: path.join(dir, p), mime: skinKindOf(p) ? SKIN_MIME[path.extname(p).toLowerCase()] : 'image/jpeg' } : null
+    }
+    if (kind === 'video') {
+      let best = null
+      for (const f of fs.readdirSync(dir)) {
+        if (skinKindOf(f) === 'video') {
+          const s = fs.statSync(path.join(dir, f)).size
+          if (!best || s > best.size) best = { file: path.join(dir, f), mime: SKIN_MIME[path.extname(f).toLowerCase()] }
+        }
+      }
+      return best
+    }
+  } catch { return null }
+  return null
+}
+
+/** 读/写皮肤应用状态(持久化在 desktop-config.json 的 skin 字段)。 */
+function getSkinState() {
+  return cfg.skin || { bg: null, audio: null, dim: 0.45, volume: 0.35 }
+}
+
+function setSkinState(patch) {
+  const cur = getSkinState()
+  const next = {
+    bg: 'bg' in patch ? patch.bg : cur.bg,
+    audio: 'audio' in patch ? patch.audio : cur.audio,
+    dim: typeof patch.dim === 'number' ? Math.min(0.9, Math.max(0, patch.dim)) : cur.dim,
+    volume: typeof patch.volume === 'number' ? Math.min(1, Math.max(0, patch.volume)) : cur.volume,
+  }
+  cfg.skin = next
+  saveConfig(cfg)
+  return next
+}
+
 function startShellApi() {
   const server = http.createServer(async (req, res) => {
     const origin = req.headers.origin || ''
@@ -860,7 +1193,7 @@ function startShellApi() {
     const base = {
       'Access-Control-Allow-Origin': origin || `http://127.0.0.1:${DSH_PORT}`,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, x-filename',
     }
     if (req.method === 'OPTIONS') { res.writeHead(204, base); res.end(); return }
     const send = (code, data) => {
@@ -870,6 +1203,76 @@ function startShellApi() {
     const url = new URL(req.url, `http://127.0.0.1:${SHELL_API_PORT}`)
     if (!corsOk) return send(403, { error: 'origin not allowed' })
     try {
+      // ---------- 皮肤:静态文件服务(自定义资产 + WE 预览/视频,视频支持 Range) ----------
+      const sendFile = (file, mime) => {
+        let stat
+        try { stat = fs.statSync(file) } catch { return send(404, { error: 'not found' }) }
+        const headers = { 'Content-Type': mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-cache', ...base }
+        const range = req.headers.range
+        if (range) {
+          const m = range.match(/bytes=(\d*)-(\d*)/)
+          if (m) {
+            let start = m[1] === '' ? 0 : parseInt(m[1], 10)
+            let end = m[2] === '' ? stat.size - 1 : parseInt(m[2], 10)
+            if (start > end || start >= stat.size) { res.writeHead(416, { 'Content-Range': `bytes */${stat.size}`, ...base }); return res.end() }
+            end = Math.min(end, stat.size - 1)
+            res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${stat.size}`, 'Content-Length': end - start + 1 })
+            return fs.createReadStream(file, { start, end }).pipe(res)
+          }
+        }
+        res.writeHead(200, { ...headers, 'Content-Length': stat.size })
+        fs.createReadStream(file).pipe(res)
+      }
+      if (req.method === 'GET' && url.pathname.startsWith('/skin/asset/')) {
+        const name = decodeURIComponent(url.pathname.slice('/skin/asset/'.length))
+        if (!isSafeAssetName(name)) return send(400, { error: '非法文件名' })
+        const kind = skinKindOf(name)
+        if (!kind) return send(400, { error: '不支持的文件类型' })
+        return sendFile(path.join(SKIN_ASSETS_DIR, name), SKIN_MIME[path.extname(name).toLowerCase()])
+      }
+      let mWe = null
+      if (req.method === 'GET' && (mWe = url.pathname.match(/^\/skin\/we\/(\d+)\/(preview|video)$/))) {
+        const hit = wallpaperFileOf(mWe[1], mWe[2])
+        if (!hit) return send(404, { error: 'not found' })
+        return sendFile(hit.file, hit.mime)
+      }
+      if (req.method === 'GET' && url.pathname === '/skin/assets') {
+        return send(200, { assets: listSkinAssets(), state: getSkinState() })
+      }
+      if (req.method === 'POST' && url.pathname === '/skin/upload') {
+        const rawName = req.headers['x-filename'] ? decodeURIComponent(String(req.headers['x-filename'])) : ''
+        if (!isSafeAssetName(rawName)) return send(400, { ok: false, error: '非法文件名(仅支持字母数字、空格、点、括号、连字符)' })
+        const kind = skinKindOf(rawName)
+        if (!kind) return send(400, { ok: false, error: '不支持的类型(支持 jpg/png/gif/webp/bmp、mp4/webm/mov/mkv、mp3/wav/ogg/flac/m4a)' })
+        const chunks = []
+        for await (const chunk of req) chunks.push(chunk)
+        const buf = Buffer.concat(chunks)
+        if (!buf.length) return send(400, { ok: false, error: '空文件' })
+        if (buf.length > 512 * 1024 * 1024) return send(400, { ok: false, error: '文件超过 512MB 上限' })
+        try {
+          fs.mkdirSync(SKIN_ASSETS_DIR, { recursive: true })
+          fs.writeFileSync(path.join(SKIN_ASSETS_DIR, rawName), buf)
+        } catch (e) { return send(500, { ok: false, error: `保存失败: ${e.message}` }) }
+        return send(200, { ok: true, assets: listSkinAssets() })
+      }
+      if (req.method === 'POST' && url.pathname === '/skin/delete') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { name } = JSON.parse(body || '{}')
+        if (!isSafeAssetName(name)) return send(400, { ok: false, error: '非法文件名' })
+        try { fs.rmSync(path.join(SKIN_ASSETS_DIR, name), { force: true }) } catch (e) { return send(500, { ok: false, error: `删除失败: ${e.message}` }) }
+        return send(200, { ok: true, assets: listSkinAssets() })
+      }
+      if (req.method === 'GET' && url.pathname === '/skin/wallpapers') {
+        return send(200, listWallpapers())
+      }
+      if (req.method === 'POST' && url.pathname === '/skin/state') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const patch = JSON.parse(body || '{}')
+        if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) return send(400, { ok: false, error: 'patch 必须是对象' })
+        return send(200, { ok: true, state: setSkinState(patch) })
+      }
       if (req.method === 'GET' && url.pathname === '/state') {
         return send(200, {
           shellVersion: app.getVersion(),
@@ -960,6 +1363,43 @@ function startShellApi() {
         const result = togglePluginEntry(entryId, disabled)
         if (!result.ok) return send(400, { ok: false, error: result.error })
         return send(200, { ok: true, disabled: readDisabledPlugins() })
+      }
+      if (req.method === 'GET' && url.pathname === '/skills') {
+        return send(200, { entries: listSkills() })
+      }
+      if (req.method === 'POST' && url.pathname === '/skills/toggle') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { source, name, disabled } = JSON.parse(body || '{}')
+        if (typeof source !== 'string' || typeof name !== 'string' || typeof disabled !== 'boolean') {
+          return send(400, { ok: false, error: '参数必须是 { source: string, name: string, disabled: boolean }' })
+        }
+        const result = toggleSkillEntry(source, name, disabled)
+        if (!result.ok) return send(400, result)
+        return send(200, { ok: true, entries: listSkills() })
+      }
+      if (req.method === 'POST' && url.pathname === '/skills/delete') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { source, name } = JSON.parse(body || '{}')
+        if (typeof source !== 'string' || typeof name !== 'string') {
+          return send(400, { ok: false, error: '参数必须是 { source: string, name: string }' })
+        }
+        const result = deleteSkillEntry(source, name)
+        if (!result.ok) return send(400, result)
+        return send(200, { ok: true, entries: listSkills() })
+      }
+      if (req.method === 'GET' && url.pathname === '/mcp') {
+        return send(200, { managed: listManagedMcp() })
+      }
+      if (req.method === 'POST' && url.pathname === '/mcp/delete') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { id } = JSON.parse(body || '{}')
+        if (typeof id !== 'string' || !id) return send(400, { ok: false, error: '缺少 id' })
+        const result = deleteManagedMcp(id)
+        if (!result.ok) return send(400, result)
+        return send(200, { ok: true, managed: listManagedMcp() })
       }
       send(404, { error: 'not found' })
     } catch (e) {
