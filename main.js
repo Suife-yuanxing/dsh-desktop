@@ -31,13 +31,13 @@ const autoUpdater = canShellSelfUpdate ? require('electron-updater').autoUpdater
 
 let splashWindow = null
 const mainWindows = new Set() // 共享同一 dsh 服务的多窗口
-let settingsWindow = null // 壳设置窗口(dsh 版本/更新管理)
+let settingsWindow = null // 壳设置窗口(更新/日志管理)
 let tray = null
 let dshChild = null
 let quitting = false
 let restartAttempts = 0
 let recoveryTimer = null
-let availableVersions = [] // npm 上可选的 dsh 版本(异步拉取后填充设置页)
+let availableVersions = [] // npm 上可选的 dsh 版本(异步拉取,供壳 HTTP API /state、/switch 使用;设置 UI 仅保留更新)
 let switching = false // 版本切换互斥,防止并发触发
 let restarting = false // 服务重启互斥(托盘/API 共用)
 
@@ -403,7 +403,7 @@ async function checkDshUpdate(manual) {
     type: 'info',
     title: 'dsh 有新版本',
     message: `发现 dsh 新版本 ${latest}(当前 ${cfg.dshVersion})`,
-    detail: '更新前会验证新版可运行,失败自动回滚;也可随时在托盘「dsh 版本」切回旧版。',
+    detail: '更新前会验证新版可运行,失败自动回滚。',
     buttons: ['更新并重启服务', '查看版本历史', '忽略'],
     defaultId: 0,
     cancelId: 2,
@@ -685,9 +685,11 @@ const PROTECTED_ENTRY_IDS = new Set([
   'webserver', 'web-startup', 'web-runtime', 'client-hmr', 'modules', 'connection',
   'api-remotes', 'client-runtime', 'cordis-client-runner', 'api-gateway', 'cordis-host-runner',
   'plugin-inventory', 'hmr', 'timer', 'code-runtime', 'directory-picker',
-  // 设置页/UI 骨架(插件管理 tab 自身的依赖,保住自恢复入口)
+  // 设置页/UI 骨架(插件管理 tab 自身的依赖,保住自恢复入口)。
+  // 注意:ui-settings-plugin-inventory(上游只读"插件列表"tab)已解除保护并默认禁用
+  // —— 其信息并入"插件管理"tab(展开详情);需要时可在插件管理里重新启用恢复。
   'ui-theme', 'locale', 'ui-layout', 'ui-sidebar', 'ui-settings', 'ui-settings-general',
-  'ui-settings-models', 'ui-settings-plugin-inventory', 'ui-settings-plugins', 'ui-conversation',
+  'ui-settings-models', 'ui-settings-plugins', 'ui-conversation',
   // host 核心服务
   'settings-file', 'credentials', 'llm', 'llm-pi-ai', 'session', 'session-persistence-jsonl',
   'session-projection-cache', 'session-stats', 'session-query-sqlite', 'storage', 'storage-json',
@@ -968,7 +970,7 @@ function startShellApi() {
   server.listen(SHELL_API_PORT, '127.0.0.1', () => log(`壳 API 就绪: 127.0.0.1:${SHELL_API_PORT}`))
 }
 
-// ---------- 设置窗口(dsh 版本/更新管理) ----------
+// ---------- 设置窗口(更新/日志管理;版本切换仅经壳 HTTP API /switch) ----------
 
 function openSettings() {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
@@ -999,12 +1001,9 @@ function setupSettingsIpc() {
   ipcMain.handle('dsh-settings:get', () => ({
     shellVersion: app.getVersion(),
     dshVersion: cfg.dshVersion,
-    availableVersions,
     channel: canShellSelfUpdate ? 'NSIS 安装版(支持自更新)' : isPortable ? '便携版(手动更新)' : '开发模式',
     switching,
   }))
-  ipcMain.on('dsh-settings:switch', (_e, v) => { switchDshVersion(v) })
-  ipcMain.on('dsh-settings:refresh-versions', () => { fetchAvailableVersions() })
   ipcMain.on('dsh-settings:check-dsh-update', () => { checkDshUpdate(true) })
   ipcMain.on('dsh-settings:check-shell-update', () => { checkShellUpdate() })
   // 日志查看:返回 desktop.log 最近 N 行(默认 300,上限 2000)

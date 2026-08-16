@@ -3,14 +3,12 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('dshDesktop', {
-  version: '0.3.7',
+  version: '0.3.8',
   // splash 页订阅主进程推送的启动阶段(probe/spawn/wait/ready/crash)
   onStage: (cb) => ipcRenderer.on('dsh-stage', (_e, stage) => cb(stage)),
-  // 设置页:dsh 版本与更新管理
+  // 设置页:更新管理(版本切换仅经壳 HTTP API,不在 UI 暴露)
   settings: {
     get: () => ipcRenderer.invoke('dsh-settings:get'),
-    switchVersion: (v) => ipcRenderer.send('dsh-settings:switch', v),
-    refreshVersions: () => ipcRenderer.send('dsh-settings:refresh-versions'),
     checkDshUpdate: () => ipcRenderer.send('dsh-settings:check-dsh-update'),
     checkShellUpdate: () => ipcRenderer.send('dsh-settings:check-shell-update'),
     onStatus: (cb) => ipcRenderer.on('dsh-settings:status', (_e, s) => cb(s)),

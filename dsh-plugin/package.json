@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop-version-tab",
-  "description": "dsh version switcher tab injected by the dsh-desktop shell",
-  "version": "0.3.7",
+  "description": "dsh-desktop shell integration: plugin manage tab + persona/skills/skin/update settings sections",
+  "version": "0.3.8",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

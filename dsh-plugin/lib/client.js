@@ -1,5 +1,6 @@
-// dsh-desktop 版本切换 tab:注入 Web UI Settings → Plugins 区段。
-// 与壳(127.0.0.1:30801)通信,复用壳的预检/回滚/重启编排。
+// dsh-desktop 桌面集成插件:设置页的插件管理 tab(启停)与
+// 人设/技能(含 MCP)/皮肤/更新四个独立设置区段。
+// 与壳(127.0.0.1:30801)通信,读写经壳编排(home patch 热应用/更新/回滚)。
 window.__ModuleLoader__.load({
 	id: "dsh-desktop-version-tab",
 	factory: (require) => {
@@ -8,22 +9,9 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
 
-		var NS = "dshDesktop.versionTab";
 		var SHELL_API = "http://127.0.0.1:30801";
 
 		var css = [
-			".dt_root{display:flex;flex-direction:column;gap:10px;padding:4px 0}",
-			".dt_row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px 12px}",
-			".dt_rowCur{border-color:#238636}",
-			".dt_rowBusy{opacity:.5;pointer-events:none}",
-			".dt_name{font-family:var(--dsw-font-mono);font-size:13px;color:var(--dsw-alias-label-primary)}",
-			".dt_tag{font-size:11px;color:var(--dsw-alias-label-tertiary)}",
-			".dt_tagCur{color:#3fb950}",
-			".dt_btn{background:var(--dsw-alias-fill-l2);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer}",
-			".dt_btn:hover{border-color:var(--dsw-alias-label-secondary)}",
-			".dt_msg{font-size:12px;color:var(--dsw-alias-label-tertiary);min-height:16px;word-break:break-all}",
-			".dt_msgOk{color:#3fb950}.dt_msgErr{color:#f85149}",
-			".dt_meta{font-size:12px;color:var(--dsw-alias-label-tertiary);line-height:1.7}",
 			".pm_root{display:flex;flex-direction:column;gap:10px;padding:4px 0}",
 			".pm_search{display:flex;align-items:center;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px}",
 			".pm_search input{flex:1;background:transparent;border:none;outline:none;color:var(--dsw-alias-label-primary);font-size:13px}",
@@ -43,13 +31,16 @@ window.__ModuleLoader__.load({
 			".pm_list{display:flex;flex-direction:column;gap:6px;max-height:52vh;overflow:auto}",
 			".pm_msg{font-size:12px;color:var(--dsw-alias-label-tertiary);min-height:16px;word-break:break-all}",
 			".pm_msgOk{color:#3fb950}.pm_msgErr{color:#f85149}",
+			".pm_click{cursor:pointer}",
+			".pm_detail{font-family:var(--dsw-font-mono);font-size:11px;color:var(--dsw-alias-label-secondary);background:rgba(127,127,127,.08);border-radius:6px;padding:6px 8px;margin-top:4px;word-break:break-all;white-space:pre-wrap}",
 			".ps_txt{width:100%;min-height:180px;resize:vertical;background:transparent;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:8px 10px;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-mono);font-size:12px;line-height:1.6;box-sizing:border-box;outline:none}",
 			".ps_txt:focus{border-color:var(--dsw-alias-label-secondary)}",
 			".ps_btns{display:flex;gap:8px;align-items:center}",
 			".sk_code{background:rgba(127,127,127,.08);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:8px 10px;font-family:var(--dsw-font-mono);font-size:11px;white-space:pre;overflow:auto;color:var(--dsw-alias-label-secondary);margin:0}",
 			".skn_row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:8px 12px;cursor:pointer}",
 			".skn_row:hover{border-color:var(--dsw-alias-label-secondary)}",
-			".skn_cur{border-color:#238636}"
+			".skn_cur{border-color:#238636}",
+			".sec_h{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);margin:10px 0 0}"
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -64,81 +55,9 @@ window.__ModuleLoader__.load({
 			return fetch(SHELL_API + path, opts).then(function (r) { return r.json(); });
 		}
 
-		function VersionTab() {
-			var state = react.useState(null);
-			var setState = state[1];
-			var busy = react.useState(false);
-			var setBusy = busy[1];
-			var msg = react.useState("");
-			var setMsg = msg[1];
-
-			var load = function () {
-				return api("/state").then(function (s) {
-					setState(s);
-				}).catch(function (e) {
-					setState({ error: "无法连接桌面壳: " + e.message });
-				});
-			};
-			react.useEffect(function () { load(); }, []);
-
-			var doSwitch = function (v) {
-				setBusy(true);
-				setMsg("正在验证 " + v + " …(首次需下载依赖)");
-				api("/switch", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ version: v }),
-				}).then(function (r) {
-					if (!r.accepted) { setMsg(r.error || "切换被拒绝"); setBusy(false); return; }
-					setMsg("已请求切换到 " + v + ",完成后页面将自动刷新。");
-					// 轮询壳状态,切换结束(成功或回滚)后刷新视图
-					var poll = setInterval(function () {
-						api("/state").then(function (s) {
-							if (!s.switching) {
-								clearInterval(poll);
-								load();
-								setBusy(false);
-							}
-						}).catch(function () { /* 壳短暂重启,继续轮询 */ });
-					}, 2000);
-				}).catch(function (e) {
-					setMsg("请求失败: " + e.message);
-					setBusy(false);
-				});
-			};
-
-			var h = react.createElement;
-			if (!state[0]) return h("div", { className: "dt_root" }, h("div", { className: "dt_meta" }, "正在读取版本信息…"));
-			var s = state[0];
-			if (s.error) return h("div", { className: "dt_root" },
-				h("div", { className: "dt_msg dt_msgErr" }, s.error),
-				h("div", { className: "dt_meta" }, "请确认通过 DeepSeek Harness 桌面版启动,或刷新重试。"));
-
-			var rows = (s.availableVersions || []).map(function (v) {
-				var cur = v === s.dshVersion;
-				return h("div", {
-					key: v,
-					className: "dt_row" + (cur ? " dt_rowCur" : "") + (busy[0] ? " dt_rowBusy" : ""),
-				},
-					h("span", { className: "dt_name" }, v),
-					cur
-						? h("span", { className: "dt_tag dt_tagCur" }, "当前使用")
-						: h("button", { className: "dt_btn", onClick: function () { doSwitch(v); } }, "切换"));
-			});
-			if (!rows.length) rows = [h("div", { key: "empty", className: "dt_meta" }, "暂无可用版本(仅展示 npm 公开发布后的版本)")];
-
-			var msgCls = "dt_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " dt_msgErr" : msg[0].indexOf("已切换") >= 0 ? " dt_msgOk" : "");
-			return h("div", { className: "dt_root" },
-				rows,
-				h("div", { className: msgCls }, msg[0]),
-				h("div", { className: "dt_meta" },
-					"壳版本 " + (s.shellVersion || "-") + " · 切换前自动验证,失败自动回滚 · 服务重启后本页可能需要刷新"));
-		}
-
 		var NS2 = "dshDesktop.pluginMgr";
 		var NS3 = "dshDesktop.persona";
 		var NS4 = "dshDesktop.skills";
-		var NS5 = "dshDesktop.mcp";
 		var NS6 = "dshDesktop.skin";
 		var NS7 = "dshDesktop.update";
 
@@ -163,8 +82,10 @@ window.__ModuleLoader__.load({
 			return id;
 		}
 
-		// 插件管理 tab:运行时清单来自 ctx.remote.pluginInventory(host 只读投影),
+		// 插件管理 tab(合并原"插件列表"的信息与启停能力):
+		// 运行时清单来自 ctx.remote.pluginInventory(host 只读投影),
 		// 持久禁用集来自壳 30801(读写 ~/.dsh/cordis.patch.yml,dsh watcher 热应用)。
+		// 点击条目展开完整模块名/路径 id/运行状态(吸收只读清单视图)。
 		function PluginManagerTab(props) {
 			var h = react.createElement;
 			var state = react.useState({ status: "loading" });
@@ -175,6 +96,7 @@ window.__ModuleLoader__.load({
 			var setMsg = msg[1];
 			var query = react.useState("");
 			var setQuery = query[1];
+			var expanded = react.useState(null);
 
 			var load = function () {
 				return Promise.all([props.list(), api("/plugins")]).then(function (r) {
@@ -237,6 +159,7 @@ window.__ModuleLoader__.load({
 				var systemOff = !e.enabled && !userOff;
 				var phase = e.fiberPhase === null || e.fiberPhase === undefined ? "unobserved" : e.fiberPhase;
 				var phaseText = PHASE_ZH[phase] || phase;
+				var open = expanded[0] === e.entryId;
 				var tag, tagCls, btn = null;
 				if (userOff) { tag = "已禁用(用户)"; tagCls = "pm_tag pm_tagOff"; }
 				else if (systemOff) { tag = "系统禁用"; tagCls = "pm_tag pm_tagSys"; }
@@ -245,9 +168,14 @@ window.__ModuleLoader__.load({
 				if (userOff) btn = h("button", { className: "pm_btn", disabled: busy[0] === e.entryId, onClick: function () { doToggle(row, false); } }, "启用");
 				else if (pid && e.enabled && !isProtected) btn = h("button", { className: "pm_btn pm_btnDis", disabled: busy[0] === e.entryId, onClick: function () { doToggle(row, true); } }, "禁用");
 				return h("div", { key: e.entryId, className: "pm_row" + (e.enabled ? "" : " pm_rowOff") },
-					h("div", { className: "pm_left" },
-						h("span", { className: "pm_name", title: e.moduleName }, shortName(e.moduleName)),
-						h("span", { className: "pm_id" }, (pid || e.entryId) + (isProtected ? " · 核心" : pid ? "" : " · 子树/动态行"))),
+					h("div", { className: "pm_left pm_click", role: "button", tabIndex: 0,
+						"aria-expanded": open ? "true" : "false",
+						onClick: function () { expanded[1](open ? null : e.entryId); },
+						onKeyDown: function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); expanded[1](open ? null : e.entryId); } } },
+						h("span", { className: "pm_name", title: e.moduleName }, shortName(e.moduleName) + (open ? "" : " ▾")),
+						h("span", { className: "pm_id" }, (pid || e.entryId) + (isProtected ? " · 核心" : pid ? "" : " · 子树/动态行")),
+						open ? h("div", { className: "pm_detail" },
+							"模块: " + (e.moduleName || "-") + "\n路径 id: " + (e.entryId || "-") + "\n状态: " + (e.enabled ? phaseText : tag)) : null),
 					h("div", { className: "pm_right" },
 						e.enabled && phase !== "unobserved" ? h("span", { className: "pm_phase" + (phase === "failed" ? " pm_phaseFailed" : "") }, phaseText) : null,
 						h("span", { className: tagCls }, tag),
@@ -364,10 +292,28 @@ window.__ModuleLoader__.load({
 				setSt({ status: "loading" });
 				rpc("session.list", {}).then(function (v) {
 					var items = (v && v.items) || [];
-					var usable = items.filter(function (s) { return !s.blank; })[0] || items[0];
-					if (!usable) { setSt({ status: "no-session" }); return; }
-					return rpc("skill.list", { sessionId: usable.sessionId }).then(function (sv) {
-						setSt({ status: "ready", skills: (sv && sv.skills) || [] });
+					// 技能目录依会话 scope 而异(preset 扫描的工作区目录 + deployment 根),
+					// 单个会话看到的目录不全。取最近更新的几个非空会话 + 一个空会话,
+					// 按 name 去重合并,给出"部署当前可见技能"的并集视图。
+					var sorted = items.slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+					var picked = sorted.filter(function (s) { return !s.blank; }).slice(0, 3);
+					var blankOne = sorted.filter(function (s) { return s.blank; })[0];
+					if (blankOne && picked.length < 4) picked.push(blankOne);
+					if (!picked.length) { setSt({ status: "no-session" }); return; }
+					return Promise.all(picked.map(function (s) {
+						return rpc("skill.list", { sessionId: s.sessionId }).then(function (sv) {
+							return (sv && sv.skills) || [];
+						}).catch(function () { return []; });
+					})).then(function (lists) {
+						var byName = {};
+						var merged = [];
+						lists.forEach(function (list) {
+							list.forEach(function (sk) {
+								if (!byName[sk.name]) { byName[sk.name] = true; merged.push(sk); }
+							});
+						});
+						var cwds = picked.filter(function (s) { return s.cwd; }).map(function (s) { return s.cwd; });
+						setSt({ status: "ready", skills: merged, cwds: cwds });
 					});
 				}).catch(function (e) { setSt({ status: "error", message: String((e && e.message) || e) }); });
 			};
@@ -398,7 +344,7 @@ window.__ModuleLoader__.load({
 				h("label", { className: "pm_search" },
 					h("span", { className: "pm_tag" }, "搜索"),
 					h("input", { value: q[0], placeholder: "按名称或描述过滤", onChange: function (ev) { q[1](ev.currentTarget.value); } })),
-				h("div", { className: "pm_msg" }, "共 " + st[0].skills.length + " 个技能(按首个可用会话的上下文列出)。"),
+				h("div", { className: "pm_msg" }, "共 " + st[0].skills.length + " 个技能(最近活跃会话上下文的并集" + (st[0].cwds && st[0].cwds.length ? ",含工作区 " + st[0].cwds[0] : "") + ")。"),
 				h("div", { className: "pm_list" }, rows),
 				h("div", { className: "pm_msg" }, "技能为文件系统管理(~/.dsh/skills 与工作区技能目录),上游暂无启停 API;此处为目录视图。"));
 		}
@@ -602,19 +548,7 @@ window.__ModuleLoader__.load({
 		}
 
 		function apply(ctx) {
-			ctx.effect(() => ctx.locale.register(NS, {
-				zh: { tab: "dsh 版本" },
-				en: { tab: "dsh Version" },
-			}), "dsh-version-tab: dictionaries");
-			const t = ctx.locale.bind(NS);
-			ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
-				name: "settings.plugins.tab",
-				id: "dsh-version",
-				order: 30,
-				label: () => t("tab"),
-				locale: NS,
-			}, VersionTab));
-
+			// 「插件」区段:唯一的"插件管理"tab(合并原只读清单;上游 all tab 行已禁用)
 			ctx.effect(() => ctx.locale.register(NS2, {
 				zh: { tab: "插件管理" },
 				en: { tab: "Manage" },
@@ -631,68 +565,60 @@ window.__ModuleLoader__.load({
 				order: 20,
 				label: () => t2("tab"),
 				locale: NS2,
-			}, function ManagedTab() {
+			}, function ManagedTabHost() {
 				// 经 createElement 交给 React 渲染,保证 PluginManagerTab 内的 hooks 生效
 				return react.createElement(PluginManagerTab, { list: list });
 			}));
 
+			// ---------- 独立设置模块(settings.section,单页无 tab chrome,同 Agent 预设) ----------
+
 			ctx.effect(() => ctx.locale.register(NS3, {
-				zh: { tab: "人设" },
-				en: { tab: "Persona" },
-			}), "dsh-persona-tab: dictionaries");
+				zh: { nav: "人设" },
+				en: { nav: "Persona" },
+			}), "dsh-persona-section: dictionaries");
 			const t3 = ctx.locale.bind(NS3);
-			ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
-				name: "settings.plugins.tab",
+			ctx.slots.inject("settings.section", () => ctx.slots.register({
+				name: "settings.section",
 				id: "persona",
-				order: 40,
-				label: () => t3("tab"),
+				order: 16,
+				label: () => t3("nav"),
 				locale: NS3,
-			}, function PersonaTabHost() {
+			}, function PersonaSectionHost() {
 				return react.createElement(PersonaTab);
 			}));
 
 			ctx.effect(() => ctx.locale.register(NS4, {
-				zh: { tab: "技能" },
-				en: { tab: "Skills" },
-			}), "dsh-skills-tab: dictionaries");
+				zh: { nav: "技能" },
+				en: { nav: "Skills" },
+			}), "dsh-skills-section: dictionaries");
 			const t4 = ctx.locale.bind(NS4);
-			ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
-				name: "settings.plugins.tab",
+			ctx.slots.inject("settings.section", () => ctx.slots.register({
+				name: "settings.section",
 				id: "skills",
-				order: 50,
-				label: () => t4("tab"),
+				order: 17,
+				label: () => t4("nav"),
 				locale: NS4,
-			}, function SkillsTabHost() {
-				return react.createElement(SkillsTab);
-			}));
-
-			ctx.effect(() => ctx.locale.register(NS5, {
-				zh: { tab: "MCP" },
-				en: { tab: "MCP" },
-			}), "dsh-mcp-tab: dictionaries");
-			const t5 = ctx.locale.bind(NS5);
-			ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
-				name: "settings.plugins.tab",
-				id: "mcp",
-				order: 60,
-				label: () => t5("tab"),
-				locale: NS5,
-			}, function McpTabHost() {
-				return react.createElement(McpTab, { list: list });
+			}, function SkillsSectionHost() {
+				// 技能 + MCP 合并为一页两块
+				return react.createElement("div", { className: "pm_root" },
+					react.createElement("div", { className: "sec_h" }, "技能"),
+					react.createElement(SkillsTab),
+					react.createElement("div", { className: "sec_h" }, "MCP"),
+					react.createElement(McpTab, { list: list }));
 			}));
 
 			ctx.effect(() => ctx.locale.register(NS6, {
-				zh: { tab: "皮肤" },
-				en: { tab: "Skin" },
-			}), "dsh-skin-tab: dictionaries");
+				zh: { nav: "皮肤" },
+				en: { nav: "Skin" },
+			}), "dsh-skin-section: dictionaries");
 			const t6 = ctx.locale.bind(NS6);
-			ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
-				name: "settings.plugins.tab",
+			ctx.slots.inject("settings.section", () => ctx.slots.register({
+				name: "settings.section",
 				id: "skin",
-				order: 70,
-				label: () => t6("tab"),
+				order: 18,
+				label: () => t6("nav"),
 				locale: NS6,
-			}, function SkinTabHost() {
+			}, function SkinSectionHost() {
 				return react.createElement(SkinTab, {
 					current: currentSkinId(),
 					onSelect: function (id) { applySkinById(ctx, id); },
@@ -700,17 +626,17 @@ window.__ModuleLoader__.load({
 			}));
 
 			ctx.effect(() => ctx.locale.register(NS7, {
-				zh: { tab: "更新" },
-				en: { tab: "Update" },
-			}), "dsh-update-tab: dictionaries");
+				zh: { nav: "更新" },
+				en: { nav: "Update" },
+			}), "dsh-update-section: dictionaries");
 			const t7 = ctx.locale.bind(NS7);
-			ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
-				name: "settings.plugins.tab",
+			ctx.slots.inject("settings.section", () => ctx.slots.register({
+				name: "settings.section",
 				id: "updates",
-				order: 80,
-				label: () => t7("tab"),
+				order: 25,
+				label: () => t7("nav"),
 				locale: NS7,
-			}, function UpdateTabHost() {
+			}, function UpdateSectionHost() {
 				return react.createElement(UpdateTab);
 			}));
 
