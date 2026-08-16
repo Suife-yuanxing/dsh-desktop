@@ -39,6 +39,7 @@ let restartAttempts = 0
 let recoveryTimer = null
 let availableVersions = [] // npm 上可选的 dsh 版本(异步拉取后填充设置页)
 let switching = false // 版本切换互斥,防止并发触发
+let restarting = false // 服务重启互斥(托盘/API 共用)
 
 // ---------- 配置(dsh 版本锁) ----------
 
@@ -103,7 +104,38 @@ async function waitForPort(timeoutMs) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await isPortUp()) return true
-    await sleep(600)
+    await sleep(150) // 热重启 dsh 约 2s 起listen,细粒度轮询把检测延迟压到 150ms 内
+  }
+  return false
+}
+
+/** 等端口真正释放(kill 后旧 socket 可能短暂残留,防 EADDRINUSE 竞态)。 */
+async function waitForPortFree(timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!(await isPortUp())) return true
+    await sleep(100)
+  }
+  return false
+}
+
+/** HTTP 就绪确认:TCP listen 后 dsh 几乎立即 200(实测 0.03s),但冷启动保险起见确认一次。 */
+function isHttpOk() {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port: DSH_PORT, path: '/', timeout: 2000 }, (res) => {
+      res.resume()
+      resolve(res.statusCode === 200)
+    })
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+  })
+}
+
+async function waitForHttp(timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await isHttpOk()) return true
+    await sleep(200)
   }
   return false
 }
@@ -200,11 +232,25 @@ async function scheduleRecovery() {
   }, delay)
 }
 
+// 端口占用者 PID(netstat -ano 解析;dsh 由外部拉起、壳无子进程句柄时的清理兜底)
+function findPortOwnerPid() {
+  return new Promise((resolve) => {
+    const chunks = []
+    const p = spawn('netstat', ['-ano', '-p', 'tcp'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    p.stdout.on('data', (d) => chunks.push(d))
+    p.on('close', () => {
+      const pid = Buffer.concat(chunks).toString().split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => /^TCP\s+\S+:3080\s/.test(l))
+        .map((l) => Number(l.split(/\s+/).pop()))[0]
+      resolve(Number.isInteger(pid) && pid > 0 ? pid : null)
+    })
+    p.on('error', () => resolve(null))
+  })
+}
+
 // Windows 上 npx 会派生 cmd→node 进程树,必须 taskkill /T 整树清理
-function killDshTree() {
-  if (!dshChild || !dshChild.pid) return Promise.resolve()
-  const pid = dshChild.pid
-  dshChild = null
+function taskkillTree(pid) {
   return new Promise((resolve) => {
     const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
       windowsHide: true, stdio: 'ignore',
@@ -214,12 +260,19 @@ function killDshTree() {
   })
 }
 
+async function killDshTree() {
+  const pid = dshChild?.pid ?? (await findPortOwnerPid())
+  dshChild = null
+  if (pid) await taskkillTree(pid)
+}
+
 async function restartDsh(timeoutMs = START_TIMEOUT_MS) {
   restartAttempts = 0
   if (recoveryTimer) { clearTimeout(recoveryTimer); recoveryTimer = null }
   await killDshTree()
+  await waitForPortFree() // 旧 socket 残留会让新实例 EADDRINUSE 直接崩
   if (startDsh()) {
-    const ok = await waitForPort(timeoutMs)
+    const ok = await waitForPort(timeoutMs) && await waitForHttp()
     if (ok) loadUrlAll(DSH_URL)
   }
 }
@@ -317,7 +370,7 @@ async function applyDshVersion(newVersion) {
   log(`dsh 版本锁切换为 ${newVersion}`)
   // 用切换专属预算重启:60s 内未就绪视为坏版本,避免死等 120s
   await restartDsh(SWITCH_TIMEOUT_MS)
-  if (await isPortUp()) {
+  if (await isHttpOk()) {
     loadUrlAll(DSH_URL) // 显式刷新所有主窗口(兜底,不依赖 restartDsh 副作用)
     return true
   }
@@ -555,12 +608,124 @@ async function newWindow() {
   win.loadURL(DSH_URL)
 }
 
-// ---------- 壳 HTTP API(Web UI 版本 tab 经此与壳通信,仅本机) ----------
+// ---------- 壳 HTTP API(Web UI 版本 tab / 插件管理 tab 经此与壳通信,仅本机) ----------
 
 const SHELL_API_PORT = 30801
 const SHELL_API_ALLOWED_ORIGINS = new Set([
   `http://127.0.0.1:${DSH_PORT}`, `http://localhost:${DSH_PORT}`,
 ])
+
+// 插件启停:写 $DSH_HOME/cordis.patch.yml(home 层 patch,dsh 自带 watcher 热应用,
+// 无需重启服务)。patch 语义为字段级覆盖,`- id: X` + `disabled: true` 行只覆盖目标行
+// 的 disabled 字段,不触碰 bundle 层的 name/config。启用 = 删除覆盖行(恢复组合默认)。
+const HOME_PATCH_FILE = path.join(DSH_HOME, 'cordis.patch.yml')
+
+// 核心行保护名单:禁用会破坏 Web UI 骨架/传输/会话存储,拒绝 toggle。
+// 只要不在这里的行(业务/工具/遥测等)都可自由启停;名单宁多勿少,实测再调。
+const PROTECTED_ENTRY_IDS = new Set([
+  // 传输与运行时骨架
+  'webserver', 'web-startup', 'web-runtime', 'client-hmr', 'modules', 'connection',
+  'api-remotes', 'client-runtime', 'cordis-client-runner', 'api-gateway', 'cordis-host-runner',
+  'plugin-inventory', 'hmr', 'timer', 'code-runtime', 'directory-picker',
+  // 设置页/UI 骨架(插件管理 tab 自身的依赖,保住自恢复入口)
+  'ui-theme', 'locale', 'ui-layout', 'ui-sidebar', 'ui-settings', 'ui-settings-general',
+  'ui-settings-models', 'ui-settings-plugin-inventory', 'ui-settings-plugins', 'ui-conversation',
+  // host 核心服务
+  'settings-file', 'credentials', 'llm', 'llm-pi-ai', 'session', 'session-persistence-jsonl',
+  'session-projection-cache', 'session-stats', 'session-query-sqlite', 'storage', 'storage-json',
+  'storage-domain', 'workspace', 'system-prompt', 'tools', 'agent-presets',
+  'dsh-version-tab',
+])
+
+/**
+ * 解析 home patch 的顶层数组条目。只识别"管理行"(顶层字段仅 id+disabled,
+ * disabled 为 true/false 字面量);其余条目(用户手写的 insert/config 等)原样保留。
+ * @returns {{ entries: Array<{ start: number, end: number, id: string|null, disabled: boolean|null, managed: boolean }>, lines: string[], valid: boolean }}
+ */
+function parseHomePatch() {
+  let text = ''
+  try { text = fs.readFileSync(HOME_PATCH_FILE, 'utf8') } catch { /* 不存在视作空 */ }
+  const lines = text.split('\n')
+  const entries = []
+  let valid = true
+  let cur = null
+  const finish = () => { if (cur) { cur.managed = cur.id !== null && cur.disabled !== null && cur.extraFields === 0 && cur.nested === false; entries.push(cur); cur = null } }
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (/^-\s/.test(line)) {
+      finish()
+      cur = { start: i, end: i + 1, id: null, disabled: null, extraFields: 0, nested: false }
+      const m = line.match(/^-\s*id:\s*(?:'([^']*)'|"([^"]*)"|(\S+))\s*(?:#.*)?$/)
+      if (m) cur.id = m[1] ?? m[2] ?? m[3]
+      else cur.extraFields += 1 // `- disabled: true` 这类首行非 id 的形态,不按管理行处理
+    } else if (cur && /^\s+\S/.test(line)) {
+      cur.end = i + 1
+      const m = line.match(/^\s+disabled:\s*(true|false)\s*(?:#.*)?$/)
+      const idm = line.match(/^\s+id:\s*(?:'([^']*)'|"([^"]*)"|(\S+))\s*(?:#.*)?$/)
+      if (m && cur.disabled === null) cur.disabled = m[1] === 'true'
+      else if (idm && cur.id === null) cur.id = idm[1] ?? idm[2] ?? idm[3]
+      else if (!/^\s*#/.test(line)) {
+        // 其余缩进内容:顶层其他字段(缩进 2)或嵌套块(更深/任意非注释) → 非管理行
+        if (/^ {2}\S/.test(line) && !/^\s{4,}/.test(line)) cur.extraFields += 1
+        else cur.nested = true
+      }
+    } else if (/^[^\s#-]/.test(line)) {
+      // 顶层非数组形态行:允许空数组字面量 `[]`(删空后的合法落盘),其余视为非纯数组
+      if (!/^\[\s*\]\s*(?:#.*)?$/.test(line)) valid = false
+    }
+    // 列 0 注释行与空行:条目间独立内容,原样保留
+  }
+  finish()
+  return { entries, lines, valid }
+}
+
+/** 读当前用户禁用集(home patch 中 disabled: true 的管理行 id)。 */
+function readDisabledPlugins() {
+  const { entries } = parseHomePatch()
+  return entries.filter((e) => e.managed && e.disabled === true).map((e) => e.id)
+}
+
+/**
+ * 原子写 home patch(tmp+rename,dsh watcher 只会看到完整文件)。
+ * 删行后若正文为空,必须落 `[]` 而不是只剩注释 —— 纯注释文件会让 dsh 启动即崩。
+ */
+function writeHomePatch(lines) {
+  const bodyLeft = lines.some((l) => l.trim() !== '' && !/^\s*#/.test(l))
+  const out = bodyLeft ? lines.join('\n') : '[]\n'
+  const tmp = HOME_PATCH_FILE + '.tmp'
+  fs.writeFileSync(tmp, out)
+  fs.renameSync(tmp, HOME_PATCH_FILE)
+}
+
+/**
+ * 切换一个插件的持久启用状态。
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function togglePluginEntry(entryId, disable) {
+  const { entries, lines, valid } = parseHomePatch()
+  if (!valid) return { ok: false, error: 'cordis.patch.yml 含顶层数组以外的内容,为安全起见请手动编辑该文件' }
+  const hit = entries.find((e) => e.id === entryId)
+  if (disable) {
+    if (hit && !hit.managed) return { ok: false, error: `条目 ${entryId} 在 cordis.patch.yml 中有手写内容,请手动编辑` }
+    if (hit) {
+      // 已有管理行:改 disabled 值(或补一行)
+      const block = lines.slice(hit.start, hit.end)
+      const dline = block.findIndex((l) => /^\s+disabled:/.test(l))
+      if (dline >= 0) lines[hit.start + dline] = '  disabled: true'
+      else lines.splice(hit.end, 0, '  disabled: true')
+    } else {
+      lines.push(`- id: ${entryId}`, '  disabled: true', '')
+    }
+  } else {
+    if (!hit) return { ok: true } // 无覆盖行 = 已是默认启用,幂等
+    if (!hit.managed) return { ok: false, error: `条目 ${entryId} 在 cordis.patch.yml 中有手写内容,请手动编辑` }
+    lines.splice(hit.start, hit.end)
+    // 清掉删除后可能紧邻的重复空行
+    while (lines[hit.start] !== undefined && lines[hit.start].trim() === '' && lines[hit.start + 1] !== undefined && lines[hit.start + 1].trim() === '') lines.splice(hit.start, 1)
+  }
+  try { writeHomePatch(lines) } catch (e) { return { ok: false, error: `写入失败: ${e.message}` } }
+  return { ok: true }
+}
 
 function startShellApi() {
   const server = http.createServer(async (req, res) => {
@@ -586,6 +751,7 @@ function startShellApi() {
           dshVersion: cfg.dshVersion,
           availableVersions,
           switching,
+          restarting,
         })
       }
       if (req.method === 'POST' && url.pathname === '/switch') {
@@ -601,6 +767,31 @@ function startShellApi() {
       if (req.method === 'POST' && url.pathname === '/refresh') {
         await fetchAvailableVersions()
         return send(200, { availableVersions })
+      }
+      if (req.method === 'POST' && url.pathname === '/restart') {
+        if (switching || restarting) return send(409, { accepted: false, error: '已有切换或重启在进行' })
+        restarting = true
+        restartDsh().finally(() => { restarting = false })
+        return send(202, { accepted: true })
+      }
+      if (req.method === 'GET' && url.pathname === '/plugins') {
+        return send(200, {
+          disabled: readDisabledPlugins(),
+          protected: [...PROTECTED_ENTRY_IDS],
+        })
+      }
+      if (req.method === 'POST' && url.pathname === '/plugins/toggle') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { entryId, disabled } = JSON.parse(body || '{}')
+        if (typeof entryId !== 'string' || !entryId) return send(400, { ok: false, error: '缺少 entryId' })
+        if (typeof disabled !== 'boolean') return send(400, { ok: false, error: 'disabled 必须为布尔值' })
+        if (disabled && PROTECTED_ENTRY_IDS.has(entryId)) {
+          return send(400, { ok: false, error: `${entryId} 是核心插件,不允许禁用` })
+        }
+        const result = togglePluginEntry(entryId, disabled)
+        if (!result.ok) return send(400, { ok: false, error: result.error })
+        return send(200, { ok: true, disabled: readDisabledPlugins() })
       }
       send(404, { error: 'not found' })
     } catch (e) {
@@ -695,7 +886,11 @@ function buildTrayMenu() {
     { label: '新建窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => newWindow() },
     { type: 'separator' },
     { label: '重载界面', click: () => { for (const w of mainWindows) if (!w.isDestroyed()) w.reload() } },
-    { label: '重启 dsh 服务', click: () => restartDsh() },
+    { label: '重启 dsh 服务', click: () => {
+      if (restarting || switching) return
+      restarting = true
+      restartDsh().finally(() => { restarting = false })
+    } },
     { label: '打开日志目录', click: () => shell.openPath(LOG_DIR) },
     { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit() } },
