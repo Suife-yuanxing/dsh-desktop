@@ -10,6 +10,7 @@ directories:
   buildResources: .
 files:
   - main.js
+  - patches.cjs
   - preload.js
   - error.html
   - splash.html

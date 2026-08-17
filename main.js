@@ -8,6 +8,7 @@ const http = require('node:http')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { replayAll: replayLocalPatches } = require('./patches.cjs')
 
 const DSH_PORT = 3080
 const DSH_URL = `http://127.0.0.1:${DSH_PORT}`
@@ -170,15 +171,16 @@ function startDsh() {
     return false
   }
   // 版本锁:npx -y @deepseek-ai/dsh@<version> web;-y 免交互安装缺失版本
+  // --prefer-offline: 已缓存版本跳过注册表元数据往返,重启提速 1-2s(缺缓存时行为不变)
   const spec = `@deepseek-ai/dsh@${cfg.dshVersion}`
   let cmd, args
   if (npx.toLowerCase().endsWith('.cmd')) {
     // Windows: .cmd 不能直接 spawn(Node 安全限制),须经 cmd /c
     cmd = 'cmd.exe'
-    args = ['/c', npx, '-y', spec, 'web']
+    args = ['/c', npx, '--prefer-offline', '-y', spec, 'web']
   } else {
     cmd = npx
-    args = ['-y', spec, 'web']
+    args = ['--prefer-offline', '-y', spec, 'web']
   }
   log(`启动 dsh: ${cmd} ${args.join(' ')}`)
   dshChild = spawn(cmd, args, {
@@ -266,14 +268,91 @@ async function killDshTree() {
   if (pid) await taskkillTree(pid)
 }
 
+// ---------- 重启进度遮罩(注入 Web 页面,Claude 风格圆形进度条) ----------
+// 重启期间旧页面仍存活,经 executeJavaScript 注入全屏遮罩;导航到新页面后自然消失。
+const RESTART_OVERLAY_JS = `(function(pct, label){
+  var id = '__dsh_restart_overlay__';
+  var el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = id;
+    el.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(9,9,11,.38);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
+    el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;gap:14px;padding:28px 44px;border-radius:16px;background:var(--dsw-alias-bg-layer-2,#fff);box-shadow:0 12px 32px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.08);">'
+      + '<svg width="72" height="72" viewBox="0 0 72 72" aria-hidden="true">'
+      + '<circle cx="36" cy="36" r="26" fill="none" stroke="rgba(127,127,127,.18)" stroke-width="6"/>'
+      + '<circle class="__dsh_ring" cx="36" cy="36" r="26" fill="none" stroke="#d97757" stroke-width="6" stroke-linecap="round" transform="rotate(-90 36 36)" style="transition:stroke-dashoffset .3s ease"/>'
+      + '</svg>'
+      + '<div class="__dsh_pct" style="font:600 15px/1 system-ui,-apple-system,sans-serif;color:#d97757">0%</div>'
+      + '<div class="__dsh_lbl" style="font:12px/1.4 system-ui,-apple-system,sans-serif;color:rgba(127,127,127,.95);white-space:nowrap"></div>'
+      + '</div>';
+    document.documentElement.appendChild(el);
+  }
+  var C = 2 * Math.PI * 26;
+  var ring = el.querySelector('.__dsh_ring');
+  ring.style.strokeDasharray = C;
+  ring.style.strokeDashoffset = C * (1 - Math.max(0, Math.min(100, pct)) / 100);
+  el.querySelector('.__dsh_pct').textContent = Math.round(pct) + '%';
+  el.querySelector('.__dsh_lbl').textContent = label;
+  el.style.display = 'flex';
+})`
+
+function execJsAll(js) {
+  for (const win of mainWindows) {
+    if (!win.isDestroyed() && !win.webContents.isLoadingMainFrame()) {
+      win.webContents.executeJavaScript(js, true).catch(() => {})
+    }
+  }
+}
+
+function restartProgress(pct, label) {
+  execJsAll(RESTART_OVERLAY_JS + '(' + Math.round(pct) + ',' + JSON.stringify(label) + ')')
+}
+
+function restartOverlayRemove() {
+  execJsAll(`(function(){var el=document.getElementById('__dsh_restart_overlay__');if(el)el.remove();})()`)
+}
+
 async function restartDsh(timeoutMs = START_TIMEOUT_MS) {
   restartAttempts = 0
   if (recoveryTimer) { clearTimeout(recoveryTimer); recoveryTimer = null }
+  restartProgress(6, '正在停止旧服务…')
   await killDshTree()
-  await waitForPortFree() // 旧 socket 残留会让新实例 EADDRINUSE 直接崩
+  restartProgress(24, '等待端口释放…')
+  await waitForPortFree(8000) // 旧 socket 残留会让新实例 EADDRINUSE 直接崩;Windows 释放可慢,给足 8s
+  restartProgress(46, '正在启动 dsh 服务…')
   if (startDsh()) {
-    const ok = await waitForPort(timeoutMs) && await waitForHttp()
-    if (ok) loadUrlAll(DSH_URL)
+    // 等待期进度自走(46→92 缓爬),真就绪由轮询确认;单次 HTTP 探测 = 端口+服务双确认,省去串行等待
+    const t0 = Date.now()
+    const creep = setInterval(() => {
+      restartProgress(Math.min(92, 50 + (Date.now() - t0) / 1000 * 6), '正在启动 dsh 服务…')
+    }, 350)
+    let ok = false
+    try {
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline) {
+        if (await isHttpOk()) { ok = true; break } // 连接拒绝即时返回,不拖 2s 超时
+        await sleep(120)
+      }
+    } finally { clearInterval(creep) }
+    if (ok) {
+      restartProgress(100, '已就绪')
+      loadUrlAll(DSH_URL)
+      setTimeout(restartOverlayRemove, 600) // 导航后兜底清除
+    } else {
+      // 超时兜底:子进程可能因 EADDRINUSE 竞态退出,但外部实例已接管服务(实测场景)。
+      // 此时页面 SSE 已断,必须重载才能恢复对话内容——不能让用户盯着空白页。
+      if (await isHttpOk()) {
+        log('重启超时但服务可用(外部实例接管),重载页面恢复连接')
+        restartProgress(100, '已就绪')
+        loadUrlAll(DSH_URL)
+        setTimeout(restartOverlayRemove, 600)
+      } else {
+        restartProgress(96, '重启超时,请查看日志')
+        setTimeout(restartOverlayRemove, 2500)
+      }
+    }
+  } else {
+    restartOverlayRemove()
   }
 }
 
@@ -595,6 +674,78 @@ const TITLEBAR_DRAG_CSS = `
   }
 `
 
+// 自定义窗口控制按钮样式:右上角浮层,悬停浅灰(深浅背景均可见)/关闭红,Windows 惯例尺寸。
+const TITLEBAR_CONTROLS_CSS = `
+  #dsh-desktop-win-controls {
+    position: fixed; top: 0; right: 0; z-index: 2147483647;
+    display: flex; height: 36px; direction: ltr;
+    -webkit-app-region: no-drag;
+    font-family: system-ui, sans-serif;
+  }
+  #dsh-desktop-win-controls .wcBtn {
+    width: 46px; height: 36px; display: flex; align-items: center; justify-content: center;
+    color: #3d444d; cursor: default; user-select: none;
+    transition: background .1s ease;
+  }
+  #dsh-desktop-win-controls .wcBtn:hover { background: rgba(128,128,128,.35); }
+  #dsh-desktop-win-controls .wcBtn:active { background: rgba(128,128,128,.5); }
+  #dsh-desktop-win-controls .wcClose:hover { background: #e81123; color: #fff; }
+  #dsh-desktop-win-controls .wcClose:active { background: #c50f1f; color: #fff; }
+`
+
+// 自定义窗口控制按钮注入脚本:原生 titleBarOverlay 悬停反馈过弱且不可定制,弃用;
+// 改为 HTML 按钮浮层(最小化/最大化-还原/关闭),经 preload windowControls 桥操作窗口。
+// 幂等(did-navigate / did-navigate-in-page 均会重放),SPA 重渲染不触碰 body 末尾元素。
+const TITLEBAR_CONTROLS_JS = `
+(() => {
+  const boot = () => {
+    const ID = 'dsh-desktop-win-controls'
+    if (document.getElementById(ID)) return
+    const d = window.dshDesktop && window.dshDesktop.windowControls
+    if (!d) return
+    const box = document.createElement('div')
+    box.id = ID
+    const svg = (inner) => '<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">' + inner + '</svg>'
+    const ICON_MIN = svg('<rect x="0" y="4.25" width="10" height="1.5" fill="currentColor"/>')
+    const ICON_MAX = svg('<rect x="0.75" y="0.75" width="8.5" height="8.5" fill="none" stroke="currentColor" stroke-width="1.2"/>')
+    const ICON_RESTORE = svg('<rect x="0.75" y="2.75" width="6.5" height="6.5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M3 2.25V0.75h6.25V7H7.75" fill="none" stroke="currentColor" stroke-width="1.2"/>')
+    const ICON_CLOSE = svg('<path d="M0.9 0.9l8.2 8.2M9.1 0.9l-8.2 8.2" stroke="currentColor" stroke-width="1.2"/>')
+    box.innerHTML =
+      '<div class="wcBtn" data-act="min" title="最小化">' + ICON_MIN + '</div>' +
+      '<div class="wcBtn" data-act="max" title="最大化">' + ICON_MAX + '</div>' +
+      '<div class="wcBtn wcClose" data-act="close" title="关闭">' + ICON_CLOSE + '</div>'
+    document.body.appendChild(box)
+    const maxBtn = box.querySelector('[data-act="max"]')
+    box.addEventListener('click', (ev) => {
+      const t = ev.target.closest('[data-act]')
+      if (!t) return
+      if (t.dataset.act === 'min') d.minimize()
+      else if (t.dataset.act === 'max') d.toggleMaximize()
+      else if (t.dataset.act === 'close') d.close()
+    })
+    const paint = (max) => {
+      maxBtn.innerHTML = max ? ICON_RESTORE : ICON_MAX
+      maxBtn.title = max ? '向下还原' : '最大化'
+    }
+    d.onMaximized(paint)
+    d.getMaximized().then(paint).catch(() => {})
+  }
+  if (document.body) boot()
+  else document.addEventListener('DOMContentLoaded', boot, { once: true })
+})()
+`
+
+// 自定义窗口控制按钮 IPC(注入的按钮经 preload 桥调用;按 sender 定位窗口,多窗安全)
+ipcMain.handle('dsh-win:is-maximized', (e) => BrowserWindow.fromWebContents(e.sender)?.isMaximized() ?? false)
+ipcMain.on('dsh-win:minimize', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
+ipcMain.on('dsh-win:toggle-maximize', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender)
+  if (!w) return
+  if (w.isMaximized()) w.unmaximize()
+  else w.maximize()
+})
+ipcMain.on('dsh-win:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+
 function createMainWindow({ show = false } = {}) {
   const win = new BrowserWindow({
     width: 1400,
@@ -604,23 +755,34 @@ function createMainWindow({ show = false } = {}) {
     icon: path.join(__dirname, 'icon.ico'),
     title: 'DeepSeek Harness',
     show,
-    // Claude 式融合:去原生标题栏,窗口控制按钮以透明叠加层浮于 Web UI 之上;
-    // Web UI 为浅色主题,符号用深灰。快捷键仍由应用菜单承载(菜单不显示)。
+    // Claude 式融合:去原生标题栏;窗口控制按钮弃用原生 overlay(悬停反馈过弱且
+    // 不可定制),改为注入 HTML 浮层(见 TITLEBAR_CONTROLS_JS),悬停高亮明确。
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#00000000', symbolColor: '#3d444d', height: 36 },
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // 壁纸视频带声播放:Chromium 默认要求用户手势才允许非静音自动播放,
+      // 桌面壳内放开(本地内容,等价原生应用行为)。
+      autoplayPolicy: 'no-user-gesture-required',
     },
   })
   mainWindows.add(win)
   win.on('closed', () => mainWindows.delete(win))
-  // 每次主导航后注入拖拽区(insertCSS 不跨导航保留)
-  const injectDrag = () => win.webContents.insertCSS(TITLEBAR_DRAG_CSS).catch(() => {})
-  win.webContents.on('did-navigate', injectDrag)
-  win.webContents.on('did-navigate-in-page', injectDrag)
+  // 每次主导航后注入拖拽区+控制按钮(insertCSS/executeJavaScript 不跨导航保留)
+  const injectTitleChrome = () => {
+    win.webContents.insertCSS(TITLEBAR_DRAG_CSS + TITLEBAR_CONTROLS_CSS).catch(() => {})
+    win.webContents.executeJavaScript(TITLEBAR_CONTROLS_JS, false).catch(() => {})
+  }
+  win.webContents.on('did-navigate', injectTitleChrome)
+  win.webContents.on('did-navigate-in-page', injectTitleChrome)
+  // 最大化状态推送:按钮图标在最大化/还原间切换
+  const pushMax = () => {
+    if (!win.isDestroyed()) win.webContents.send('dsh-win:maximized', win.isMaximized())
+  }
+  win.on('maximize', pushMax)
+  win.on('unmaximize', pushMax)
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url) // 外部链接走系统浏览器
     return { action: 'deny' }
@@ -1082,25 +1244,68 @@ function listSkinAssets() {
   return out.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-/** 定位 Wallpaper Engine 创意工坊目录(Steam 注册表 → steamapps/workshop/content/431960)。 */
+// WE 目录发现结果缓存:视频播放会发大量 Range 请求,每次都 spawnSync reg
+// 会阻塞壳主进程(视频卡顿);命中后永续缓存,未命中 60s 后允许重探(装 WE 后免重启)。
+let weDirCache = { dir: null, missAt: 0 }
+
+/** 解析 steamapps/libraryfolders.vdf 的所有库路径(WE 可能装在第二库)。 */
+function steamLibraryDirs(mainSteam) {
+  const libs = [mainSteam]
+  try {
+    const vdf = fs.readFileSync(path.join(mainSteam, 'steamapps', 'libraryfolders.vdf'), 'utf8')
+    for (const m of vdf.matchAll(/"path"\s+"([^"]+)"/g)) {
+      const p = m[1].replace(/\\\\/g, '\\')
+      if (!libs.includes(p)) libs.push(p)
+    }
+  } catch { /* 无 vdf 或主库缺失 */ }
+  return libs.filter(Boolean)
+}
+
+/** 定位 Wallpaper Engine 创意工坊目录(Steam 注册表 → 全部库 steamapps/workshop/content/431960)。 */
 function findWallpaperEngineDir() {
+  if (weDirCache.dir) return weDirCache.dir
+  if (weDirCache.missAt && Date.now() - weDirCache.missAt < 60000) return null
   const candidates = []
   try {
     const r = spawnSync('reg', ['query', 'HKCU\\Software\\Valve\\Steam', '/v', 'SteamPath'], { encoding: 'utf8', timeout: 4000 })
     if (r.status === 0) {
-      const m = String(r.stdout).match(/SteamPath\s+REG_SZ\s+(\S+)/)
-      if (m) candidates.push(m[1])
+      // 正则吃到行尾:SteamPath 含空格(如 C:\Program Files (x86)\Steam)时 \S+ 会截断
+      const m = String(r.stdout).match(/SteamPath\s+REG_SZ\s+(.+?)\s*$/m)
+      if (m) candidates.push(...steamLibraryDirs(m[1].trim()))
     }
   } catch { /* reg 不可用 */ }
   candidates.push('C:\\Program Files (x86)\\Steam', 'C:\\Program Files\\Steam', 'D:\\Steam', 'E:\\Steam')
   for (const steam of candidates) {
     const dir = path.join(steam, 'steamapps', 'workshop', 'content', WE_APP_ID)
-    try { if (fs.statSync(dir).isDirectory()) return dir } catch { /* 继续找 */ }
+    try { if (fs.statSync(dir).isDirectory()) { weDirCache = { dir, missAt: 0 }; return dir } } catch { /* 继续找 */ }
   }
+  weDirCache = { dir: null, missAt: Date.now() }
   return null
 }
 
-/** 扫描 WE 创意工坊壁纸:解析 project.json,video 类型给出可直接应用的视频文件。 */
+/** WE 壁纸声明的入口文件(project.json 的 file / general.file)。 */
+function weDeclaredFile(meta) {
+  const f = meta && (meta.file || (meta.general && meta.general.file))
+  return typeof f === 'string' && f ? f : null
+}
+
+/** 目录内最大的视频文件(声明文件缺失时的兜底,兼容历史下载)。 */
+function largestVideoIn(dir) {
+  let best = null
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (skinKindOf(f) === 'video') {
+        const s = fs.statSync(path.join(dir, f)).size
+        if (!best || s > best.size) best = { file: f, size: s }
+      }
+    }
+  } catch { /* 忽略 */ }
+  return best
+}
+
+/** 扫描 WE 创意工坊壁纸:解析 project.json,video 类型给出可直接应用的视频文件。
+ *  分类:supported(可应用)/ scene(打包格式)/ web(HTML 页面)/ incomplete(创意工坊
+ *  条目存在但声明文件缺失,常见于下载被清理——在 Steam 中重新下载即可恢复)。 */
 function listWallpapers() {
   const root = findWallpaperEngineDir()
   if (!root) return { installed: false, wallpapers: [] }
@@ -1119,21 +1324,21 @@ function listWallpapers() {
       type,
       previewUrl: preview ? `/skin/we/${d.name}/preview` : null,
       supported: false,
+      incomplete: false,
       videoUrl: null,
     }
     if (type === 'video' || type === 'web') {
-      // video:找最大的视频文件;web:找入口 html(前端 iframe 嵌入)
-      let best = null
-      try {
-        for (const f of fs.readdirSync(dir)) {
-          const kind = skinKindOf(f)
-          if (kind === 'video') {
-            const s = fs.statSync(path.join(dir, f)).size
-            if (!best || s > best.size) best = { file: f, size: s }
-          }
-        }
-      } catch { /* 忽略 */ }
-      if (best) { entry.supported = true; entry.videoUrl = `/skin/we/${d.name}/video`; entry.videoFile = best.file }
+      // 优先用 project.json 声明的入口文件(精确),声明缺失时兜底扫描最大视频文件
+      const declared = weDeclaredFile(meta)
+      let file = null
+      if (declared && skinKindOf(declared) === 'video' && fs.existsSync(path.join(dir, declared))) {
+        file = declared
+      } else {
+        const best = largestVideoIn(dir)
+        if (best) file = best.file
+      }
+      if (file) { entry.supported = true; entry.videoUrl = `/skin/we/${d.name}/video`; entry.videoFile = file }
+      else if (type === 'video') entry.incomplete = true
     }
     out.push(entry)
   }
@@ -1154,14 +1359,15 @@ function wallpaperFileOf(id, kind) {
       return p ? { file: path.join(dir, p), mime: skinKindOf(p) ? SKIN_MIME[path.extname(p).toLowerCase()] : 'image/jpeg' } : null
     }
     if (kind === 'video') {
-      let best = null
-      for (const f of fs.readdirSync(dir)) {
-        if (skinKindOf(f) === 'video') {
-          const s = fs.statSync(path.join(dir, f)).size
-          if (!best || s > best.size) best = { file: path.join(dir, f), mime: SKIN_MIME[path.extname(f).toLowerCase()] }
-        }
+      // 与 listWallpapers 同序:声明文件优先,兜底最大视频
+      let meta = null
+      try { meta = JSON.parse(fs.readFileSync(path.join(dir, 'project.json'), 'utf8')) } catch { /* 无元数据 */ }
+      const declared = weDeclaredFile(meta)
+      if (declared && skinKindOf(declared) === 'video' && fs.existsSync(path.join(dir, declared))) {
+        return { file: path.join(dir, declared), mime: SKIN_MIME[path.extname(declared).toLowerCase()] }
       }
-      return best
+      const best = largestVideoIn(dir)
+      return best ? { file: path.join(dir, best.file), mime: SKIN_MIME[path.extname(best.file).toLowerCase()] } : null
     }
   } catch { return null }
   return null
@@ -1584,6 +1790,12 @@ function setupAppMenu() {
 // ---------- 启动编排 ----------
 
 async function boot() {
+  // 本地补丁自动重放:插件经 pnpm 更新覆盖 node_modules 后,壳启动即恢复全部本地定制
+  // (better-sidebar 浮动卡片/底部面板剔除 + node-nav 左侧圆点导航),失败仅告警不阻断启动。
+  try {
+    const r = replayLocalPatches((l) => log(l))
+    if (!r.ok) notify('DeepSeek Harness', '本地插件补丁重放失败,详见日志(桌面日志目录)。')
+  } catch (e) { log(`补丁重放异常: ${e.message}`) }
   stage('probe')
   if (await isPortUp()) {
     log('检测到 dsh 服务已在运行,直接复用')
@@ -1618,6 +1830,10 @@ async function boot() {
 
 // 开发逃生门:DSH_DESKTOP_USER_DATA 指定独立 userData,可与正式版并行运行(单实例锁按 userData 区分)
 if (process.env.DSH_DESKTOP_USER_DATA) app.setPath('userData', process.env.DSH_DESKTOP_USER_DATA)
+
+// CDP 调试端口(仅 127.0.0.1):壳内页面与浏览器渲染路径不同(UA+dshDesktop 桥),
+// 壁纸/布局类问题需直接检查壳内 DOM。CDP 端口被占用时静默跳过(不影响启动)。
+app.commandLine.appendSwitch('remote-debugging-port', '9333')
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()

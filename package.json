@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "productName": "DeepSeek Harness",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "description": "DeepSeek Harness desktop shell - Electron wrapper for the official Web UI",
   "main": "main.js",
   "author": "local",
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "predist": "node scripts/check-dist-lock.mjs",
-    "dist": "electron-builder --win --config builder.yml"
+    "dist": "electron-builder --win --config builder.yml --publish never"
   },
   "devDependencies": {
     "electron": "^33.0.0",

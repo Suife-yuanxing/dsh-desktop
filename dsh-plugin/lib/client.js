@@ -69,7 +69,36 @@ window.__ModuleLoader__.load({
 			".cm_count{font-size:12px;color:var(--dsw-alias-label-tertiary)}",
 			".sk_thumb{width:52px;height:52px;border-radius:8px;object-fit:cover;flex-shrink:0;border:1px solid var(--dsw-alias-border-l2);background:rgba(127,127,127,.08)}",
 			".sk_thumbW{width:76px;height:52px}",
-			".cm_side input[type=range]{width:110px;accent-color:#d97757;cursor:pointer}"
+			".cm_side input[type=range]{width:110px;accent-color:#d97757;cursor:pointer}",
+			// ---- 设置页统一版式(重绘:页头 + 卡片分组 + 行/控件精化) ----
+			".vt_page{display:flex;flex-direction:column;gap:12px;max-width:760px}",
+			".vt_head{display:flex;flex-direction:column;gap:4px;padding:2px 2px 0}",
+			".vt_h2{margin:0;font-size:18px;font-weight:600;line-height:26px;color:var(--dsw-alias-label-primary)}",
+			".vt_intro{margin:0;font-size:13px;line-height:1.6;color:var(--dsw-alias-label-tertiary)}",
+			".vt_card{border:1px solid var(--dsw-alias-border-l2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;background:var(--dsw-alias-bg-layer-1)}",
+			".vt_group{display:flex;flex-direction:column;gap:8px}",
+			".vt_groupTitle{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);padding:0 2px;letter-spacing:.02em}",
+			".pm_row,.cm_row{border-radius:10px;transition:border-color .15s ease,background .15s ease}",
+			".pm_row:hover,.cm_row:hover{border-color:var(--dsw-alias-label-tertiary)}",
+			".pm_btn{border-radius:7px;transition:background .15s,border-color .15s,color .15s}",
+			".ps_txt{border-radius:10px;line-height:1.7;transition:border-color .15s,box-shadow .15s}",
+			".ps_txt:focus{border-color:#d97757;box-shadow:0 0 0 3px rgba(217,119,87,.14)}",
+			".pm_search{border-radius:10px;transition:border-color .15s,box-shadow .15s}",
+			".pm_search:focus-within{border-color:#d97757;box-shadow:0 0 0 3px rgba(217,119,87,.12)}",
+			// ---- node-nav 圆点精化 + 侧栏联动(覆盖层,优先级高于插件自身样式) ----
+			".dsh-node-nav-rail{transition:left .3s cubic-bezier(.32,.72,0,1),opacity .22s ease,visibility .22s ease!important}",
+			".dsh-node-nav-dot{width:7px!important;height:7px!important;border-width:1.5px!important;opacity:.55;transition:transform .22s cubic-bezier(.32,.72,0,1),background .18s ease,box-shadow .18s ease,border-color .18s ease,opacity .18s ease!important}",
+			".dsh-node-nav-dot:hover{opacity:1;transform:scale(1.45)!important}",
+			".dsh-node-nav-dot-active{opacity:1!important}",
+			".dsh-node-nav-dot-unloaded{opacity:.32!important}",
+			".dsh-node-nav-line{opacity:.45;transition:opacity .2s ease}",
+			".dsh-node-nav-rail:hover .dsh-node-nav-line{opacity:.85}",
+			".dsh-node-nav-bottom{opacity:.55;transition:transform .22s cubic-bezier(.32,.72,0,1),background .18s ease,box-shadow .18s ease,border-color .18s ease,opacity .18s ease!important}",
+			".dsh-node-nav-bottom:hover{opacity:1}",
+			"body.dsh-vt-sidebar-open .dsh-node-nav-rail{opacity:0!important;visibility:hidden!important;pointer-events:none!important}",
+			"body.dsh-vt-nav-sync:not(.dsh-vt-sidebar-open) .dsh-node-nav-rail{left:68px!important}",
+			"body.dsh-vt-nav-sync:not(.dsh-vt-sidebar-open) .dsh-node-nav-preview{left:92px!important}",
+			"body.dsh-vt-nav-sync:not(.dsh-vt-sidebar-open) .dsh-node-nav-miss{left:92px!important}"
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -294,19 +323,23 @@ window.__ModuleLoader__.load({
 				h("div", { className: "pm_msg pm_msgErr" }, "读取失败: " + st[0].message),
 				h("button", { className: "pm_btn", onClick: function () { load(); } }, "重试"));
 
-			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
-			return h("div", { className: "pm_root" },
-				h("div", { className: "pm_msg" }, "全局人设经 system-prompt 插件注入。支持变量 {{model}}、{{cwd}}、{{provider}}(严格插值,未知变量会导致请求失败)。"),
+		var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
+		return h("div", { className: "vt_page" },
+			h("div", { className: "vt_head" },
+				h("h2", { className: "vt_h2" }, "人设"),
+				h("p", { className: "vt_intro" }, "全局人设经 system-prompt 插件注入到每一次新对话。支持变量 {{model}}、{{cwd}}、{{provider}}(严格插值,未知变量会导致请求失败)。")),
+			h("div", { className: "vt_card" },
 				h("textarea", {
 					className: "ps_txt", value: text[0], spellCheck: false, "aria-label": "全局人设",
+					placeholder: "例如:你是一位资深工程师,回答简洁直接,优先给出可执行的方案。",
 					onChange: function (ev) { setText(ev.currentTarget.value); },
 				}),
 				h("div", { className: "ps_btns" },
 					h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { save(false); } }, "保存"),
 					h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { save(true); } }, "恢复默认"),
 					st[0].isDefault ? h("span", { className: "pm_tag" }, "当前为默认") : h("span", { className: "pm_tag pm_tagOff" }, "已自定义")),
-				h("div", { className: msgCls }, msg[0]),
-				h("div", { className: "pm_msg" }, "保存写入 ~/.dsh/cordis.patch.yml 并热载入;对新发起的对话生效,进行中的对话不受影响。清空后保存等于恢复默认。"));
+				h("div", { className: msgCls }, msg[0])),
+			h("div", { className: "pm_msg" }, "保存写入 ~/.dsh/cordis.patch.yml 并热载入;对新发起的对话生效,进行中的对话不受影响。清空后保存等于恢复默认。"));
 		}
 
 		// ---------- 技能 tab(壳 30801 扫描 user 级技能目录,启停/删除;runtime 并集补充其他来源) ----------
@@ -442,17 +475,18 @@ window.__ModuleLoader__.load({
 					h("span", { className: "cm_src" }, SKILL_SRC_ZH[s.source] || s.source || "其他来源"));
 			});
 
-			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
-			return h("div", { className: "pm_root" },
-				h("label", { className: "pm_search" },
-					h("span", { className: "pm_tag" }, "搜索"),
-					h("input", { value: q[0], placeholder: "按名称或描述过滤", onChange: function (ev) { q[1](ev.currentTarget.value); } })),
-				h("div", { className: "cm_count" }, mine.length + " 个用户技能" + (st[0].others.length ? " · " + st[0].others.length + " 个其他来源" : "")),
-				h("div", { className: "pm_list" }, rows),
-				otherRows.length ? h("div", { className: "cm_h2" }, "其他来源(随工作区/组合自动加载)") : null,
-				otherRows.length ? h("div", { className: "pm_list" }, otherRows) : null,
-				h("div", { className: msgCls }, msg[0]),
-				h("div", { className: "pm_msg" }, "开关 = 壳在 ~/.dsh/skills(~/.agents/skills)与其 -disabled 姊妹目录间移动技能,dsh 监听目录热生效,无需重启。"));
+		var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
+		return h("div", { className: "vt_group" },
+			h("div", { className: "vt_groupTitle" }, "用户技能"),
+			h("label", { className: "pm_search" },
+				h("span", { className: "pm_tag" }, "搜索"),
+				h("input", { value: q[0], placeholder: "按名称或描述过滤", onChange: function (ev) { q[1](ev.currentTarget.value); } })),
+			h("div", { className: "cm_count" }, mine.length + " 个用户技能" + (st[0].others.length ? " · " + st[0].others.length + " 个其他来源" : "")),
+			h("div", { className: "pm_list" }, rows),
+			otherRows.length ? h("div", { className: "cm_h2" }, "其他来源(随工作区/组合自动加载)") : null,
+			otherRows.length ? h("div", { className: "pm_list" }, otherRows) : null,
+			h("div", { className: msgCls }, msg[0]),
+			h("div", { className: "pm_msg" }, "开关 = 壳在 ~/.dsh/skills(~/.agents/skills)与其 -disabled 姊妹目录间移动技能,dsh 监听目录热生效,无需重启。"));
 		}
 
 		// ---------- MCP tab(inventory 过滤 mcp 行;启停走壳 plugins/toggle,删除仅壳管理的 insert 块) ----------
@@ -678,15 +712,19 @@ window.__ModuleLoader__.load({
 					c && c.dshUpdateAvailable ? h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { applyDsh(); } }, "更新 dsh") : null,
 					c && c.dshError ? h("span", { className: "pm_tag pm_tagErr" }, "检查失败") : null));
 
-			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("结束") >= 0 || msg[0].indexOf("完成") >= 0 || msg[0].indexOf("最新") >= 0 ? " pm_msgOk" : "");
-			return h("div", { className: "pm_root" },
-				h("div", { className: "pm_list" }, [shellRow, dshRow]),
-				h("div", { className: "ps_btns" },
-					h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { doCheck(); } }, "检查更新"),
-					h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { api("/updates/open-releases", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } }, "打开 Releases 页")),
-				c && c.shellNote ? h("div", { className: "pm_msg" }, c.shellNote) : null,
-				h("div", { className: msgCls }, msg[0]),
-				h("div", { className: "pm_msg" }, "壳更新从 GitHub(Suife-yuanxing/dsh-desktop)Releases 拉取:安装版自动下载并弹窗确认重启,便携版引导手动下载。dsh 更新先预检新版可运行性,失败自动回滚。"));
+		var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("结束") >= 0 || msg[0].indexOf("完成") >= 0 || msg[0].indexOf("最新") >= 0 ? " pm_msgOk" : "");
+		return h("div", { className: "vt_page" },
+			h("div", { className: "vt_head" },
+				h("h2", { className: "vt_h2" }, "更新"),
+				h("p", { className: "vt_intro" }, "桌面壳与 dsh 服务的版本状态与更新通道。")),
+			h("div", { className: "vt_group" },
+				h("div", { className: "pm_list" }, [shellRow, dshRow])),
+			h("div", { className: "ps_btns" },
+				h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { doCheck(); } }, "检查更新"),
+				h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { api("/updates/open-releases", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } }, "打开 Releases 页")),
+			c && c.shellNote ? h("div", { className: "pm_msg" }, c.shellNote) : null,
+			h("div", { className: msgCls }, msg[0]),
+			h("div", { className: "pm_msg" }, "壳更新从 GitHub(Suife-yuanxing/dsh-desktop)Releases 拉取:安装版自动下载并弹窗确认重启,便携版引导手动下载。dsh 更新先预检新版可运行性,失败自动回滚。"));
 		}
 
 		// ---------- 皮肤 tab:自定义媒体导入 + Wallpaper Engine 接入 ----------
@@ -698,6 +736,35 @@ window.__ModuleLoader__.load({
 		var BG_STYLE_ID = "dsh-desktop-skin-style";
 		var AUDIO_ID = "dsh-desktop-skin-audio";
 		var SKIN_KIND_ZH = { image: "图片", video: "视频", audio: "音频" };
+
+		// [fix] Chromium 省电策略:页面不可见(窗口最小化/被完全遮挡/后台加载)时,
+		// "video-only background media" 的 play() 会被 AbortError 拒绝并停在第一帧,
+		// 回到前台也不会自动恢复。注册 visibilitychange 重放 + 拒绝后短退避重试。
+		var skinMedia = { video: null, audio: null };
+		function skinPlay(el, tries) {
+			if (!el || !el.isConnected) return;
+			tries = tries || 0;
+			var p = el.play();
+			if (p && p.catch) p.catch(function () {
+				// 页面不可见时重试必然再被拒(省电暂停),等 visibilitychange 唤醒;
+				// 可见但仍拒(数据未就绪等)则短退避重试,上限 5 次。
+				if (document.visibilityState !== "visible") return;
+				if (tries < 5) setTimeout(function () { skinPlay(el, tries + 1); }, 2000);
+			});
+		}
+		if (typeof document !== "undefined" && !document.getElementById("dsh-desktop-skin-mediatap")) {
+			var tap = document.createElement("i");
+			tap.id = "dsh-desktop-skin-mediatap";
+			tap.style.display = "none";
+			document.head.appendChild(tap);
+			document.addEventListener("visibilitychange", function () {
+				if (document.visibilityState !== "visible") return;
+				["video", "audio"].forEach(function (k) {
+					var el = skinMedia[k];
+					if (el && el.isConnected && el.paused) skinPlay(el);
+				});
+			});
+		}
 
 		/** 将皮肤状态渲染为背景层(img/video)+ 透明化样式 + 氛围音频。 */
 		function applySkinVisual(state) {
@@ -715,11 +782,34 @@ window.__ModuleLoader__.load({
 					"#" + BG_LAYER_ID + "{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}",
 					"#" + BG_LAYER_ID + " img,#" + BG_LAYER_ID + " video{width:100%;height:100%;object-fit:cover;display:block}",
 					"#" + BG_LAYER_ID + "::after{content:'';position:absolute;inset:0;background:rgba(0,0,0," + dim + ")}",
-					// 框架三列背景透明让背景透出;列内表面(气泡/卡片)自带背景保证可读
-					"#root{background:transparent!important}",
-					"#root>div[data-slot=root]{background:transparent!important}",
-					"#root>div[data-slot=root]>div{background:transparent!important}",
-					"#root>div[data-slot=root]>div>div{background:transparent!important}",
+					// 框架层级透明让背景透出;列内表面(气泡/卡片/输入区)自带背景保证可读。
+					// [fix] 原来只透到 depth 4(slot 元素),而侧栏(hHd-Xa_root)与中列
+					// (my0TNq_root)的 CSS Modules 包装器在 depth 5 且不透明,壁纸被整屏
+					// 盖住"不生效"。哈希类名随 dsh 构建变化,故按 data-slot 结构寻址。
+				// [fix] 白边根治:body 自身是白底,皮肤层只是"盖住"它——任何盖不住的
+				// 像素(亚像素缝/滚动条轨道/overscroll/img 加载前白闪)都会露白。
+				// 皮肤启用期间把 html/body 也透明化,兜底色变成皮肤层本身。
+				"html,body{background:transparent!important}",
+				"#root{background:transparent!important}",
+				"#root>div[data-slot=root]{background:transparent!important}",
+				"#root>div[data-slot=root]>div{background:transparent!important}",
+				"#root>div[data-slot=root]>div>div{background:transparent!important}",
+				// [fix] slot 元素自身(depth 4)与各列内容根(depth 5,含 details 列的
+				// 1px 纯白竖条 _root,位于会话区/详情列分界)一并透明——只写
+				// sidebar/conversation 两支时 details 列包装器残留白边。
+				"#root>div[data-slot=root]>div>div>div{background:transparent!important}",
+				"#root>div[data-slot=root]>div>div>div>*{background:transparent!important}",
+				'div[data-slot="sidebar"]>*{background:transparent!important}',
+				'div[data-slot="conversation"]>*{background:transparent!important}',
+					// [fix] 列包装器上的 0.667px 浅色分隔线(如 sidebarCol 右缘 rgba(0,0,0,.04))
+				// 在深色壁纸上呈"轻微白边",一并透明化。壳内层级:
+				// #root > [data-slot=root] > frame > sidebarCol/conversationCol > [data-slot=*] > 内容
+			'#root>div[data-slot=root]>div{border-color:transparent!important}',
+			'#root>div[data-slot=root]>div>div{border-color:transparent!important}',
+			'#root>div[data-slot=root]>div>div>div{border-color:transparent!important}',
+			'#root>div[data-slot=root]>div>div>div>*{border-color:transparent!important}',
+			'div[data-slot="sidebar"],div[data-slot="sidebar"]>*{border-color:transparent!important}',
+			'div[data-slot="conversation"],div[data-slot="conversation"]>*{border-color:transparent!important}',
 				].join("");
 			} else {
 				style.textContent = "";
@@ -733,7 +823,8 @@ window.__ModuleLoader__.load({
 					if (media) media.remove();
 					if (wantTag === "VIDEO") {
 						media = document.createElement("video");
-						media.autoplay = true; media.loop = true; media.muted = true; media.playsInline = true;
+						media.autoplay = true; media.loop = true; media.muted = false; media.playsInline = true;
+						media.volume = typeof state.volume === "number" ? state.volume : 0.35;
 					} else {
 						media = document.createElement("img");
 						media.alt = "";
@@ -741,8 +832,11 @@ window.__ModuleLoader__.load({
 					layer.appendChild(media);
 				}
 				if (media.getAttribute("src") !== state.bg.url) media.setAttribute("src", state.bg.url);
-				if (wantTag === "VIDEO") { var vp = media.play(); if (vp && vp.catch) vp.catch(function () { /* 元素被移除/autoplay 受限 */ }); }
+				if (wantTag === "VIDEO" && typeof state.volume === "number") media.volume = state.volume;
+				skinMedia.video = wantTag === "VIDEO" ? media : null;
+				if (wantTag === "VIDEO") skinPlay(media);
 			} else if (layer) {
+				skinMedia.video = null;
 				layer.remove();
 			}
 			var audioEl = document.getElementById(AUDIO_ID);
@@ -755,8 +849,10 @@ window.__ModuleLoader__.load({
 				}
 				if (audioEl.getAttribute("src") !== state.audio.url) audioEl.setAttribute("src", state.audio.url);
 				audioEl.volume = typeof state.volume === "number" ? state.volume : 0.35;
-				var ap = audioEl.play(); if (ap && ap.catch) ap.catch(function () { /* autoplay 受限时下次交互生效 */ });
+				skinMedia.audio = audioEl;
+				skinPlay(audioEl);
 			} else if (audioEl) {
+				skinMedia.audio = null;
 				audioEl.remove();
 			}
 		}
@@ -923,50 +1019,212 @@ window.__ModuleLoader__.load({
 			if (!assetRows.length) assetRows = [h("div", { key: "empty", className: "pm_msg" }, "尚无自定义资产。点击「导入文件」添加 jpg/png/gif、mp4/webm 或 mp3/wav 等。")];
 
 			var weBody;
-			if (we[0].status === "loading") weBody = h("div", { className: "pm_msg" }, "正在扫描 Wallpaper Engine 创意工坊…");
-			else if (we[0].status === "error") weBody = h("div", { className: "pm_msg pm_msgErr" }, "扫描失败: " + we[0].message);
-			else if (!we[0].installed) weBody = h("div", { className: "pm_msg" }, "未检测到 Wallpaper Engine(找不到 Steam 创意工坊目录 steamapps/workshop/content/431960)。安装 WE 并订阅壁纸后重试。");
-			else {
-				var wps = we[0].wallpapers || [];
-				var usable = wps.filter(function (w) { return w.supported; });
-				var wRows = usable.map(function (w) {
-					var isBg = !!(cur.bg && cur.bg.url && cur.bg.url.indexOf("/skin/we/" + w.id + "/") >= 0);
-					return h("div", { key: w.id, className: "cm_row" },
-						w.previewUrl ? h("img", { className: "sk_thumb sk_thumbW", src: SHELL_API + w.previewUrl, alt: "", loading: "lazy" }) : h("div", { className: "cm_icon" }, "W"),
-						h("div", { className: "cm_main" },
-							h("div", { className: "cm_titleRow" },
-								h("span", { className: "cm_name", title: w.title }, w.title),
-								h("span", { className: "cm_src" }, "video"),
-								isBg ? h("span", { className: "cm_src" }, "当前背景") : null),
-							h("div", { className: "cm_desc" }, "创意工坊 #" + w.id)),
-						h("div", { className: "cm_side" },
-							isBg ? h("button", { className: "pm_btn", onClick: function () { patchState({ bg: null }); } }, "关闭") :
-								h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { applyWallpaper(w); } }, "应用")));
-				});
-				var sceneCount = wps.length - usable.length;
-				weBody = h("div", { className: "pm_list" },
-					wRows.length ? wRows : [h("div", { key: "we-empty", className: "pm_msg" }, "创意工坊中没有视频类型壁纸。")],
-					sceneCount > 0 ? h("div", { className: "pm_msg" }, "另有 " + sceneCount + " 个场景(scene)壁纸:打包格式,暂不支持应用。") : null);
-			}
+		if (we[0].status === "loading") weBody = h("div", { className: "pm_msg" }, "正在扫描 Wallpaper Engine 创意工坊…");
+		else if (we[0].status === "error") weBody = h("div", { className: "pm_msg pm_msgErr" }, "扫描失败: " + we[0].message);
+		else if (!we[0].installed) weBody = h("div", { className: "pm_msg" }, "未检测到 Wallpaper Engine(找不到 Steam 创意工坊目录 steamapps/workshop/content/431960)。安装 WE 并订阅壁纸后重试。");
+		else {
+			var wps = we[0].wallpapers || [];
+			var usable = wps.filter(function (w) { return w.supported; });
+			var wRows = usable.map(function (w) {
+				var isBg = !!(cur.bg && cur.bg.url && cur.bg.url.indexOf("/skin/we/" + w.id + "/") >= 0);
+				return h("div", { key: w.id, className: "cm_row" },
+					w.previewUrl ? h("img", { className: "sk_thumb sk_thumbW", src: SHELL_API + w.previewUrl, alt: "", loading: "lazy" }) : h("div", { className: "cm_icon" }, "W"),
+					h("div", { className: "cm_main" },
+						h("div", { className: "cm_titleRow" },
+							h("span", { className: "cm_name", title: w.title }, w.title),
+							h("span", { className: "cm_src" }, "video"),
+							isBg ? h("span", { className: "cm_src" }, "当前背景") : null),
+						h("div", { className: "cm_desc" }, "创意工坊 #" + w.id)),
+					h("div", { className: "cm_side" },
+						isBg ? h("button", { className: "pm_btn", onClick: function () { patchState({ bg: null }); } }, "关闭") :
+							h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { applyWallpaper(w); } }, "应用")));
+			});
+			// [fix] 不可用条目按真实原因分类展示(scene/web/未下载),不再合并计数误导;
+			// 未下载 = 创意工坊条目在但声明的视频文件缺失(下载被清理),Steam 重下即恢复。
+			var WE_NA_DESC = {
+				scene: "打包格式(scene),暂不支持应用",
+				web: "HTML 页面壁纸,暂不支持应用",
+				incomplete: "视频文件缺失,在 Steam 中重新下载后可用",
+			};
+			var others = wps.filter(function (w) { return !w.supported; });
+			var oRows = others.map(function (w) {
+				// 兼容旧壳数据:incomplete 字段缺失时按 video+不可用 推导为未下载
+				var isIncomplete = w.incomplete || (w.type === "video" && !w.supported);
+				var why = isIncomplete ? "incomplete" : (w.type === "web" ? "web" : "scene");
+				return h("div", { key: w.id, className: "cm_row cm_rowOff" },
+					w.previewUrl ? h("img", { className: "sk_thumb sk_thumbW", src: SHELL_API + w.previewUrl, alt: "", loading: "lazy" }) : h("div", { className: "cm_icon" }, "W"),
+					h("div", { className: "cm_main" },
+						h("div", { className: "cm_titleRow" },
+							h("span", { className: "cm_name", title: w.title }, w.title),
+							h("span", { className: "cm_src" }, w.type === "web" ? "web" : (isIncomplete ? "未下载" : "scene"))),
+						h("div", { className: "cm_desc" }, WE_NA_DESC[why])));
+			});
+			weBody = h("div", { className: "pm_list" },
+				wRows.length ? wRows : [h("div", { key: "we-empty", className: "pm_msg" }, "创意工坊中没有可直接应用的视频壁纸。")],
+				oRows.length ? [h("div", { key: "we-na-h", className: "sec_h" }, "暂不支持(" + oRows.length + ")")].concat(oRows) : null);
+		}
 
-			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
-			return h("div", { className: "pm_root" },
-				h("input", { ref: fileRef, type: "file", style: { display: "none" },
-					accept: ".jpg,.jpeg,.png,.gif,.webp,.bmp,.mp4,.webm,.mov,.mkv,.mp3,.wav,.ogg,.flac,.m4a",
-					onChange: onFile }),
+		var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
+		return h("div", { className: "vt_page" },
+			h("input", { ref: fileRef, type: "file", style: { display: "none" },
+				accept: ".jpg,.jpeg,.png,.gif,.webp,.bmp,.mp4,.webm,.mov,.mkv,.mp3,.wav,.ogg,.flac,.m4a",
+				onChange: onFile }),
+			h("div", { className: "vt_head" },
+				h("h2", { className: "vt_h2" }, "皮肤"),
+				h("p", { className: "vt_intro" }, "导入图片/视频作为界面背景,音频作循环氛围声;也可直接应用 Wallpaper Engine 创意工坊的视频壁纸。")),
+			h("div", { className: "vt_group" },
+				h("div", { className: "vt_groupTitle" }, "当前效果"),
+				h("div", { className: "pm_list" }, [bgRow, audioRow])),
+			h("div", { className: "vt_group" },
+				h("div", { className: "vt_groupTitle" }, "自定义资产"),
 				h("div", { className: "ps_btns" },
 					h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { if (fileRef.current) fileRef.current.click(); } }, "导入文件"),
 					h("span", { className: "cm_count" }, assets.length + " 个资产")),
-				h("div", { className: "pm_list" }, [bgRow, audioRow]),
-				h("div", { className: "cm_h2" }, "自定义资产"),
-				h("div", { className: "pm_list" }, assetRows),
-				h("div", { className: "cm_h2" }, "Wallpaper Engine"),
-				weBody,
-				h("div", { className: msgCls }, msg[0]),
-				h("div", { className: "pm_msg" }, "导入的文件保存于 ~/.dsh/desktop-assets/ 并由壳(30801)提供本地静态服务;图片/视频设为背景,音频作循环氛围声。Wallpaper Engine 视频壁纸直接从 Steam 创意工坊目录读取,无需改动 WE 本体。状态持久化在壳配置,新窗口自动恢复。"));
+				h("div", { className: "pm_list" }, assetRows)),
+			h("div", { className: "vt_group" },
+				h("div", { className: "vt_groupTitle" }, "Wallpaper Engine"),
+				weBody),
+			h("div", { className: msgCls }, msg[0]),
+			h("div", { className: "pm_msg" }, "导入的文件保存于 ~/.dsh/desktop-assets/ 并由壳(30801)提供本地静态服务;图片/视频设为背景,音频作循环氛围声。Wallpaper Engine 视频壁纸直接从 Steam 创意工坊目录读取,无需改动 WE 本体。状态持久化在壳配置,新窗口自动恢复。"));
 		}
 
-		function apply(ctx) {
+		// ---------- [local] 原生右栏 grid 轨道塌陷 ----------
+		// CSS display:none hides content but keeps the fixed tracks of the frame's
+		// inline grid-template-columns. When explorer/preview are expanded by dsh,
+		// the 260px track survives and leaves a blank strip on the right. This only
+		// reproduces inside the packaged shell (Electron), not in a plain browser.
+		// Watch the inline style, keep the first two tracks (left sidebar + center),
+		// zero out the remaining fixed-pixel tracks; minmax/fr tracks stay as-is.
+		// 前提:explorer-col 存在且已被我们的 CSS 隐藏(定制在生效才介入)。
+
+		function splitGridTracks(s) {
+			// Both forms accepted: space-separated (React inline serialization) and
+			// comma-separated (CSSOM). Whitespace/comma at paren depth 0 splits;
+			// minmax()/fit-content() internals stay intact.
+			var out = [], cur = "", depth = 0;
+			for (var i = 0; i < s.length; i++) {
+				var ch = s.charAt(i);
+				if (ch === "(") depth += 1;
+				else if (ch === ")") depth -= 1;
+				if (depth === 0 && (ch === "," || /\s/.test(ch))) {
+					if (cur.trim()) out.push(cur.trim());
+					cur = "";
+				} else cur += ch;
+			}
+			if (cur.trim()) out.push(cur.trim());
+			return out;
+		}
+
+		function collapseFrameTracks(frame) {
+			var styleAttr = frame.getAttribute("style") || "";
+			var m = styleAttr.match(/grid-template-columns:\s*([^;]+);?/);
+			if (!m) return;
+			var tracks = splitGridTracks(m[1]);
+			if (tracks.length < 3) return;
+			var changed = false;
+			for (var i = 2; i < tracks.length; i++) {
+				if (/^-?\d*\.?\d+px$/.test(tracks[i]) && parseFloat(tracks[i]) !== 0) { tracks[i] = "0px"; changed = true; }
+			}
+			if (changed) frame.style.gridTemplateColumns = tracks.join(" ");
+		}
+
+		function installNativeTrackCollapse() {
+			if (typeof document === "undefined") return;
+			// Hide the leftover explorer drag handle near the collapsed track edge (idempotent).
+			if (!document.getElementById("dsh-vt-hide-handles")) {
+				var st = document.createElement("style");
+				st.id = "dsh-vt-hide-handles";
+				st.textContent = ".aionui-explorer-handle,.aionui-preview-handle{display:none!important}";
+				document.head.appendChild(st);
+			}
+			var FRAME_SEL = '#root > div[data-slot="root"] > div';
+			var started = false;
+			var attach = function () {
+				if (started) return;
+				var frame = document.querySelector(FRAME_SEL);
+				if (!frame) return false;
+				var explorer = document.querySelector(".aionui-explorer-col");
+				if (!explorer || getComputedStyle(explorer).display !== "none") return false;
+				started = true;
+				collapseFrameTracks(frame);
+				var mo = new MutationObserver(function () { collapseFrameTracks(frame); });
+				mo.observe(frame, { attributes: true, attributeFilter: ["style"] });
+				// frame 本身被 React 重挂载时重新附着
+				var bodyMo = new MutationObserver(function () {
+					if (!document.body.contains(frame)) {
+						mo.disconnect();
+						started = false;
+						poll();
+					}
+				});
+				bodyMo.observe(document.body, { childList: true, subtree: true });
+				return true;
+			};
+			var poll = function () {
+				if (attach()) return;
+				var tries = 0;
+				var t = setInterval(function () {
+					tries += 1;
+					if (attach() || tries > 150) clearInterval(t);
+				}, 200);
+			};
+			poll();
+		}
+
+	// ---- [local] node-nav 圆点与左侧栏联动 ----
+	// 侧栏展开(首轨 ~280px)时圆点导航紧贴侧栏右缘,视觉上与侧栏重复 → 隐藏;
+	// 侧栏收起(首轨 ~56px 窄图标轨)时圆点显示在窄轨右侧(left:68px)。
+	// 判定与轨道塌陷同款:盯 frame 的内联 grid-template-columns 第一条轨道。
+	function installSidebarDotSync() {
+		if (typeof document === "undefined") return;
+		var FRAME_SEL = '#root > div[data-slot="root"] > div';
+		var started = false;
+		var update = function (frame) {
+			var s = frame.getAttribute("style") || "";
+			var m = s.match(/grid-template-columns:\s*([^;]+)/);
+			var open = true;
+			if (m) {
+				var tracks = splitGridTracks(m[1]);
+				var w = parseFloat(tracks[0] || "0");
+				open = !(w > 0 && w <= 100);
+			}
+			document.body.classList.add("dsh-vt-nav-sync");
+			document.body.classList.toggle("dsh-vt-sidebar-open", open);
+		};
+		var attach = function () {
+			if (started) return;
+			var frame = document.querySelector(FRAME_SEL);
+			if (!frame) return false;
+			started = true;
+			update(frame);
+			var mo = new MutationObserver(function () { update(frame); });
+			mo.observe(frame, { attributes: true, attributeFilter: ["style"] });
+			var bodyMo = new MutationObserver(function () {
+				if (!document.body.contains(frame)) {
+					mo.disconnect();
+					started = false;
+					poll();
+				}
+			});
+			bodyMo.observe(document.body, { childList: true, subtree: true });
+			return true;
+		};
+		var poll = function () {
+			if (attach()) return;
+			var tries = 0;
+			var t = setInterval(function () {
+				tries += 1;
+				if (attach() || tries > 150) clearInterval(t);
+			}, 200);
+		};
+		poll();
+	}
+
+	function apply(ctx) {
+		// [local] 原生右栏轨道塌陷:display:none 之外的 grid 轨道补偿
+		installNativeTrackCollapse();
+		// [local] node-nav 圆点:侧栏展开隐藏 / 收起显示(左移窄轨旁)
+		installSidebarDotSync();
 			// 「插件」区段:唯一的"插件管理"tab(合并原只读清单;上游 all tab 行已禁用)
 			ctx.effect(() => ctx.locale.register(NS2, {
 				zh: { tab: "插件管理" },
@@ -996,10 +1254,10 @@ window.__ModuleLoader__.load({
 				en: { nav: "Persona" },
 			}), "dsh-persona-section: dictionaries");
 			const t3 = ctx.locale.bind(NS3);
-			ctx.slots.inject("settings.section", () => ctx.slots.register({
-				name: "settings.section",
-				id: "persona",
-				order: 16,
+		ctx.slots.inject("settings.section", () => ctx.slots.register({
+			name: "settings.section",
+			id: "persona",
+			order: 11,
 				label: () => t3("nav"),
 				locale: NS3,
 			}, function PersonaSectionHost() {
@@ -1011,30 +1269,33 @@ window.__ModuleLoader__.load({
 				en: { nav: "Skills" },
 			}), "dsh-skills-section: dictionaries");
 			const t4 = ctx.locale.bind(NS4);
-			ctx.slots.inject("settings.section", () => ctx.slots.register({
-				name: "settings.section",
-				id: "skills",
-				order: 17,
+		ctx.slots.inject("settings.section", () => ctx.slots.register({
+			name: "settings.section",
+			id: "skills",
+			order: 12,
 				label: () => t4("nav"),
 				locale: NS4,
-			}, function SkillsSectionHost() {
-			// 技能 + MCP 合并为一页两块(Claude GUI 式卡片排版)
-			return react.createElement("div", { className: "pm_root" },
-				react.createElement("div", { className: "cm_h2" }, "技能"),
-				react.createElement(SkillsTab),
-				react.createElement("div", { className: "cm_h2" }, "MCP 服务器"),
-				react.createElement(McpTab, { list: list }));
-		}));
+		}, function SkillsSectionHost() {
+		// 技能 + MCP 合并为一页两块(Claude GUI 式卡片排版)
+		return react.createElement("div", { className: "vt_page" },
+			react.createElement("div", { className: "vt_head" },
+				react.createElement("h2", { className: "vt_h2" }, "技能"),
+				react.createElement("p", { className: "vt_intro" }, "管理本地技能目录与 MCP 服务器连接。启停与删除即时热生效,无需重启服务。")),
+			react.createElement(SkillsTab),
+			react.createElement("div", { className: "vt_group" },
+				react.createElement("div", { className: "vt_groupTitle" }, "MCP 服务器"),
+				react.createElement(McpTab, { list: list })));
+	}));
 
 			ctx.effect(() => ctx.locale.register(NS6, {
 				zh: { nav: "皮肤" },
 				en: { nav: "Skin" },
 			}), "dsh-skin-section: dictionaries");
 			const t6 = ctx.locale.bind(NS6);
-			ctx.slots.inject("settings.section", () => ctx.slots.register({
-				name: "settings.section",
-				id: "skin",
-				order: 18,
+		ctx.slots.inject("settings.section", () => ctx.slots.register({
+			name: "settings.section",
+			id: "skin",
+			order: 14,
 				label: () => t6("nav"),
 				locale: NS6,
 			}, function SkinSectionHost() {
@@ -1046,10 +1307,10 @@ window.__ModuleLoader__.load({
 				en: { nav: "Update" },
 			}), "dsh-update-section: dictionaries");
 			const t7 = ctx.locale.bind(NS7);
-			ctx.slots.inject("settings.section", () => ctx.slots.register({
-				name: "settings.section",
-				id: "updates",
-				order: 25,
+		ctx.slots.inject("settings.section", () => ctx.slots.register({
+			name: "settings.section",
+			id: "updates",
+			order: 22,
 				label: () => t7("nav"),
 				locale: NS7,
 			}, function UpdateSectionHost() {
