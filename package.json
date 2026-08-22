@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "productName": "DeepSeek Harness",
-  "version": "0.4.0",
+  "version": "0.4.4",
   "description": "DeepSeek Harness desktop shell - Electron wrapper for the official Web UI",
   "main": "main.js",
   "author": "local",

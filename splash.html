@@ -49,20 +49,11 @@
     0%   { opacity: 0; transform: translateY(20px); filter: blur(6px); }
     100% { opacity: 1; transform: translateY(0px);  filter: blur(0); }
   }
-  .whale {
-    width: clamp(150px, 24vw, 220px); color: var(--fg);
-    filter: drop-shadow(0 0 34px rgba(77,107,254,.45)) drop-shadow(0 2px 10px rgba(0,0,0,.5));
-    /* 入场(上浮,不与静态 drop-shadow 冲突) + 呼吸浮动(入场结束后接棒 transform) */
-    animation: ds-whale-enter .8s ease-out 0s 1 normal backwards,
-               ds-whale-float 7s ease-in-out .8s infinite alternate;
-  }
-  @keyframes ds-whale-enter {
-    0%   { opacity: 0; transform: translateY(20px); }
-    100% { opacity: 1; transform: translateY(0px); }
-  }
-  @keyframes ds-whale-float {
-    from { transform: translateY(-5px) rotate(-.6deg); }
-    to   { transform: translateY(5px)  rotate(.6deg); }
+  /* [T10] 粒子鲸鱼画布:居中于 hero,替代静态 SVG;交互由粒子引擎驱动 */
+  #whaleParticles {
+    width: clamp(300px, 44vw, 440px);
+    height: clamp(170px, 25vw, 250px);
+    filter: drop-shadow(0 0 34px rgba(77,107,254,.35));
   }
   .wordmark { width: clamp(200px, 30vw, 280px); color: var(--fg); opacity: .92; }
   .hero .ds-hero-enter:nth-child(2) { animation-delay: .12s; }
@@ -97,7 +88,7 @@
   <canvas id="gradient"></canvas>
   <div class="grid"></div>
   <div class="hero">
-    <div class="ds-hero-enter whale" id="whale"></div>
+    <canvas id="whaleParticles" class="ds-hero-enter"></canvas>
     <div class="ds-hero-enter wordmark" id="wordmark"></div>
   </div>
   <div class="cap ds-hero-enter" id="stage">正在启动…</div>
@@ -105,18 +96,172 @@
   <div class="bar"><div class="fill" id="fill"></div></div>
 <script src="whale-data.js"></script>
 <script>
-  // ---------- 官网 logo 注入 ----------
-  document.getElementById('whale').innerHTML = window.DSH_WHALE_SVG || ''
+  // ---------- 官网 wordmark 注入 ----------
   document.getElementById('wordmark').innerHTML = window.DSH_LOGO_SVG || ''
 
+  // ---------- [T10] 粒子鲸鱼:SVG 点云采样 + 弹簧聚合 + 鼠标散开 ----------
+  // 官网鲸鱼 logo 离屏栅格化 → alpha 采样成 ~2400 个粒子(≤3000 上限);
+  // 每粒子受 home 弹簧力(聚合)、鼠标斥力(散开)、微弱噪声漂移(呼吸);
+  // 入场时从随机散布态收敛成鲸形。2D canvas 渲染,启动期 CPU/GPU 占用可控。
+  ;(function () {
+    var canvas = document.getElementById('whaleParticles')
+    var ctx = canvas.getContext('2d')
+    var dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+    var W = 0, H = 0
+    var particles = []
+    var mouse = { x: -1e4, y: -1e4 }
+    var MAX_PARTICLES = 2600
+    var readyT = 0 // 入场收敛进度(0→1)
+
+    function resize() {
+      var r = canvas.getBoundingClientRect()
+      W = r.width; H = r.height
+      canvas.width = Math.round(W * dpr)
+      canvas.height = Math.round(H * dpr)
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    }
+
+    // 离屏渲染鲸鱼 SVG → 按 alpha 采样 home 点
+    function sampleWhale(cb) {
+      var svg = window.DSH_WHALE_SVG
+      if (!svg) return cb([])
+      var img = new Image()
+      img.onload = function () {
+        var sw = 400, sh = Math.round(sw * img.height / img.width) || 220
+        var off = document.createElement('canvas')
+        off.width = sw; off.height = sh
+        var octx = off.getContext('2d')
+        octx.drawImage(img, 0, 0, sw, sh)
+        var data
+        try { data = octx.getImageData(0, 0, sw, sh).data } catch (e) { return cb([]) }
+        // 收集候选像素(alpha 足够深),再均匀抽到目标数量
+        var cand = []
+        for (var y = 0; y < sh; y += 2) {
+          for (var x = 0; x < sw; x += 2) {
+            var a = data[(y * sw + x) * 4 + 3]
+            if (a > 96) cand.push([x, y])
+          }
+        }
+        var n = Math.min(cand.length, MAX_PARTICLES)
+        var pts = []
+        var step = cand.length / Math.max(1, n)
+        for (var i = 0; i < n; i++) {
+          var p = cand[Math.floor(i * step)]
+          pts.push(p)
+        }
+        cb(pts)
+      }
+      img.onerror = function () { cb([]) }
+      img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)))
+    }
+
+    function initParticles(pts) {
+      resize()
+      var r = canvas.getBoundingClientRect()
+      // home 点云缩放到画布(留 8% 边距)
+      var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9
+      for (var i = 0; i < pts.length; i++) {
+        minX = Math.min(minX, pts[i][0]); maxX = Math.max(maxX, pts[i][0])
+        minY = Math.min(minY, pts[i][1]); maxY = Math.max(maxY, pts[i][1])
+      }
+      var pad = .08
+      var kx = W * (1 - pad * 2) / Math.max(1, (maxX - minX))
+      var ky = H * (1 - pad * 2) / Math.max(1, (maxY - minY))
+      var k = Math.min(kx, ky)
+      var ox = (W - (maxX - minX) * k) / 2
+      var oy = (H - (maxY - minY) * k) / 2
+      particles = []
+      for (var j = 0; j < pts.length; j++) {
+        var hx = ox + (pts[j][0] - minX) * k
+        var hy = oy + (pts[j][1] - minY) * k
+        particles.push({
+          hx: hx, hy: hy,
+          // 入场:从画布外围随机散布态开始收敛
+          x: Math.random() * W, y: Math.random() * H,
+          vx: 0, vy: 0,
+          s: .8 + Math.random() * 1.3,               // 粒径
+          ph: Math.random() * 6.2832,                 // 噪声相位
+          c: Math.random()                             // 色相插值系数
+        })
+      }
+    }
+
+    var t0 = performance.now()
+    function frame(t) {
+      var s = (t - t0) * .001
+      readyT = Math.min(1, readyT + .016)
+      ctx.clearRect(0, 0, W, H)
+      // 整体呼吸浮动(替代原 SVG float 动画)
+      var bobY = Math.sin(s * .9) * 4
+      var bobR = Math.sin(s * .7) * .012
+      ctx.globalCompositeOperation = 'lighter'
+      var conv = readyT * readyT * (3 - 2 * readyT) // smoothstep 收敛强度
+      for (var i = 0; i < particles.length; i++) {
+        var p = particles[i]
+        // home 点加整体浮动
+        var rx = p.hx - W / 2, ry = p.hy - H / 2
+        var hx = W / 2 + rx * Math.cos(bobR) - ry * Math.sin(bobR)
+        var hy = H / 2 + rx * Math.sin(bobR) + ry * Math.cos(bobR) + bobY
+        // 弹簧回位(聚合)
+        var ax = (hx - p.x) * (.028 + .10 * conv)
+        var ay = (hy - p.y) * (.028 + .10 * conv)
+        // 鼠标斥力(散开)
+        var dx = p.x - mouse.x, dy = p.y - mouse.y
+        var d2 = dx * dx + dy * dy
+        if (d2 < 8100 && d2 > .01) { // 90px 半径
+          var d = Math.sqrt(d2)
+          var f = (90 - d) / 90 * 2.6
+          ax += dx / d * f
+          ay += dy / d * f
+        }
+        // 微弱噪声漂移(呼吸感)
+        ax += Math.sin(s * 1.3 + p.ph) * .012
+        ay += Math.cos(s * 1.1 + p.ph * 1.7) * .012
+        p.vx = (p.vx + ax) * .88
+        p.vy = (p.vy + ay) * .88
+        p.x += p.vx
+        p.y += p.vy
+        // 着色:品牌蓝渐变(#2b46e8 → #6799fe),速度越快越亮
+        var sp = Math.min(1, (Math.abs(p.vx) + Math.abs(p.vy)) * .25)
+        var cr = Math.round(43 + p.c * 60 + sp * 40)
+        var cg = Math.round(70 + p.c * 83 + sp * 30)
+        var cb = Math.round(232 + p.c * 22)
+        ctx.fillStyle = 'rgba(' + cr + ',' + cg + ',' + cb + ',' + (.42 + p.c * .38 + sp * .2).toFixed(3) + ')'
+        ctx.fillRect(p.x, p.y, p.s, p.s)
+      }
+      requestAnimationFrame(frame)
+    }
+
+    window.addEventListener('mousemove', function (ev) {
+      var r = canvas.getBoundingClientRect()
+      mouse.x = ev.clientX - r.left
+      mouse.y = ev.clientY - r.top
+    })
+    window.addEventListener('resize', function () {
+      // 重采样布局(窗口尺寸变化时按新画布尺寸重放 home 点)
+      sampleWhale(function (pts) { if (pts.length) initParticles(pts) })
+    })
+
+    resize()
+    sampleWhale(function (pts) {
+      if (!pts.length) {
+        // SVG 不可用兜底:环形粒子团
+        pts = []
+        for (var i = 0; i < 900; i++) {
+          var a = Math.random() * 6.2832, rr = 60 + Math.random() * 60
+          pts.push([200 + Math.cos(a) * rr * 1.8, 110 + Math.sin(a) * rr])
+        }
+      }
+      initParticles(pts)
+      requestAnimationFrame(frame)
+    })
+  })()
+
   // ---------- 官网 hero 背景效果:流动渐变(canvas 2D 逼近官网 WebGL 渐变) ----------
-  // 多个大 radial-gradient 斑点沿 Lissajous 轨迹缓慢互绕,lighter 叠加出
-  // 品牌蓝流体的有机流动感;顶层 vignette 保持官网深黑氛围。
   var canvas = document.getElementById('gradient')
   var ctx = canvas.getContext('2d')
   var W = 0, H = 0
 
-  // 官网渐变色域:#0d1630(深渊蓝) → #2b46e8/#4d6bfe(品牌) → #6799fe(亮缘)
   var BLOBS = [
     { r: .58, c: '43,70,232',  a: .34, fx: .062, fy: .048, px: .0,  py: .2,  ox: .30, oy: .38 },
     { r: .50, c: '77,107,254', a: .30, fx: .045, fy: .061, px: .9,  py: .7,  ox: .68, oy: .30 },
@@ -125,7 +270,7 @@
     { r: .34, c: '77,107,254', a: .20, fx: .052, fy: .075, px: .75, py: .35, ox: .78, oy: .72 },
   ]
 
-  function resize() {
+  function resizeBg() {
     var dpr = Math.min(window.devicePixelRatio || 1, 1.5)
     W = window.innerWidth; H = window.innerHeight
     canvas.width = Math.round(W * dpr)
@@ -133,7 +278,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   }
 
-  function frame(t) {
+  function frameBg(t) {
     var s = t * .001
     ctx.globalCompositeOperation = 'source-over'
     ctx.fillStyle = '#0a0a0a'
@@ -151,19 +296,18 @@
       ctx.fillStyle = g
       ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2)
     }
-    // vignette:边缘压回官网深黑
     ctx.globalCompositeOperation = 'source-over'
     var v = ctx.createRadialGradient(W / 2, H * .45, Math.min(W, H) * .30, W / 2, H * .45, Math.max(W, H) * .78)
     v.addColorStop(0, 'rgba(10,10,10,0)')
     v.addColorStop(1, 'rgba(10,10,10,.72)')
     ctx.fillStyle = v
     ctx.fillRect(0, 0, W, H)
-    requestAnimationFrame(frame)
+    requestAnimationFrame(frameBg)
   }
 
-  window.addEventListener('resize', resize)
-  resize()
-  requestAnimationFrame(frame)
+  window.addEventListener('resize', resizeBg)
+  resizeBg()
+  requestAnimationFrame(frameBg)
   canvas.classList.add('loaded')
 
   // ---------- 启动阶段 → 进度 ----------

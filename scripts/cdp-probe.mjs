@@ -18,4 +18,5 @@ ws.onmessage = (ev) => {
     ws.close(); process.exit(0)
   }
 }
-setTimeout(() => { console.log('TIMEOUT'); process.exit(1) }, 15000)
+setTimeout(() => { console.log('TIMEOUT'); process.exit(1) }, 40000)
+

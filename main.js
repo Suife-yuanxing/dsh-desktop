@@ -18,9 +18,19 @@ const DSH_HOME = path.join(os.homedir(), '.dsh')
 const LOG_DIR = path.join(DSH_HOME, 'logs')
 const LOG_FILE = path.join(LOG_DIR, 'desktop.log')
 const CONFIG_FILE = path.join(DSH_HOME, 'desktop-config.json')
+const SUMMARY_FILE = path.join(DSH_HOME, 'session-summaries.json')
 const DEFAULT_DSH_VERSION = '0.1.0-rc.6' // 锁定到当前验证过的版本
 const MIN_PUBLIC_DSH_VERSION = '0.1.0-rc.6' // 此前版本发布时 @deepseek-ai/* 依赖族未公开,今日 npx 已装不完整,一律不展示
+// [问题78] dsh 更新链固定官方发布源:@deepseek-ai/dsh 由 DeepSeek 社区 Harness 官方
+// 发布到 npm 公共注册表(官方 README 安装方式即 npx @deepseek-ai/dsh web)。用户级
+// npm 配置常指向第三方镜像——镜像曾致 npm idealTree 解析预发布范围卡死、元数据
+// 逐包再验证奇慢,属不可靠拉取源。查询/下载/安装各环节显式 --registry 固定官方源,
+// 不随用户 npm 配置漂移;官方源不可达时明确报错,不静默换源。
+const DSH_REGISTRY = 'https://registry.npmjs.org'
+const REGISTRY_ARGS = ['--registry', DSH_REGISTRY]
 const RECOVERY_DELAYS = [1_000, 5_000, 15_000] // 崩溃自愈退避,3 次后停
+const RECOVERY_STABILIZE_MS = 5_000 // 恢复稳定期:dsh 先 listen 再加载插件树,boot 崩溃发生在 listen 之后;
+                                    // 窗口内同一进程存活且端口持续监听才算真恢复,否则退避计数不得清零(防无限重启)
 const GITHUB_DSH = 'https://github.com/deepseek-ai/deepseek-harness'
 const GITHUB_DSH_TAGS = `${GITHUB_DSH}/tags` // 官方仓库无 Releases,版本历史走 Tags
 const GITHUB_SHELL = 'https://github.com/Suife-yuanxing/dsh-desktop'
@@ -164,35 +174,109 @@ function resolveNpxCommand() {
   return null
 }
 
-function startDsh() {
+// [问题55] 解析 node.exe:优先 npx 同目录,否则注册表 InstallPath。供绕过 npx 直启用。
+function resolveNodeExe() {
   const npx = resolveNpxCommand()
-  if (!npx) {
-    log('未找到可用的 npx(PATH 与注册表均失败)')
-    return false
+  if (npx) {
+    const cand = path.join(path.dirname(npx), 'node.exe')
+    if (fs.existsSync(cand)) return cand
   }
-  // 版本锁:npx -y @deepseek-ai/dsh@<version> web;-y 免交互安装缺失版本
-  // --prefer-offline: 已缓存版本跳过注册表元数据往返,重启提速 1-2s(缺缓存时行为不变)
-  const spec = `@deepseek-ai/dsh@${cfg.dshVersion}`
+  for (const hive of ['HKLM', 'HKCU']) {
+    const reg = spawnSync('reg', ['query', `${hive}\\SOFTWARE\\Node.js`, '/v', 'InstallPath'],
+      { encoding: 'utf8', windowsHide: true })
+    if (reg.status === 0 && reg.stdout) {
+      const line = reg.stdout.split(/\r?\n/).find((l) => l.includes('InstallPath') && l.includes('REG_SZ'))
+      if (line) {
+        const cand = path.join(line.split('REG_SZ')[1].trim(), 'node.exe')
+        if (fs.existsSync(cand)) return cand
+      }
+    }
+  }
+  return null
+}
+
+// [问题55] 快速启动:在 npx 缓存内找与锁定版本一致的 dsh,返回其 bin.js 绝对路径。
+// 命中则壳直接 `node bin.js web`,省去 npx 包装层的解析/校验开销(实测约 1s)。
+// 未命中(未缓存/版本不符)返 null,回退 npx(带 -y 自动安装)。
+function resolveCachedDshBin(version) {
+  const v = version || cfg.dshVersion
+  try {
+    const npxRoot = path.join(process.env.LOCALAPPDATA || '', 'npm-cache', '_npx')
+    if (!fs.existsSync(npxRoot)) return null
+    for (const h of fs.readdirSync(npxRoot)) {
+      const pkgDir = path.join(npxRoot, h, 'node_modules', '@deepseek-ai', 'dsh')
+      const pj = path.join(pkgDir, 'package.json')
+      if (!fs.existsSync(pj)) continue
+      let pkg
+      try { pkg = JSON.parse(fs.readFileSync(pj, 'utf8')) } catch { continue }
+      if (pkg.version !== v) continue
+      const binRel = typeof pkg.bin === 'string' ? pkg.bin : (pkg.bin && pkg.bin.dsh)
+      if (!binRel) continue
+      const binAbs = path.join(pkgDir, binRel)
+      if (fs.existsSync(binAbs)) return binAbs
+    }
+  } catch { /* 回退 npx */ }
+  return null
+}
+
+function startDsh() {
+  // [问题88] 每次启动 dsh 前重放本地补丁守护:市场更新/外部整写可能在壳运行期改掉
+  // profile patch 禁用行(如 web-ui-better-sidebar 去重守护,问题53/70),服务级重启
+  // (托盘重启、自动恢复)不经过 boot() 的重放,会带着坏 patch 直接 crash loop。
+  // 此处重放幂等(.bak 链自愈),自动恢复迭代时还能当场修复被改写的守护行。
+  try {
+    const r = replayLocalPatches((l) => log(l))
+    if (!r.ok) log('补丁重放存在 FAIL(不阻断启动,详见上方日志)')
+  } catch (e) { log(`补丁重放异常: ${e.message}`) }
+  // [问题55] 快速路径:npx 缓存命中锁定版本 → 直接 node bin.js web,省去 npx 包装层
+  const binJs = resolveCachedDshBin()
+  const nodeExe = binJs ? resolveNodeExe() : null
   let cmd, args
-  if (npx.toLowerCase().endsWith('.cmd')) {
-    // Windows: .cmd 不能直接 spawn(Node 安全限制),须经 cmd /c
-    cmd = 'cmd.exe'
-    args = ['/c', npx, '--prefer-offline', '-y', spec, 'web']
+  if (binJs && nodeExe) {
+    cmd = nodeExe
+    // [问题69] --no-open:rc.8 起 dsh web 默认自动开默认浏览器(壳场景多余——壳自加载
+    // Web UI)。官方 CLI 开关 --no-open;rc.7 及以下不认此 flag(unknown option 即崩),
+    // 故仅在版本 ≥0.1.0-rc.8 时追加(配置层已由 profile patch web-runtime 行兜底)。
+    const noOpen = semverGt(cfg.dshVersion, '0.1.0-rc.7') ? ['--no-open'] : []
+    args = [binJs, 'web', ...noOpen]
+    log(`启动 dsh(快速路径,绕过 npx): ${cmd} ${args.join(' ')}`)
   } else {
-    cmd = npx
-    args = ['--prefer-offline', '-y', spec, 'web']
+    const npx = resolveNpxCommand()
+    if (!npx) {
+      log('未找到可用的 npx(PATH 与注册表均失败)')
+      return false
+    }
+    // 版本锁:npx -y @deepseek-ai/dsh@<version> web;-y 免交互安装缺失版本
+    // --prefer-offline: 已缓存版本跳过注册表元数据往返,重启提速 1-2s(缺缓存时行为不变)
+    // [问题78] 缓存缺失时的补装也固定官方源,与更新链同源,杜绝镜像漂移
+    const spec = `@deepseek-ai/dsh@${cfg.dshVersion}`
+    // [问题69] 同快速路径:--no-open 仅 rc.8+ 支持(rc.7- 传了即 unknown option 崩)
+    const noOpen = semverGt(cfg.dshVersion, '0.1.0-rc.7') ? ['--no-open'] : []
+    if (npx.toLowerCase().endsWith('.cmd')) {
+      // Windows: .cmd 不能直接 spawn(Node 安全限制),须经 cmd /c
+      cmd = 'cmd.exe'
+      args = ['/c', npx, ...REGISTRY_ARGS, '--prefer-offline', '-y', spec, 'web', ...noOpen]
+    } else {
+      cmd = npx
+      args = [...REGISTRY_ARGS, '--prefer-offline', '-y', spec, 'web', ...noOpen]
+    }
+    log(`启动 dsh(npx): ${cmd} ${args.join(' ')}`)
   }
-  log(`启动 dsh: ${cmd} ${args.join(' ')}`)
   dshChild = spawn(cmd, args, {
     cwd: os.homedir(),
     windowsHide: true, // 隐藏 npx 控制台窗口,日志走文件
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
   })
+  const childRef = dshChild
   log(`dsh 子进程 pid=${dshChild.pid}`)
   dshChild.stdout.on('data', (d) => log(`[dsh] ${String(d).trim()}`))
   dshChild.stderr.on('data', (d) => log(`[dsh-err] ${String(d).trim()}`))
   dshChild.on('exit', (code) => {
+    // [问题75] 身份守卫:被 killDshTree 杀掉的旧实例 exit 事件会延迟到达,
+    // 若无条件置空 dshChild 并拉起 recovery,会把切换/重启刚拉起的新进程
+    // 引用抹掉并二次拉起 → 双实例撞端口(EADDRINUSE 崩溃循环)。
+    if (dshChild !== childRef) return
     log(`dsh 子进程退出 code=${code}`)
     dshChild = null
     if (!quitting) scheduleRecovery()
@@ -223,12 +307,21 @@ async function scheduleRecovery() {
     recoveryTimer = null
     if (quitting) return
     if (!startDsh()) return
+    const child = dshChild // 锁定本次恢复拉起的进程,防止后续恢复周期替换后误清零计数
     const ok = await waitForPort(START_TIMEOUT_MS)
     if (ok) {
-      restartAttempts = 0
-      log('自动恢复成功')
+      // 端口监听不代表 boot 完成:插件树加载失败会让进程在 listen 后 1-2s 退出。
+      // 先刷页面保住 UX,退避计数留待稳定期确认后再清零——否则每次崩溃循环都把
+      // 计数重置为 0,3 次熔断永远不触发,表现为无限重启。
       stage('ready')
       loadUrlAll(DSH_URL)
+      await sleep(RECOVERY_STABILIZE_MS)
+      if (!quitting && dshChild === child && (await isPortUp())) {
+        restartAttempts = 0
+        log('自动恢复成功')
+      } else {
+        log('恢复后未通过稳定期(进程退出或端口丢失),保留退避计数')
+      }
     }
     // 失败则等子进程 exit 事件再次进入 scheduleRecovery
   }, delay)
@@ -358,14 +451,16 @@ async function restartDsh(timeoutMs = START_TIMEOUT_MS) {
 
 // ---------- npm 查询(dsh 版本/更新) ----------
 
-// 经与 npx 同源的 npm.cmd 执行查询;返回 stdout 字符串,失败返回 null
+// 经与 npx 同源的 npm.cmd 执行查询;返回 stdout 字符串,失败返回 null。
+// [问题78] --registry 固定官方 npm 源(版本列表/最新版判定的唯一权威来源),
+// 不受用户 npm 配置里的镜像影响。
 function npmView(args) {
   return new Promise((resolve) => {
     const npx = resolveNpxCommand()
     if (!npx) return resolve(null)
     const npmCmd = npx.replace(/npx\.cmd$/i, 'npm.cmd')
     if (!fs.existsSync(npmCmd)) return resolve(null)
-    const child = spawn('cmd.exe', ['/c', npmCmd, 'view', '@deepseek-ai/dsh', ...args],
+    const child = spawn('cmd.exe', ['/c', npmCmd, ...REGISTRY_ARGS, 'view', '@deepseek-ai/dsh', ...args],
       { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
     let out = ''
     let done = false
@@ -408,19 +503,59 @@ async function fetchAvailableVersions() {
   } catch { /* 解析失败保持原列表 */ }
 }
 
-// 版本预检:npx 拉包并执行 --version,验证该版本可运行(旧 rc 可能包损坏/不兼容)
-function probeDshVersion(version) {
+// 版本预检:验证目标版本可运行(旧 rc 可能包损坏/不兼容)。
+// [问题75] 双路径:① 目标版本已在 npx 缓存 → node 直跑 --version,秒级离线验证;
+// ② 否则 npx 拉包——dsh 依赖树 250+ 包,慢源逐个再验证+解包实测可达数分钟,
+// 原 60s 超时必被误判"版本不可用"而取消切换,预算提到 300s 并加 --prefer-offline。
+// [问题78] 下载/安装固定官方 npm 源:此前默认走用户配置的镜像,曾致 npm idealTree
+// 解析 dsh 预发布依赖范围纯 CPU 卡死十几分钟、逐包再验证奇慢——更新"卡住/静默失败"
+// 的直接根源。官方源实测连通且元数据权威,拉取行为可预期。
+async function probeDshVersion(version) {
+  // 快速路径:缓存命中直接 node 验证,不走网络
+  const binJs = resolveCachedDshBin(version)
+  const nodeExe = binJs ? resolveNodeExe() : null
+  if (binJs && nodeExe) {
+    return new Promise((resolve) => {
+      const child = spawn(nodeExe, [binJs, '--version'],
+        { cwd: os.homedir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      let out = ''
+      let done = false
+      const finish = (v) => { if (!done) { done = true; resolve(v) } }
+      const timer = setTimeout(() => { try { child.kill() } catch {}; finish({ ok: false, error: '缓存版本运行超时(30s)' }) }, 30_000)
+      child.stdout.on('data', (d) => { out += d })
+      child.on('exit', (code) => {
+        clearTimeout(timer)
+        if (code === 0) finish({ ok: true, version: out.trim().split(/\r?\n/).pop() })
+        else finish({ ok: false, error: `缓存版本退出码 ${code}` })
+      })
+      child.on('error', (e) => { clearTimeout(timer); finish({ ok: false, error: e.message }) })
+    })
+  }
+  // 慢速路径①:npx 从官方源拉包验证([问题78])
+  const r = await npxProbeDsh(version)
+  if (r.ok) return r
+  // 慢速路径②:[问题78] npx(npm) 解析 dsh 预发布依赖树本机实测可达十分钟级,
+  // 失败/超时且 pnpm 可用时改 pnpm 播种官方源(同树实测数十秒装完),
+  // 播种目录兼容 npx 缓存结构,启动快速路径可直接命中。
+  log(`预检 ${version}:npx 拉取失败(${r.error}),改 pnpm 从官方源播种`)
+  settingsStatus({ phase: 'apply', message: `正在用备用安装器从官方源下载 ${version}…` })
+  return pnpmSeedDsh(version)
+}
+
+// 慢速路径①实体:npx 官方源拉包跑 --version(300s 预算)。
+function npxProbeDsh(version) {
   return new Promise((resolve) => {
     const npx = resolveNpxCommand()
     if (!npx) return resolve({ ok: false, error: '未找到 npx' })
     const spec = `@deepseek-ai/dsh@${version}`
-    const child = spawn('cmd.exe', ['/c', npx, '-y', spec, '--version'],
+    log(`预检 ${version}:从官方源 ${DSH_REGISTRY} 拉取验证(缓存未命中)`)
+    const child = spawn('cmd.exe', ['/c', npx, ...REGISTRY_ARGS, '--prefer-offline', '-y', spec, '--version'],
       { cwd: os.homedir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
     let err = ''
     let done = false
     const finish = (v) => { if (!done) { done = true; resolve(v) } }
-    const timer = setTimeout(() => { try { child.kill() } catch {}; finish({ ok: false, error: '预检超时(60s),版本可能无法下载' }) }, 60_000)
+    const timer = setTimeout(() => { try { child.kill() } catch {}; finish({ ok: false, error: '预检超时(300s),依赖树下载过慢' }) }, 300_000)
     child.stdout.on('data', (d) => { out += d })
     child.stderr.on('data', (d) => { err += d })
     child.on('exit', (code) => {
@@ -430,6 +565,102 @@ function probeDshVersion(version) {
     })
     child.on('error', (e) => { clearTimeout(timer); finish({ ok: false, error: e.message }) })
   })
+}
+
+// 解析 pnpm:优先 npx 同目录的 pnpm.cmd,否则 PATH where。
+function resolvePnpmCommand() {
+  const npx = resolveNpxCommand()
+  if (npx) {
+    const candidate = path.join(path.dirname(npx), 'pnpm.cmd')
+    if (fs.existsSync(candidate)) return candidate
+  }
+  try {
+    const r = spawnSync('where.exe', ['pnpm.cmd'], { windowsHide: true, encoding: 'utf8' })
+    const first = (r.stdout || '').split(/\r?\n/).find((l) => l.trim())
+    if (first) return first.trim()
+  } catch { /* 忽略 */ }
+  return null
+}
+
+// 慢速路径②实体:[问题78] pnpm 从官方源播种目标版本到 npx 缓存目录结构
+// (npm-cache/_npx/<dir>/node_modules),resolveCachedDshBin 快速路径可直接命中。
+// 原生依赖构建脚本需显式放行;pnpm 11 已不读 package.json 的 pnpm 字段(会致
+// install 退出码 1),只认 pnpm-workspace.yaml 的 onlyBuiltDependencies;装完
+// 补跑 rebuild 确保原生模块构建,最后 node 直跑验证。
+function pnpmSeedDsh(version) {
+  return new Promise((resolve) => {
+    const pnpm = resolvePnpmCommand()
+    if (!pnpm) return resolve({ ok: false, error: 'npx 拉取失败且未找到 pnpm,请手动 npx 预热' })
+    const seedDir = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+      'npm-cache', '_npx', `dsh-${version}-pnpm-seed`)
+    try {
+      fs.mkdirSync(seedDir, { recursive: true })
+      const allowBuilds = ['@deepseek-ai/dsh-subprocess-local', '@google/genai', 'koffi', 'node-pty', 'protobufjs']
+      fs.writeFileSync(path.join(seedDir, 'package.json'), JSON.stringify({
+        name: `dsh-${version.replace(/[^0-9a-z.-]/gi, '_')}-seed`,
+        private: true,
+        dependencies: { '@deepseek-ai/dsh': version },
+      }))
+      fs.writeFileSync(path.join(seedDir, 'pnpm-workspace.yaml'),
+        'onlyBuiltDependencies:\n' + allowBuilds.map((n) => `  - '${n}'`).join('\n') + '\n')
+    } catch (e) { return resolve({ ok: false, error: `播种目录准备失败: ${e.message}` }) }
+    log(`预检 ${version}:pnpm 播种 ${seedDir}(官方源 ${DSH_REGISTRY})`)
+    const child = spawn('cmd.exe', ['/c', pnpm, 'install', `--registry=${DSH_REGISTRY}`],
+      { cwd: seedDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    let err = ''
+    let done = false
+    const finish = (v) => { if (!done) { done = true; resolve(v) } }
+    const timer = setTimeout(() => { try { child.kill() } catch {}; finish({ ok: false, error: 'pnpm 播种超时(300s)' }) }, 300_000)
+    child.stderr.on('data', (d) => { err += d })
+    child.on('error', (e) => { clearTimeout(timer); finish({ ok: false, error: e.message }) })
+    child.on('exit', (code) => {
+      clearTimeout(timer)
+      // pnpm 11 遇未放行的构建脚本会以退出码 1 结束但依赖树已装好,
+      // 放行清单在 pnpm-workspace.yaml,后续 rebuild 会补执行构建。
+      if (code !== 0 && code !== 1) return finish({ ok: false, error: `pnpm install 退出码 ${code}: ${err.trim().slice(0, 160)}` })
+      // 补跑构建脚本(pnpm 11 install 阶段拦截未放行脚本),随后 node 验证
+      const rb = spawn('cmd.exe', ['/c', pnpm, 'rebuild'],
+        { cwd: seedDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      const rbTimer = setTimeout(() => { try { rb.kill() } catch {} }, 120_000)
+      rb.on('error', () => { clearTimeout(rbTimer); finish({ ok: false, error: 'pnpm rebuild 失败' }) })
+      rb.on('exit', () => {
+        clearTimeout(rbTimer)
+        const binJs = resolveCachedDshBin(version)
+        const nodeExe = binJs ? resolveNodeExe() : null
+        if (!binJs || !nodeExe) return finish({ ok: false, error: 'pnpm 播种后仍未在缓存发现目标版本' })
+        const v = spawn(nodeExe, [binJs, '--version'],
+          { cwd: os.homedir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+        let out = ''
+        const vTimer = setTimeout(() => { try { v.kill() } catch {}; finish({ ok: false, error: '播种版本运行超时(30s)' }) }, 30_000)
+        v.stdout.on('data', (d) => { out += d })
+        v.on('exit', (c2) => {
+          clearTimeout(vTimer)
+          if (c2 === 0) finish({ ok: true, version: out.trim().split(/\r?\n/).pop() })
+          else finish({ ok: false, error: `播种版本退出码 ${c2}` })
+        })
+        v.on('error', (e2) => { clearTimeout(vTimer); finish({ ok: false, error: e2.message }) })
+      })
+    })
+  })
+}
+
+// [问题75] 解析 dsh 最新可用版本:npm latest dist-tag 不收录预发布版(rc.x),
+// 仅查 latest 会把 rc.8 等新版本永远判为"已是最新"。改为全量 versions 清单内
+// 取 ≥ MIN_PUBLIC_DSH_VERSION 的最高版本;清单获取失败时回退 latest 标签。
+async function resolveNewestPublicDsh() {
+  const raw = await npmView(['versions', '--json'])
+  if (raw) {
+    try {
+      const list = JSON.parse(raw)
+      if (Array.isArray(list) && list.length) {
+        const eligible = list.filter((v) => parseDshVersion(v) && cmpDshVersion(v, MIN_PUBLIC_DSH_VERSION) >= 0)
+        if (eligible.length) {
+          return eligible.reduce((a, b) => (cmpDshVersion(b, a) > 0 ? b : a))
+        }
+      }
+    } catch { /* 解析失败走回退 */ }
+  }
+  return npmView(['version'])
 }
 
 // 设置页进度推送
@@ -469,9 +700,10 @@ async function checkDshUpdate(manual) {
     if (manual) notify('dsh 更新', '当前跟踪 latest,每次启动自动使用最新版。')
     return // 跟踪 latest 时 npx 每次拉最新,无需比对
   }
-  const latest = await npmView(['version'])
+  // [问题78] resolveNewestPublicDsh 内部 npmView 已固定官方源;失败时提示指向官方源
+  const latest = await resolveNewestPublicDsh()
   if (!latest) {
-    if (manual) notify('dsh 更新', '查询 npm 失败,请检查网络。')
+    if (manual) notify('dsh 更新', `查询官方源 ${DSH_REGISTRY} 失败,请检查网络。`)
     return
   }
   if (latest === cfg.dshVersion) {
@@ -563,7 +795,9 @@ async function checkShellUpdate() {
   }
   try {
     const result = await autoUpdater.checkForUpdates()
-    if (result && !result.updateInfo || result.updateInfo.version === app.getVersion()) {
+    const remote = result && result.updateInfo && result.updateInfo.version
+    // [问题50] semver 判定:远端不高于本地即视为最新(electron-updater 自身不会降级安装,但提示文案须诚实)
+    if (!remote || !semverGt(remote, app.getVersion())) {
       notify('检查更新', `壳已是最新版 ${app.getVersion()}。`)
     }
   } catch (e) {
@@ -573,6 +807,26 @@ async function checkShellUpdate() {
 }
 
 // ---------- 更新 tab(Web UI 经壳 API 驱动,无弹窗版检查/应用) ----------
+
+/** 语义化版本比较:a > b 返 true(逐段数字比,前缀相同短者小;非数字段退化为字符串比)。 */
+function semverGt(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  const pa = a.replace(/^v/i, '').split(/[.-]/)
+  const pb = b.replace(/^v/i, '').split(/[.-]/)
+  const n = Math.max(pa.length, pb.length)
+  for (let i = 0; i < n; i++) {
+    const xa = pa[i], xb = pb[i]
+    if (xa === undefined) return false // a 短且前缀相同 → a < b
+    if (xb === undefined) return true
+    const na = Number(xa), nb = Number(xb)
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) {
+      if (na !== nb) return na > nb
+    } else {
+      if (xa !== xb) return xa > xb
+    }
+  }
+  return false
+}
 
 /** 无副作用的即时状态(不发网络请求)。 */
 function updatesStatePayload() {
@@ -605,14 +859,17 @@ async function updatesCheckPayload() {
       out.shellNote = '开发模式(源码运行),跳过壳更新检查'
     }
   } catch (e) { out.shellError = e.message }
-  if (out.shellLatest) out.shellUpdateAvailable = out.shellLatest !== app.getVersion()
+  // [问题50] 版本判定从「不相等即更新」改为 semver 大于——否则 GitHub latest.yml
+  // 滞后于本地版本(如 0.4.0 vs 本地 0.4.3)会误报可更新,诱导降级安装。
+  if (out.shellLatest) out.shellUpdateAvailable = semverGt(out.shellLatest, app.getVersion())
   if (cfg.dshVersion === 'latest') {
     out.dshTracksLatest = true
   } else {
-    const latest = await npmView(['version'])
+    // [问题75] 取全量清单最高公开版而非 latest 标签(rc 版不进 latest)
+    const latest = await resolveNewestPublicDsh()
     if (latest) {
       out.dshLatest = latest
-      out.dshUpdateAvailable = latest !== cfg.dshVersion
+      out.dshUpdateAvailable = semverGt(latest, cfg.dshVersion)
     } else {
       out.dshError = '查询 npm 失败,请检查网络'
     }
@@ -623,7 +880,8 @@ async function updatesCheckPayload() {
 /** 应用 dsh 最新版(异步,前端轮询 /state 的 switching/restarting)。 */
 async function applyDshLatest() {
   if (switching || restarting) return { ok: false, error: '已有切换或重启在进行' }
-  const latest = await npmView(['version'])
+  // [问题75] 目标版本取全量清单最高公开版(latest 标签不含 rc 新版)
+  const latest = await resolveNewestPublicDsh()
   if (!latest) return { ok: false, error: '查询 npm 失败,请检查网络' }
   if (latest === cfg.dshVersion) return { ok: true, note: '已是最新版' }
   switchDshVersion(latest) // 内部自带预检+回滚+switching 互斥
@@ -661,36 +919,74 @@ function createSplash() {
 }
 
 // 无边框主窗拖拽区注入样式:dsh Web UI 的 CSS Modules 哈希类名保留原名后缀
-// (如 pI_x6G_logoRow),用 [class*="_xxx"] 匹配。侧栏顶行(60px)可拖拽,
-// 按钮排除;窗口顶部 6px 细条兜底,保证任意位置都有拖拽手柄。
+// (如 pI_x6G_logoRow),用 [class*="_xxx"] 匹配。
+// [问题77] 拖拽区扩展为整个顶栏:侧栏 logoRow + 中列 header(标题行/
+// 空白区/tab 行空隙)均可拖拽;交互控件(按钮/链接/输入/tab/下拉)毯式
+// 排除 no-drag,点击与拖拽互不干扰;窗口顶部 6px 细条兜底。
 const TITLEBAR_DRAG_CSS = `
   [class*="_logoRow"] { -webkit-app-region: drag; }
   [class*="_logoRow"] button,
   [class*="_logoRow"] a,
   [class*="_logoRow"] [role="button"] { -webkit-app-region: no-drag; }
+  header[class*="_header"] { -webkit-app-region: drag; }
+  header[class*="_header"] button,
+  header[class*="_header"] a,
+  header[class*="_header"] input,
+  header[class*="_header"] select,
+  header[class*="_header"] textarea,
+  header[class*="_header"] [role="button"],
+  header[class*="_header"] [role="tab"],
+  header[class*="_header"] [role="combobox"],
+  header[class*="_header"] [role="menuitem"],
+  header[class*="_header"] [contenteditable] { -webkit-app-region: no-drag; }
   [class*="_frame"]::after {
     content: ''; position: absolute; top: 0; left: 0; right: 0; height: 6px;
     -webkit-app-region: drag; z-index: 40;
   }
 `
 
-// 自定义窗口控制按钮样式:右上角浮层,悬停浅灰(深浅背景均可见)/关闭红,Windows 惯例尺寸。
+// [问题77] macOS(Codex Mac 版)风格窗口控件:圆形红黄绿小点,静息态中性灰
+// 融入亮/暗主题与壁纸,悬停点亮交通灯色并显形符号;无边框无分隔线,
+// 与内容区自然融合。点击热区 24px(::before 画 12px 圆点)。
+// [问题68永久修复] 顶部安全区单一事实来源:控件几何(高度/右侧占位)只有
+// 壳自己知道,在此以 CSS 变量发布(随 insertCSS 每次导航重放,永与控件同版)。
+// 页面层(dshvt 覆盖层)消费该令牌给顶到窗口上沿的视图留安全区,并以硬底线
+// 兜底旧壳无变量的场景。控件改高度/边距时只改此处,消费侧自动同步。
+// --dsh-titlebar-safe:控件高度 40 + 4px 视觉间隙 = 44px;
+// --dsh-titlebar-safe-right:right 10 + 宽度 76 = 86px 占位 + 14px 间隙 = 100px。
 const TITLEBAR_CONTROLS_CSS = `
+  html {
+    --dsh-titlebar-safe: 44px;
+    --dsh-titlebar-safe-right: 100px;
+  }
   #dsh-desktop-win-controls {
-    position: fixed; top: 0; right: 0; z-index: 2147483647;
-    display: flex; height: 36px; direction: ltr;
+    position: fixed; top: 0; right: 10px; z-index: 2147483647;
+    display: flex; align-items: center; gap: 2px; height: 40px; direction: ltr;
     -webkit-app-region: no-drag;
     font-family: system-ui, sans-serif;
   }
   #dsh-desktop-win-controls .wcBtn {
-    width: 46px; height: 36px; display: flex; align-items: center; justify-content: center;
+    position: relative; width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
     color: #3d444d; cursor: default; user-select: none;
-    transition: background .1s ease;
   }
-  #dsh-desktop-win-controls .wcBtn:hover { background: rgba(128,128,128,.35); }
-  #dsh-desktop-win-controls .wcBtn:active { background: rgba(128,128,128,.5); }
-  #dsh-desktop-win-controls .wcClose:hover { background: #e81123; color: #fff; }
-  #dsh-desktop-win-controls .wcClose:active { background: #c50f1f; color: #fff; }
+  #dsh-desktop-win-controls .wcBtn::before {
+    content: ''; width: 12px; height: 12px; border-radius: 50%;
+    background: rgba(127,127,127,.38);
+    transition: background .12s ease;
+  }
+  #dsh-desktop-win-controls .wcBtn svg {
+    position: absolute; width: 8px; height: 8px;
+    opacity: 0; transition: opacity .12s ease;
+    color: rgba(20,22,26,.72);
+  }
+  #dsh-desktop-win-controls:hover .wcBtn svg { opacity: 1; }
+  #dsh-desktop-win-controls .wcBtn[data-act="min"]:hover::before { background: #febc2e; }
+  #dsh-desktop-win-controls .wcBtn[data-act="min"]:active::before { background: #d9a017; }
+  #dsh-desktop-win-controls .wcBtn[data-act="max"]:hover::before { background: #28c840; }
+  #dsh-desktop-win-controls .wcBtn[data-act="max"]:active::before { background: #1f9a3b; }
+  #dsh-desktop-win-controls .wcBtn.wcClose:hover::before { background: #ff5f57; }
+  #dsh-desktop-win-controls .wcBtn.wcClose:active::before { background: #d94a41; }
 `
 
 // 自定义窗口控制按钮注入脚本:原生 titleBarOverlay 悬停反馈过弱且不可定制,弃用;
@@ -1375,7 +1671,9 @@ function wallpaperFileOf(id, kind) {
 
 /** 读/写皮肤应用状态(持久化在 desktop-config.json 的 skin 字段)。 */
 function getSkinState() {
-  return cfg.skin || { bg: null, audio: null, dim: 0.45, volume: 0.35 }
+  const s = cfg.skin || { bg: null, audio: null, dim: 0.45, volume: 0.35 }
+  // [R48→问题71] glass 默认关:仅用户显式开启才生效,避免启动/设置页切模块时玻璃自启
+  return { glass: false, ...s }
 }
 
 function setSkinState(patch) {
@@ -1385,10 +1683,136 @@ function setSkinState(patch) {
     audio: 'audio' in patch ? patch.audio : cur.audio,
     dim: typeof patch.dim === 'number' ? Math.min(0.9, Math.max(0, patch.dim)) : cur.dim,
     volume: typeof patch.volume === 'number' ? Math.min(1, Math.max(0, patch.volume)) : cur.volume,
+    glass: typeof patch.glass === 'boolean' ? patch.glass : cur.glass,
   }
   cfg.skin = next
   saveConfig(cfg)
   return next
+}
+
+// [问题4] 解析提示词增强用的 provider:读 ~/.dsh/settings.yaml(浅正则) + ~/.dsh/.credentials.yaml + 环境变量。
+// key 只在壳进程内使用,不暴露给 renderer。
+// [增强修复 2026-08] agent-default-model.provider 可能指向上游内置 provider(如 deepseek-official),
+// settings.yaml 中并不存在同名段 → 旧逻辑恒 null → 409。改为候选链解析:
+// 收集所有 llm-* 顶层段与其嵌套 providers 子段,按 (名字命中默认 provider > 模型目录含默认模型 > 官方缺省端点 > 文件序)
+// 打分排序,/enhance 逐个候选尝试,端点 401/403/模型不存在时自动切换下一候选。
+function parseEnhanceCredentialsKey(apiKeyEnv) {
+  if (!apiKeyEnv) return undefined
+  if (process.env[apiKeyEnv]) return process.env[apiKeyEnv]
+  try {
+    const creds = fs.readFileSync(path.join(DSH_HOME, '.credentials.yaml'), 'utf8')
+    // 支持顶层与 refs: 缩进条目;值可带引号
+    const m = new RegExp(`^\\s*${apiKeyEnv}:\\s*["']?([^"'\\s]+)["']?\\s*$`, 'm').exec(creds)
+    if (m) return m[1]
+  } catch { /* 无凭据文件 */ }
+  return undefined
+}
+
+// 浅解析 settings.yaml 的全部 provider 块。返回 [{name, nested, apiKeyEnv, baseURL, ids[]}]
+function collectEnhanceBlocks() {
+  const settings = fs.readFileSync(path.join(DSH_HOME, 'settings.yaml'), 'utf8')
+  const lines = settings.split(/\r?\n/)
+  const blocks = []
+  // 顶层段切分:行首非缩进的 llm-<name>:
+  const tops = []
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^llm-([\w-]+):\s*$/.exec(lines[i])
+    if (m) tops.push({ name: m[1], start: i })
+  }
+  tops.forEach((top, ti) => {
+    const end = ti + 1 < tops.length ? tops[ti + 1].start : lines.length
+    const body = lines.slice(top.start + 1, end)
+    // 段体直接字段(顶层段自带 apiKeyEnv/models 的形态,如 llm-deepseek)
+    const directKeyEnv = /^\s+apiKeyEnv:\s*(\S+)/m.exec(body.join('\n'))?.[1]
+    const directBase = /^\s+baseURL:\s*(\S+)/m.exec(body.join('\n'))?.[1]
+    // 嵌套 providers: 行
+    const provIdx = body.findIndex((l) => /^(\s+)providers:\s*$/.test(l))
+    const ownBody = provIdx < 0 ? body : body.slice(0, provIdx)
+    const ownIds = [...ownBody.join('\n').matchAll(/-\s*id:\s*(\S+)/g)].map((x) => x[1])
+    if (directKeyEnv || ownIds.length) {
+      blocks.push({ name: top.name, nested: false, apiKeyEnv: directKeyEnv, baseURL: directBase, ids: ownIds })
+    }
+    if (provIdx >= 0) {
+      const provIndent = /^(\s+)providers:\s*$/.exec(body[provIdx])[1].length
+      // 子段头:缩进深于 providers: 的 <name>: 行
+      const subStarts = []
+      for (let k = provIdx + 1; k < body.length; k++) {
+        const sm = /^(\s+)([\w-]+):\s*$/.exec(body[k])
+        if (sm && sm[1].length > provIndent) subStarts.push({ name: sm[2], indent: sm[1].length, start: k })
+      }
+      subStarts.forEach((sub, si) => {
+        const subEnd = si + 1 < subStarts.length ? subStarts[si + 1].start : body.length
+        const subLines = []
+        for (let k = sub.start + 1; k < subEnd; k++) {
+          const ln = body[k]
+          if (ln.trim() !== '' && /^\s*/.exec(ln)[0].length <= sub.indent) break
+          subLines.push(ln)
+        }
+        const subText = subLines.join('\n')
+        blocks.push({
+          name: sub.name,
+          nested: true,
+          apiKeyEnv: /apiKeyEnv:\s*(\S+)/.exec(subText)?.[1],
+          baseURL: /baseURL:\s*(\S+)/.exec(subText)?.[1],
+          ids: [...subText.matchAll(/-\s*id:\s*(\S+)/g)].map((x) => x[1]),
+        })
+      })
+    }
+  })
+  return blocks
+}
+
+// 候选链:打分排序后的可用 provider 列表(有 key 有模型才入列,上限 3 个)。
+// 返回 { candidates: [{name, baseURL, apiKey, model}], reason? }
+// reason 仅在无候选时给出(缺默认 provider 指向 / 无任何 llm 段 / 全部缺 key 或缺模型)。
+function resolveEnhanceCandidates() {
+  try {
+    const settings = fs.readFileSync(path.join(DSH_HOME, 'settings.yaml'), 'utf8')
+    const defProv = /agent-default-model:\s*\n\s*provider:\s*(\S+)/.exec(settings)?.[1]
+    const defModel = /agent-default-model:\s*\n\s*provider:[^\n]*\n\s*model:\s*(\S+)/.exec(settings)?.[1]
+    const blocks = collectEnhanceBlocks()
+    if (!defProv) return { candidates: [], reason: 'settings.yaml 未配置 agent-default-model.provider' }
+    if (!blocks.length) return { candidates: [], reason: 'settings.yaml 无任何 llm-* provider 段' }
+    const cands = []
+    for (const b of blocks) {
+      const apiKey = parseEnhanceCredentialsKey(b.apiKeyEnv)
+      if (!apiKey) continue // 缺 key 的段跳过(可能换下一候选就能用)
+      // 模型:默认模型在目录内则沿用,否则取目录第一个(避免拿目录外的模型 id 打错端点)
+      const model = (defModel && b.ids.includes(defModel)) ? defModel : b.ids[0]
+      if (!model) continue
+      const baseURL = (b.baseURL || 'https://api.deepseek.com/v1').replace(/\/$/, '') // DeepSeek 官方缺省
+      let score = 0
+      if (b.name === defProv) score += 8 // 名字命中默认 provider(精确段)
+      if (defModel && b.ids.includes(defModel)) score += 2 // 目录含默认模型(比"目录第一个"更贴用户意图)
+      if (!b.baseURL) score += 1 // 官方缺省端点优先(第三方端点模型目录常与官方 id 不一致)
+      cands.push({ name: b.name, baseURL, apiKey, model, score })
+    }
+    if (!cands.length) return { candidates: [], reason: `llm-* 段均缺可用 key(检查 .credentials.yaml 的 ${[...new Set(blocks.map((b) => b.apiKeyEnv).filter(Boolean))].join('/') || 'apiKeyEnv'} 条目)` }
+    cands.sort((a, b2) => b2.score - a.score)
+    return { candidates: cands.slice(0, 3).map(({ name, baseURL, apiKey, model }) => ({ name, baseURL, apiKey, model })) }
+  } catch (e) {
+    return { candidates: [], reason: `配置解析失败: ${e.message}` }
+  }
+}
+
+// 兼容旧调用点(/session-summary):取打分最高的第一候选。
+function resolveEnhanceProvider() {
+  return resolveEnhanceCandidates().candidates[0] || null
+}
+
+// 净化增强输出:去代码块包裹/常见前导语,保证可直接回填输入框。
+function sanitizeEnhanceOutput(out) {
+  let t = String(out).trim()
+  const fence = /^```[\w-]*\s*\n([\s\S]*?)\n?```\s*$/m.exec(t)
+  if (fence) t = fence[1].trim()
+  t = t.replace(/^(?:优化后的?提示词|改写后的?提示词|Enhanced\s+prompt|Rewritten\s+prompt|Improved\s+prompt)\s*[:：]\s*/i, '')
+  return t.trim()
+}
+
+// 模型不存在的错误指纹(不同端点措辞):命中则切换下一候选而非直接报错。
+function isModelMissingError(status, text) {
+  if (status !== 404 && status !== 400) return false
+  return /model[_ ]?not[_ ]?(found|exist)|does not exist|invalid model|unknown model|模型不存在|无效模型/i.test(text)
 }
 
 function startShellApi() {
@@ -1409,6 +1833,171 @@ function startShellApi() {
     const url = new URL(req.url, `http://127.0.0.1:${SHELL_API_PORT}`)
     if (!corsOk) return send(403, { error: 'origin not allowed' })
     try {
+      // ---------- [问题4] 提示词增强:读 dsh provider 配置代理 LLM 调用(key 不进 renderer) ----------
+      // [增强修复 2026-08] 候选链:默认 provider 指向上游内置段(无同名 llm-* 段)时不再恒 409,
+      // 按打分候选逐个尝试;端点模型不存在/鉴权失败自动切下一候选。
+      if (req.method === 'POST' && url.pathname === '/enhance') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { text, context } = JSON.parse(body || '{}')
+        if (typeof text !== 'string' || !text.trim()) return send(400, { ok: false, error: '输入为空' })
+        if (text.length > 16000) return send(400, { ok: false, error: '文本过长(上限 16000 字符)' })
+        const { candidates, reason } = resolveEnhanceCandidates()
+        if (!candidates.length) {
+          log(`[enhance] 无可用 provider: ${reason}`)
+          return send(409, { ok: false, error: `未找到可用的模型 provider: ${reason}` })
+        }
+        // 结构化改写模板:保原意保语言,不虚构;可选会话/工作区上下文并入背景。
+        const ctxLine = (typeof context === 'string' && context.trim())
+          ? `\n当前会话/工作区上下文(仅作背景参考,不得据此虚构用户未提及的需求):${context.trim().slice(0, 300)}`
+          : ''
+        const sys = `你是提示词优化助手。将用户给出的提示词改写为清晰、具体、结构化的版本。
+改写规则:
+1. 完整保留用户原意与原语言(中文输入输出中文,英文输入输出英文);不得虚构用户未提及的事实或需求。
+2. 按以下结构组织(无相关内容的部分可省略):
+## 目标
+## 背景与上下文
+## 要求与约束
+## 输出格式
+3. 把模糊指代改明确,补全可执行的验收标准;控制篇幅,避免无信息量的套话。${ctxLine}
+4. 只输出优化后的提示词正文:不要解释、前言、总结,不要用代码块包裹。`
+        let lastErr = null
+        for (const prov of candidates) {
+          const ac = new AbortController()
+          const timer = setTimeout(() => ac.abort(), 60000) // 思考模型输出慢,45s 偶发截断 → 60s
+          try {
+            const r = await fetch(`${prov.baseURL}/chat/completions`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${prov.apiKey}` },
+              body: JSON.stringify({
+                model: prov.model,
+                messages: [{ role: 'system', content: sys }, { role: 'user', content: text }],
+                temperature: 0.3,
+                max_tokens: 4096, // 思考模型先耗推理 token,预算不足会空输出(实测 80 必空)
+                stream: false,
+              }),
+              signal: ac.signal,
+            })
+            if (!r.ok) {
+              const errText = (await r.text()).slice(0, 300)
+              log(`[enhance] ${prov.name}/${prov.model} HTTP ${r.status}: ${errText.slice(0, 120)}`)
+              // 模型不存在/鉴权失败 → 换下一候选;其余(限流/服务端)直接报错避免叠加延迟。
+              if (isModelMissingError(r.status, errText) || r.status === 401 || r.status === 403) {
+                lastErr = `provider HTTP ${r.status}: ${errText}`
+                continue
+              }
+              return send(502, { ok: false, error: `provider HTTP ${r.status}: ${errText}` })
+            }
+            const data = await r.json()
+            const out = sanitizeEnhanceOutput(data?.choices?.[0]?.message?.content ?? '')
+            if (!out) {
+              // 空输出多为思考模型 token 预算耗尽;换候选重试一次而非直接失败。
+              log(`[enhance] ${prov.name}/${prov.model} 返回空内容`)
+              lastErr = 'provider 返回空内容'
+              continue
+            }
+            return send(200, { ok: true, text: out, provider: prov.name })
+          } catch (e) {
+            const msg = e.name === 'AbortError' ? '增强超时(60s)' : `请求失败: ${e.message}`
+            log(`[enhance] ${prov.name}/${prov.model} ${msg}`)
+            // 超时/网络故障直接报错(下一候选大概率同样慢);其余异常换候选。
+            if (e.name !== 'AbortError') { lastErr = msg; continue }
+            return send(502, { ok: false, error: msg })
+          } finally { clearTimeout(timer) }
+        }
+        return send(502, { ok: false, error: `全部候选 provider 失败: ${lastErr || '未知错误'}` })
+      }
+      // ---------- [需求] 目录选择器盘符列表:Windows 逐字母探测存在性(24H2 已移 wmic,不依赖外部命令) ----------
+      // 非 Windows 返空数组(POSIX 无盘符概念,前端不渲染盘符行)。
+      if (req.method === 'GET' && url.pathname === '/drives') {
+        if (process.platform !== 'win32') return send(200, { ok: true, drives: [] })
+        const drives = []
+        for (let i = 65; i <= 90; i++) { // A-Z
+          const root = String.fromCharCode(i) + ':\\'
+          try { if (fs.existsSync(root)) drives.push(String.fromCharCode(i) + ':') } catch { /* 不可读卡(A:软驱等)跳过 */ }
+        }
+        return send(200, { ok: true, drives })
+      }
+      // ---------- [R44] 侧边栏浏览器代理:剥离 X-Frame-Options/CSP frame-ancestors 使页面可嵌 iframe ----------
+      // electronNet 走 Chromium 网络栈(遵循系统代理,代理环境下直连 node:http 常失败)。
+      // 只过 HTML/文本类内容;二进制(图片/视频)透传。不做 URL 白名单——本地工具自负责。
+      if (req.method === 'GET' && url.pathname === '/browse') {
+        const target = url.searchParams.get('url')
+        if (!target || !/^https?:\/\//i.test(target)) return send(400, { ok: false, error: '需要 http(s) url 参数' })
+        try {
+          const upstream = await electronNet.fetch(target, { redirect: 'follow', signal: AbortSignal.timeout(25_000) })
+          const body = Buffer.from(await upstream.arrayBuffer())
+          res.writeHead(upstream.status >= 400 ? 502 : 200, {
+            ...base,
+            'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
+            'Cache-Control': 'no-store',
+            // 不转发 X-Frame-Options / CSP,使内容可被壳内 iframe 嵌入
+          })
+          res.end(body)
+        } catch (e) {
+          return send(502, { ok: false, error: `拉取失败: ${e.message}` })
+        }
+        return
+      }
+      // ---------- [问题 48] 会话智能摘要:首轮对话完成后生成 ≤20 字摘要,侧栏会话行副标题显示 ----------
+      // 缓存于 ~/.dsh/session-summaries.json(sessionId → 摘要),每会话只生成一次。
+      if (req.method === 'GET' && url.pathname === '/session-summaries') {
+        let summaries = {}
+        try { summaries = JSON.parse(fs.readFileSync(SUMMARY_FILE, 'utf8')) } catch { /* 首次无缓存 */ }
+        return send(200, { ok: true, summaries })
+      }
+      if (req.method === 'POST' && url.pathname === '/session-summary') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { sessionId, text } = JSON.parse(body || '{}')
+        if (typeof sessionId !== 'string' || !sessionId) return send(400, { ok: false, error: '缺 sessionId' })
+        if (typeof text !== 'string' || !text.trim()) return send(400, { ok: false, error: '内容为空' })
+        let cache = {}
+        try { cache = JSON.parse(fs.readFileSync(SUMMARY_FILE, 'utf8')) } catch { /* 首次 */ }
+        if (cache[sessionId]) return send(200, { ok: true, summary: cache[sessionId], cached: true })
+        const prov = resolveEnhanceProvider()
+        if (!prov) {
+          log('[summary] 未找到可用 provider')
+          return send(409, { ok: false, error: '未找到可用的模型 provider' })
+        }
+        const sys = '你是会话摘要助手。根据会话首轮内容生成不超过 20 字的摘要,点明核心主题;内容中文则输出中文,英文则输出英文;只输出摘要正文,不要引号、标点结尾、前缀或解释。'
+        const ac = new AbortController()
+        const timer = setTimeout(() => ac.abort(), 30000)
+        try {
+          const r = await fetch(`${prov.baseURL}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${prov.apiKey}` },
+            body: JSON.stringify({
+              model: prov.model,
+              messages: [{ role: 'system', content: sys }, { role: 'user', content: text.slice(0, 3000) }],
+              temperature: 0.2,
+              max_tokens: 2048, // 推理模型先消耗推理 token,过小会致 content 空(实测 80 必空;与 /enhance 一致)
+              stream: false,
+            }),
+            signal: ac.signal,
+          })
+          if (!r.ok) {
+            const errText = (await r.text()).slice(0, 200)
+            log(`[summary] provider HTTP ${r.status}: ${errText.slice(0, 120)}`)
+            return send(502, { ok: false, error: `provider HTTP ${r.status}` })
+          }
+          const data = await r.json()
+          const out = data?.choices?.[0]?.message?.content
+          if (typeof out !== 'string' || !out.trim()) {
+            log('[summary] provider 返回空内容')
+            return send(502, { ok: false, error: 'provider 返回空内容' })
+          }
+          const summary = out.trim().replace(/^["'“”\s]+/, '').replace(/["'“”。.!！\s]+$/, '').slice(0, 30)
+          cache[sessionId] = summary
+          try { fs.writeFileSync(SUMMARY_FILE, JSON.stringify(cache, null, 1)) } catch (e) { log(`[summary] 缓存写入失败: ${e.message}`) }
+          log(`[summary] ${sessionId.slice(0, 8)}… → ${summary}`)
+          return send(200, { ok: true, summary })
+        } catch (e) {
+          const msg = e.name === 'AbortError' ? '摘要超时(30s)' : `请求失败: ${e.message}`
+          log(`[summary] ${msg}`)
+          return send(502, { ok: false, error: msg })
+        } finally { clearTimeout(timer) }
+      }
       // ---------- 皮肤:静态文件服务(自定义资产 + WE 预览/视频,视频支持 Range) ----------
       const sendFile = (file, mime) => {
         let stat
