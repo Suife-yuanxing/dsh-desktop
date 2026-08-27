@@ -8,7 +8,37 @@ const http = require('node:http')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { replayAll: replayLocalPatches } = require('./patches.cjs')
+// [问题99 2026-08-23] 补丁重放器单一事实来源:优先加载 ~/.dsh/patches.cjs(壳外部署面,
+// 升级重放器无需重建/重新部署 asar),不存在或损坏时回退 asar 内嵌副本。
+// 背景:运行中壳曾从 Temp 目录的旧 asar 启动(8-21 02:55 构建,内嵌 0.13 时代锚点),
+// 壳每次启动旧重放器对 0.15.1 全 FAIL 后按「还原 base」设计把新补丁整体抹掉——
+// 侧边栏显示/入口随机回退原生形态且修复后复发的直接元凶。哨兵机制(见 patches.cjs)
+// 已让新旧副本互不误伤,本通道再把「更新重放器必须重建 asar」这一结构根因消除。
+let replayLocalPatches
+try {
+  replayLocalPatches = require(path.join(os.homedir(), '.dsh', 'patches.cjs')).replayAll
+} catch {
+  replayLocalPatches = require('./patches.cjs').replayAll
+}
+
+// [问题99] 补丁守护:周期性幂等重放,覆盖「壳运行期间外部覆盖产物」的窗口
+// (市场安装/更新/卸载、CLI pnpm 对账、手工操作)。哨兵快速通道保证已补丁态零写盘;
+// 日志只在 ok 状态翻转与 FAIL 明细时输出,避免刷屏。unref 不阻碍进程退出。
+function startPatchGuardian(intervalMs = 45_000) {
+  let lastOk = null
+  const timer = setInterval(() => {
+    try {
+      const r = replayLocalPatches(() => {})
+      if (r.ok !== lastOk) {
+        log(`[patch-guardian] 状态翻转 ok=${r.ok}(外部覆盖后自动重放恢复或存在失配)`)
+        lastOk = r.ok
+      }
+      if (!r.ok) for (const it of r.items) if (!it.ok) log(`[patch-guardian] FAIL ${it.file}: ${(it.failures || []).join('; ')}`)
+    } catch (e) { log(`[patch-guardian] 异常: ${e.message}`) }
+  }, intervalMs)
+  if (timer.unref) timer.unref()
+  return timer
+}
 
 const DSH_PORT = 3080
 const DSH_URL = `http://127.0.0.1:${DSH_PORT}`
@@ -1708,11 +1738,18 @@ function parseEnhanceCredentialsKey(apiKeyEnv) {
   return undefined
 }
 
-// 浅解析 settings.yaml 的全部 provider 块。返回 [{name, nested, apiKeyEnv, baseURL, ids[]}]
+// 浅解析 settings.yaml 的全部 provider 块。返回 [{name, nested, apiKeyEnv, baseURL, ids[], names{id:name}}]
+// [q99-增强] 同步收集模型显示名(name 字段):前端传来的是选择器显示名(如 DeepSeek-V4-Flash),
+// 需要 id/name 双通道匹配才能定位到用户界面所选的模型。
 function collectEnhanceBlocks() {
   const settings = fs.readFileSync(path.join(DSH_HOME, 'settings.yaml'), 'utf8')
   const lines = settings.split(/\r?\n/)
   const blocks = []
+  const collectPairs = (text) => {
+    const pairs = [...text.matchAll(/-\s*id:\s*(\S+)(?:\s*\r?\n\s*name:\s*(.+))?/g)]
+      .map((x) => ({ id: x[1], name: x[2] ? x[2].trim().replace(/^["']|["']$/g, '') : x[1] }))
+    return { ids: pairs.map((p) => p.id), pairs }
+  }
   // 顶层段切分:行首非缩进的 llm-<name>:
   const tops = []
   for (let i = 0; i < lines.length; i++) {
@@ -1728,18 +1765,23 @@ function collectEnhanceBlocks() {
     // 嵌套 providers: 行
     const provIdx = body.findIndex((l) => /^(\s+)providers:\s*$/.test(l))
     const ownBody = provIdx < 0 ? body : body.slice(0, provIdx)
-    const ownIds = [...ownBody.join('\n').matchAll(/-\s*id:\s*(\S+)/g)].map((x) => x[1])
-    if (directKeyEnv || ownIds.length) {
-      blocks.push({ name: top.name, nested: false, apiKeyEnv: directKeyEnv, baseURL: directBase, ids: ownIds })
+    const own = collectPairs(ownBody.join('\n'))
+    if (directKeyEnv || own.ids.length) {
+      blocks.push({ name: top.name, nested: false, apiKeyEnv: directKeyEnv, baseURL: directBase, ids: own.ids, pairs: own.pairs })
     }
     if (provIdx >= 0) {
       const provIndent = /^(\s+)providers:\s*$/.exec(body[provIdx])[1].length
-      // 子段头:缩进深于 providers: 的 <name>: 行
-      const subStarts = []
+      // 子段头 = providers 的直接子键(缩进恰好为下一级)。[q101] 旧逻辑以「深于 providers:」判定,
+      // 会把子段内部的 retryPolicy:/models:/input:/reasoningEfforts: 等更深键误当兄弟子段头,
+      // 子段文本在 retryPolicy 处被截断 → models 全丢、Aliyun 段永远无候选(增强流量被迫回落官方端点)。
+      // 修正:取所有候选头行的最小缩进为子段层级,仅该层级的行才算子段头。
+      const rawHeads = []
       for (let k = provIdx + 1; k < body.length; k++) {
         const sm = /^(\s+)([\w-]+):\s*$/.exec(body[k])
-        if (sm && sm[1].length > provIndent) subStarts.push({ name: sm[2], indent: sm[1].length, start: k })
+        if (sm && sm[1].length > provIndent) rawHeads.push({ name: sm[2], indent: sm[1].length, start: k })
       }
+      const minIndent = rawHeads.length ? Math.min(...rawHeads.map((h) => h.indent)) : 0
+      const subStarts = rawHeads.filter((h) => h.indent === minIndent)
       subStarts.forEach((sub, si) => {
         const subEnd = si + 1 < subStarts.length ? subStarts[si + 1].start : body.length
         const subLines = []
@@ -1749,12 +1791,14 @@ function collectEnhanceBlocks() {
           subLines.push(ln)
         }
         const subText = subLines.join('\n')
+        const subPairs = collectPairs(subText)
         blocks.push({
           name: sub.name,
           nested: true,
           apiKeyEnv: /apiKeyEnv:\s*(\S+)/.exec(subText)?.[1],
           baseURL: /baseURL:\s*(\S+)/.exec(subText)?.[1],
-          ids: [...subText.matchAll(/-\s*id:\s*(\S+)/g)].map((x) => x[1]),
+          ids: subPairs.ids,
+          pairs: subPairs.pairs,
         })
       })
     }
@@ -1765,31 +1809,42 @@ function collectEnhanceBlocks() {
 // 候选链:打分排序后的可用 provider 列表(有 key 有模型才入列,上限 3 个)。
 // 返回 { candidates: [{name, baseURL, apiKey, model}], reason? }
 // reason 仅在无候选时给出(缺默认 provider 指向 / 无任何 llm 段 / 全部缺 key 或缺模型)。
-function resolveEnhanceCandidates() {
+// [q99-增强] preferredModel:前端传来的界面当前所选模型(显示名或 id)。命中某 provider
+// 目录(id 或 name 双通道)时该 provider 加分置顶,且直接用命中的模型 id 发请求——
+// 保证增强所用模型 = 用户眼前所选,不再只看 settings 默认模型(状态同步根因修复)。
+function resolveEnhanceCandidates(preferredModel) {
   try {
     const settings = fs.readFileSync(path.join(DSH_HOME, 'settings.yaml'), 'utf8')
     const defProv = /agent-default-model:\s*\n\s*provider:\s*(\S+)/.exec(settings)?.[1]
     const defModel = /agent-default-model:\s*\n\s*provider:[^\n]*\n\s*model:\s*(\S+)/.exec(settings)?.[1]
     const blocks = collectEnhanceBlocks()
-    if (!defProv) return { candidates: [], reason: 'settings.yaml 未配置 agent-default-model.provider' }
+    if (!defProv && !preferredModel) return { candidates: [], reason: 'settings.yaml 未配置 agent-default-model.provider' }
     if (!blocks.length) return { candidates: [], reason: 'settings.yaml 无任何 llm-* provider 段' }
+    const pref = (preferredModel || '').trim().toLowerCase()
     const cands = []
     for (const b of blocks) {
       const apiKey = parseEnhanceCredentialsKey(b.apiKeyEnv)
       if (!apiKey) continue // 缺 key 的段跳过(可能换下一候选就能用)
-      // 模型:默认模型在目录内则沿用,否则取目录第一个(避免拿目录外的模型 id 打错端点)
-      const model = (defModel && b.ids.includes(defModel)) ? defModel : b.ids[0]
+      // 界面所选模型优先:name(显示名)精确命中最可信(用户眼前所见,+16);仅 id 命中次之(+12,
+      // 撞名场景归属存疑——双 provider 托管同名模型 id 时,显示名后缀是唯一的消歧信息)。
+      // [q101] Aliyun MaaS 托管 deepseek 系模型与官方段 id 全同,显示名加 (Aliyun) 后缀后,
+      // 前端探针传来的名字天然携带归属,name 精确命中即正确路由,杜绝增强流量误入官方端点。
+      const prefNameHit = pref ? (b.pairs || []).find((p) => (p.name || '').toLowerCase() === pref) : null
+      const prefIdHit = prefNameHit ? null : (pref ? b.ids.find((x) => x.toLowerCase() === pref) : null)
+      const model = prefNameHit ? prefNameHit.id : (prefIdHit || ((defModel && b.ids.includes(defModel)) ? defModel : b.ids[0]))
       if (!model) continue
       const baseURL = (b.baseURL || 'https://api.deepseek.com/v1').replace(/\/$/, '') // DeepSeek 官方缺省
       let score = 0
+      if (prefNameHit) score += 16 // 显示名精确命中(最高优先,用户意图压过一切默认)
+      else if (prefIdHit) score += 12 // 仅 id 命中(撞名时归属存疑,低于 name 精确)
       if (b.name === defProv) score += 8 // 名字命中默认 provider(精确段)
       if (defModel && b.ids.includes(defModel)) score += 2 // 目录含默认模型(比"目录第一个"更贴用户意图)
       if (!b.baseURL) score += 1 // 官方缺省端点优先(第三方端点模型目录常与官方 id 不一致)
-      cands.push({ name: b.name, baseURL, apiKey, model, score })
+      cands.push({ name: b.name, baseURL, apiKey, model, score, prefHit: !!(prefNameHit || prefIdHit) })
     }
     if (!cands.length) return { candidates: [], reason: `llm-* 段均缺可用 key(检查 .credentials.yaml 的 ${[...new Set(blocks.map((b) => b.apiKeyEnv).filter(Boolean))].join('/') || 'apiKeyEnv'} 条目)` }
     cands.sort((a, b2) => b2.score - a.score)
-    return { candidates: cands.slice(0, 3).map(({ name, baseURL, apiKey, model }) => ({ name, baseURL, apiKey, model })) }
+    return { candidates: cands.slice(0, 3).map(({ name, baseURL, apiKey, model, prefHit }) => ({ name, baseURL, apiKey, model, prefHit })) }
   } catch (e) {
     return { candidates: [], reason: `配置解析失败: ${e.message}` }
   }
@@ -1839,13 +1894,15 @@ function startShellApi() {
       if (req.method === 'POST' && url.pathname === '/enhance') {
         let body = ''
         for await (const chunk of req) body += chunk
-        const { text, context } = JSON.parse(body || '{}')
+        // [q99-增强] model:前端探测到的界面当前所选模型(显示名),候选链优先匹配其所属 provider
+        const { text, context, model: preferredModel } = JSON.parse(body || '{}')
         if (typeof text !== 'string' || !text.trim()) return send(400, { ok: false, error: '输入为空' })
         if (text.length > 16000) return send(400, { ok: false, error: '文本过长(上限 16000 字符)' })
-        const { candidates, reason } = resolveEnhanceCandidates()
+        const { candidates, reason } = resolveEnhanceCandidates(typeof preferredModel === 'string' ? preferredModel : '')
         if (!candidates.length) {
           log(`[enhance] 无可用 provider: ${reason}`)
-          return send(409, { ok: false, error: `未找到可用的模型 provider: ${reason}` })
+          // 可操作引导(替代裸报错):指明配置路径与前置动作,用户可自助恢复
+          return send(409, { ok: false, error: `未找到可用模型:${reason}。请先在「设置 → 模型」配置 provider 与凭据,或在会话中选择一个可用模型后重试` })
         }
         // 结构化改写模板:保原意保语言,不虚构;可选会话/工作区上下文并入背景。
         const ctxLine = (typeof context === 'string' && context.trim())
@@ -1862,7 +1919,19 @@ function startShellApi() {
 3. 把模糊指代改明确,补全可执行的验收标准;控制篇幅,避免无信息量的套话。${ctxLine}
 4. 只输出优化后的提示词正文:不要解释、前言、总结,不要用代码块包裹。`
         let lastErr = null
-        for (const prov of candidates) {
+        // [q101] 跨平台 fallback 闸:请求方显式指定了模型(preferredModel)时,只允许在
+        // 「命中该模型的候选」间切换(同一个 llm-* 段的同名命中不视为跨平台);
+        // 绝不因首选失败(401/403/模型不存在)静默换到另一个平台——那会把 Aliyun 会话的
+        // 增强流量漏到 DeepSeek 官方端点产生双计费(本问题核心病灶)。
+        // 未指定模型(旧前端)才允许全候选链 fallback(历史行为保留)。
+        const gatePool = (typeof preferredModel === 'string' && preferredModel.trim())
+          ? candidates.filter((c) => c.prefHit)
+          : candidates
+        if (!gatePool.length) {
+          log(`[enhance] 指定模型无可用候选: ${preferredModel}`)
+          return send(409, { ok: false, error: `界面所选模型「${preferredModel}」在已配置 provider 中无可用凭据或端点,请在「设置 → 模型」检查该模型所属 provider 的配置,或改选其他模型` })
+        }
+        for (const prov of gatePool) {
           const ac = new AbortController()
           const timer = setTimeout(() => ac.abort(), 60000) // 思考模型输出慢,45s 偶发截断 → 60s
           try {
@@ -2285,7 +2354,7 @@ function buildTrayMenu() {
     { label: '显示主界面', click: () => { const w = [...mainWindows][0]; if (w) { w.show(); w.focus() } } },
     { label: '新建窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => newWindow() },
     { type: 'separator' },
-    { label: '重载界面', click: () => { for (const w of mainWindows) if (!w.isDestroyed()) w.reload() } },
+    { label: '重载界面', click: () => { for (const w of mainWindows) if (!w.isDestroyed()) w.webContents.reloadIgnoringCache() } }, // [问题108] 强刷绕缓存:插件文件热改后普通重载可能吃旧 ?rev 缓存跑旧码
     { label: '重启 dsh 服务', click: () => {
       if (restarting || switching) return
       restarting = true
@@ -2385,6 +2454,10 @@ async function boot() {
     const r = replayLocalPatches((l) => log(l))
     if (!r.ok) notify('DeepSeek Harness', '本地插件补丁重放失败,详见日志(桌面日志目录)。')
   } catch (e) { log(`补丁重放异常: ${e.message}`) }
+  // [问题99] 常驻守护:市场/CLI/pnpm 对账可能在壳运行中覆盖 node_modules 里的补丁产物
+  // (历史上市场批量更新、卸载流程都发生过),boot/startDsh 时点重放覆盖不到这些窗口。
+  // 每 45s 幂等重放一次——已是补丁态时哨兵快速通道零写盘零开销;状态翻转才记日志。
+  startPatchGuardian()
   stage('probe')
   if (await isPortUp()) {
     log('检测到 dsh 服务已在运行,直接复用')

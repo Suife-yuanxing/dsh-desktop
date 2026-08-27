@@ -53,6 +53,14 @@ const os = require('node:os')
 const PLUGINS = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules')
 const MOTION = 'var(--dsh-bsr-slide-duration) var(--dsh-bsr-slide-ease)'
 
+// [q99 永久修复 2026-08-23] 补丁哨兵标记:apply 产物末尾追加唯一注释(JS 文件末尾追加
+// 注释语法安全,不入 CSS 模板字面量)。重放时 current 含哨兵即判「已是补丁态」直接跳过,
+// 根除「对补丁态文件重复 apply → 锚点已被改写 → 误报 FAIL」一整类错配——包括多副本
+// 重放器并存时(新 asar / 旧 asar / 手动 node patches.cjs)新旧锚点互不认识的问题。
+const PATCH_MARK = '/*dsh-local-patch:v2026-08-23*/'
+// YAML 场景(preset agent.cordis.yml)的哨兵必须用 # 行注释(YAML 无块注释)
+const YAML_MARK = '#dsh-local-patch:v2026-08-23'
+
 // ---- 通用: 计数式字符串替换 / 计数式正则替换 ----
 function makeCtx(file) {
   const failures = []
@@ -178,11 +186,13 @@ function patchBetterSidebar() {
       }
 
       // A3/A4 layout.css(字面 \n 转义;正则容忍 transition 写法漂移)
+      // [q109 2026-08-26] #root/#centerCol 布局属性过渡移除: 开合=一次瞬时重排,面板仍
+      // transform 滑入(GPU 合成);长会话下 300ms 逐帧全量重排的卡顿与「抬起-落下」根除
       // 0.14.0 模板:#root 新增 width:calc 行,transition 改多行展开式 → 跨行通配锚点
       if (/margin-right: var\(--dsh-sidebar-width, 0px\);/.test(c)) {
         c = rex(c, /#root \{\\n  margin-right: var\(--dsh-sidebar-width, 0px\);[\s\S]*?\}/,
-          `#root {\\n  margin-right: calc(var(--dsh-sidebar-width, 0px) + var(--dsh-bsr-gap, 0px) * 2);\\n  width: calc(100% - var(--dsh-sidebar-width, 0px));\\n  transition: margin-right ${MOTION}, width ${MOTION};\\n}`, 1, 'layout-root')
-        c = rex(c, /(margin-bottom: var\(--dsh-sidebar-height, 0px\);\\n  transition: margin-bottom )[^;]*;/, `$1${MOTION};`, 1, 'layout-centerCol')
+          `#root {\\n  margin-right: calc(var(--dsh-sidebar-width, 0px) + var(--dsh-bsr-gap, 0px) * 2);\\n  width: calc(100% - var(--dsh-sidebar-width, 0px));\\n}`, 1, 'layout-root')
+        c = rex(c, /margin-bottom: var\(--dsh-sidebar-height, 0px\);\\n  transition: margin-bottom [^;]*;/, 'margin-bottom: var(--dsh-sidebar-height, 0px);', 1, 'layout-centerCol')
         c = rep(c, 'padding-right: 78px;', 'padding-right: 54px;', 1, 'layout-collapsedHeader')
         const VARS = `:root {\\n  --dsh-bsr-slide-duration: 300ms;\\n  --dsh-bsr-slide-ease: cubic-bezier(0.32, 0.72, 0, 1);\\n  --dsh-bsr-gap: 8px;\\n}\\n\\nbody[data-dsh-sidebar-collapsed] {\\n  --dsh-bsr-gap: 0px;\\n}\\n\\n`
         c = rex(c, /(#root \{\\n  margin-right: calc\(var\(--dsh-sidebar-width, 0px\) \+ var\(--dsh-bsr-gap, 0px\) \* 2\);)/, VARS + '$1', 1, 'layout-vars')
@@ -205,6 +215,17 @@ function patchNodeNav() {
   const { rep, repAll, failures } = makeCtx('node-nav')
 
   const apply = (c) => {
+    // B4 [q105] 插槽注册竞态修复(2026-08-24): dsh 0.1.1-rc.2 起 client boot 并行化
+    // (runPluginBoot 用 Promise.all 并发 create 各 entry),本插件(小 bundle)可能先于
+    // ui-layout(大 bundle)完成 init——彼时 shell.overlay 尚未被 layout 的 root children
+    // 表声明,裸 register 即抛「slot "shell.overlay" is not declared」→ entry 失败 →
+    // 整个 app 卡 boot 屏「Failed to load plugins」(冷启动/插件热重载时的竞态)。
+    // 改官方 slots.inject 延迟注册(dshmarket 的 toast 同款姿势): 插槽已声明则同步注册,
+    // 未声明则订阅声明事件、声明后自动注册;offSlot 返回幂等卸载器,清理语义不变。
+    c = rep(c,
+      '\t\t\t\tconst offSlot = ctx.slots.register({\n\t\t\t\t\tname: "shell.overlay",\n\t\t\t\t\tid: "dsh-node-nav-rail",\n\t\t\t\t\tinject: () => ({ hooks: { sessionId: sessionIdSource } }),\n\t\t\t\t}, NodeNavRail)',
+      '\t\t\t\t// [q105] shell.overlay 声明时机竞态修复: 裸 register → slots.inject 延迟注册\n\t\t\t\tconst offSlot = ctx.slots.inject("shell.overlay", () => ctx.slots.register({\n\t\t\t\t\tname: "shell.overlay",\n\t\t\t\t\tid: "dsh-node-nav-rail",\n\t\t\t\t\tinject: () => ({ hooks: { sessionId: sessionIdSource } }),\n\t\t\t\t\t}, NodeNavRail))',
+      1, 'overlay-inject')
     // B1 位置: 右 → 左(292 = 280 侧栏 + 12)
     c = rep(c, '.dsh-node-nav-rail { position: fixed; right: 28px;', '.dsh-node-nav-rail { position: fixed; left: 292px;', 1, 'rail-pos')
     c = rep(c, '.dsh-node-nav-miss { position: fixed; right: 52px;', '.dsh-node-nav-miss { position: fixed; left: 316px;', 1, 'miss-pos')
@@ -410,7 +431,7 @@ function patchConversation() {
     // D1 markdown 渲染(MarkdownText 与 ReasoningRow 同 bundle 同作用域,9036 行已验证可用;
     // codeLabels 复用 conversation locale 的 copy/copied 键)
     c = rex(c,
-      /children: \(0, react_jsx_runtime\.jsx\)\("div", \{\s*className: ReasoningRow_module_css_default\.thinkBody,\s*children: text\s*\}\)/,
+      /children: (?:\/\* @__PURE__ \*\/ )?\(0, react_jsx_runtime\.jsx\)\("div", \{\s*className: ReasoningRow_module_css_default\.thinkBody,\s*children: text\s*\}\)/,
       'children: (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\t\tclassName: ReasoningRow_module_css_default.thinkBody,\n\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: text, streaming: running, codeLabels: { copyLabel: t("copy"), copiedLabel: t("copied") } })\n\t\t\t\t\t})',
       1, 'think-md')
     // D2 CSS:类名前缀动态探测(构建哈希会漂移),整条规则替换
@@ -649,7 +670,7 @@ function patchSettingsInfoArch() {
         '\t\t\tconst doInstall = (0, react.useCallback)((plugin) => {\n\t\t\t\tsetCompat(null);\n\t\t\t\tsetBuildsSkipped(null);', 1, 'compat-reset')
       // [H] 安装按钮:先开 Modal(不阻塞),异步拉预检报告填充警告块
       c = rep(c, '\t\t\t\t\t\t\t\t\tonClick: () => setConfirming(p),',
-        '\t\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\t\tsetCompat(null);\n\t\t\t\t\t\t\t\t\t\tsetConfirming(p);\n\t\t\t\t\t\t\t\t\t\tfetch("/dsh-market/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: p.url }) }).then((r) => r.json()).then((b) => { if (b && b.ok) setCompat(b); }).catch(() => {});\n\t\t\t\t\t\t\t\t\t},', 1, 'compat-fetch')
+        '\t\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\t\tsetCompat(null);\n\t\t\t\t\t\t\t\t\t\tsetConfirming(p);\n\t\t\t\t\t\t\t\t\t\tfetch("/dsh-market/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: p.url }) }).then((r) => r.json()).then((b) => { if (b && b.ok) setCompat(b); }).catch(() => {});\n\t\t\t\t\t\t\t\t\t},', 2, 'compat-fetch')
       // [H] Modal 警告块:插在 deprecated 块之前
       c = rep(c, '\t\t\t\t\t\t\tconfirming.deprecated === true && (() => {',
         compatBlock + '\n\t\t\t\t\t\t\tconfirming.deprecated === true && (() => {', 1, 'compat-warn')
@@ -716,23 +737,29 @@ function stripPresetPersona(c) {
   return { text: out.join('\n'), removed }
 }
 
-/** 上游漂移自愈重写:文件被上游更新(≠基底且≠补丁态)时刷新基底重打。 */
-function rewriteFresh(p, bakSuffix, apply, failures) {
+/** 上游漂移自愈重写:文件被上游更新(≠基底且≠补丁态)时刷新基底重打。
+ *  [q99] FAIL 不写盘:失配时保留 current 原样只告警——原「写回 base」在多副本重放器
+ *  并存场景是反噬(旧版重放器把新版打好的补丁整体抹掉,即 2026-08-23 侧边栏复发主根因)。
+ *  apply 为纯函数,失败不落盘即无半补丁,还原写盘没有收益只有破坏。 */
+function rewriteFresh(p, bakSuffix, apply, failures, sentinel) {
   const file = path.basename(path.dirname(p)) + '/' + path.basename(p)
   const bak = p + bakSuffix
   const current = fs.readFileSync(p, 'utf8')
+  // 哨兵快速通道:已是补丁态,幂等跳过(不动 bak)
+  if (sentinel && current.includes(sentinel)) return { file, ok: true, already: true }
   let base = fs.existsSync(bak) ? fs.readFileSync(bak, 'utf8') : current
   let patched = apply(base)
   if (current !== base && current !== patched) {
-    // 上游已更新:刷新基底,从新内容重打
+    // 上游已更新:刷新基底,从新内容重打;清空旧基底的失配记录,避免污染新基底判定
     base = current
+    failures.length = 0
     patched = apply(base)
   }
   if (!fs.existsSync(bak) || fs.readFileSync(bak, 'utf8') !== base) fs.writeFileSync(bak, base, 'utf8')
   if (failures.length) {
-    fs.writeFileSync(p, base, 'utf8')
-    return { file, ok: false, failures: [...failures] }
+    return { file, ok: false, failures: [...failures], kept: true }
   }
+  if (sentinel && !patched.includes(sentinel)) patched += '\n' + sentinel + '\n'
   const already = current === patched
   if (!already) fs.writeFileSync(p, patched, 'utf8')
   return { file, ok: true, already }
@@ -769,7 +796,7 @@ function patchPresets() {
       return r.text
     }
     try {
-      results.push({ ...rewriteFresh(p, '.bak-persona', apply, failures), version: 'preset' })
+      results.push({ ...rewriteFresh(p, '.bak-persona', apply, failures, YAML_MARK), version: 'preset' })
     } catch (e) {
       results.push({ file: p, ok: false, failures: [`[presets] ${e.message}`] })
     }
@@ -778,11 +805,21 @@ function patchPresets() {
   return results
 }
 
-// ---- 核心: 自愈式重写(备份基底 → 重打 → 计数不符则还原) ----
-function rewrite(p, bakSuffix, apply, failures) {
+// ---- 核心: 自愈式重写(哨兵快速通道 → 上游漂移刷新 → FAIL 不写盘) ----
+// [q99 2026-08-23] 三项加固(同 rewriteFresh):
+//   ① 哨兵快速通道:current 含 PATCH_MARK 即已是补丁态,跳过 apply(免疫一切锚点误报);
+//   ② 上游漂移刷新:current ≠ base 且 ≠ patched 且无哨兵 = 新上游 → 刷新 base 重打
+//     (原版恒以旧 bak 为基底,上游小版本更新会被回滚成旧文件+补丁);
+//   ③ FAIL 不写盘:失配保留 current 原样(补丁态/新上游纯净态都不动)。
+//     原版 FAIL「写回 base」在旧 asar 重放器仍可被启动的场景是主动反噬——
+//     2026-08-23 13:35 即旧 asar 内 0.13 时代锚点对 0.15.1 FAIL 后把新补丁整体还原,
+//     侧边栏一夜回退原生形态(问题99复发主根因)。
+function rewrite(p, bakSuffix, apply, failures, sentinel = PATCH_MARK) {
   const file = path.basename(p)
   const bak = p + bakSuffix
-  const base = fs.existsSync(bak) ? fs.readFileSync(bak, 'utf8') : fs.readFileSync(p, 'utf8')
+  const current = fs.readFileSync(p, 'utf8')
+  if (sentinel && current.includes(sentinel)) return { file, ok: true, already: true }
+  let base = fs.existsSync(bak) ? fs.readFileSync(bak, 'utf8') : current
   if (!fs.existsSync(bak)) fs.writeFileSync(bak, base, 'utf8')
 
   let patched
@@ -792,11 +829,23 @@ function rewrite(p, bakSuffix, apply, failures) {
     failures.push(`${file}: ${e.message}`)
     patched = base
   }
-  if (failures.length) {
-    fs.writeFileSync(p, base, 'utf8') // 还原,杜绝半补丁
-    return { file, ok: false, failures: [...failures] }
+  if (!failures.length && current !== base && current !== patched) {
+    // 上游已更新:刷新基底从新内容重打;清空旧基底失配记录
+    base = current
+    failures.length = 0
+    try {
+      patched = apply(base)
+    } catch (e) {
+      failures.push(`${file}: ${e.message}`)
+      patched = base
+    }
   }
-  const current = fs.readFileSync(p, 'utf8')
+  if (!fs.existsSync(bak) || fs.readFileSync(bak, 'utf8') !== base) fs.writeFileSync(bak, base, 'utf8')
+  if (failures.length) {
+    // 保留 current 原样,绝不写盘还原(杜绝半补丁的旧手段在多副本场景是反噬)
+    return { file, ok: false, failures: [...failures], kept: true }
+  }
+  if (sentinel && !patched.includes(sentinel)) patched += '\n' + sentinel + '\n'
   const already = current === patched
   if (!already) fs.writeFileSync(p, patched, 'utf8')
   return { file, ok: true, already }
@@ -808,14 +857,32 @@ function patchProfileSidebarDedup() {
   const file = 'cordis.patch.yml'
   const p = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'cordis.patch.yml')
   if (!fs.existsSync(p)) return [{ file, missing: true }]
+  const ROW = '- id: web-ui-better-sidebar'
   // 2026-08-22 [dshmarket 体检]: 聚合包(dsh-web-ui-all)卸载后不再自动追加守护行,
   // 否则每次体检都会报 web-ui-better-sidebar "patch target not found" 孤儿。
   // 仅在聚合包内嵌 better-sidebar 仍在 node_modules 时才守护;重装聚合包后自动恢复,
   // crash-loop 防护语义不变。
+  // 2026-08-23 [q99]: 包不在而守护行仍在 = 孤儿行(手工删除会漏/装卸时序会再生产生),
+  // 自动清理整个守护块(注释+行),体检归零;重装聚合包后本函数自动追加回来。
   if (!fs.existsSync(path.join(PLUGINS, '@linxin666', 'dsh-client-ui-web-ui-better-sidebar'))) {
+    const buf0 = fs.readFileSync(p)
+    const view0 = buf0.toString('latin1')
+    const last0 = view0.lastIndexOf(ROW)
+    if (last0 >= 0) {
+      // 回溯吞掉紧邻上方的 [dsh-desktop guard] 注释块;向前吞到上一个非守护内容之后
+      let start = last0
+      const commentHead = view0.lastIndexOf('# [dsh-desktop guard]', last0)
+      if (commentHead >= 0 && commentHead > view0.lastIndexOf('\n-', commentHead)) start = commentHead
+      // 守护块末尾 = disabled 行之后的连续空行
+      const rest = view0.slice(last0 + ROW.length)
+      const disMatch = rest.match(/^\s*\n\s*disabled:\s*true\s*\n?/)
+      const end = disMatch ? last0 + ROW.length + disMatch[0].length : last0 + ROW.length
+      const cleaned = view0.slice(0, start).replace(/\n+$/, '\n\n') + view0.slice(end).replace(/^\n+/, '')
+      fs.writeFileSync(p, Buffer.from(cleaned, 'latin1'))
+      return [{ file, ok: true, already: false, version: 'profile', cleanedOrphan: true }]
+    }
     return [{ file, ok: true, already: true, version: 'profile' }]
   }
-  const ROW = '- id: web-ui-better-sidebar'
   const GUARD = [
     '',
     '# [dsh-desktop guard] dsh-web-ui-all bundles its own dsh-better-sidebar (row',
@@ -841,10 +908,160 @@ function patchProfileSidebarDedup() {
   return [{ file, ok: true, already: false, version: 'profile' }]
 }
 
+// ---- [H] dsh-turn-review 本轮审查 idle 崩溃修复(2026-08-26,问题108) ----
+//       症状: 打开「本轮审查」标签页即报 dsh-better-sidebar: status.rows is not iterable。
+//       根因: host 侧 status 在该会话尚无审查窗口时(dsh 重启后/首回合结束前,内存 Map 为空)
+//       回落 {sessionId, phase:'idle'},缺 rows/pendingSubagents/snapshotError/history 字段,
+//       client 面板 for...of status.rows 直接 TypeError(经 better-sidebar 错误边界上报,
+//       故误归因于宿主插件)。H1 host 回落补全完整形状;H2 client 面板全字段空值兜底,
+//       双侧同修:任一侧旧版本在场都不再崩(0.1.0 验证)。
+function patchTurnReview() {
+  const dir = path.join(PLUGINS, 'dsh-turn-review')
+  if (!fs.existsSync(dir)) return [{ file: 'dsh-turn-review', missing: true }]
+  const ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version
+  const results = []
+
+  // H1 host: idle 回落补全完整 status 形状(lib/index.js,运行时宿主入口)
+  {
+    const p = path.join(dir, 'lib', 'index.js')
+    if (fs.existsSync(p)) {
+      const { rep, failures } = makeCtx('turn-review/index.js')
+      const apply = (c) => {
+        c = rep(c,
+          'tracker.get(sessionId) ?? {\n\t\t\t\tsessionId,\n\t\t\t\tphase: "idle"\n\t\t\t};',
+          'tracker.get(sessionId) ?? {\n\t\t\t\tsessionId,\n\t\t\t\tphase: "idle",\n\t\t\t\trows: [],\n\t\t\t\tpendingSubagents: [],\n\t\t\t\tsnapshotError: null,\n\t\t\t\thistory: []\n\t\t\t};',
+          1, 'idle-shape')
+        return c
+      }
+      results.push({ ...rewrite(p, '.bak-q108', apply, failures), version: ver })
+    }
+  }
+
+  // H2 client: rows/pendingSubagents/history 空值兜底(client.js 与 client-registry.js 同源双副本)
+  for (const f of ['client.js', 'client-registry.js']) {
+    const p = path.join(dir, 'lib', f)
+    if (!fs.existsSync(p)) continue
+    const { rep, failures } = makeCtx('turn-review/' + f)
+    const apply = (c) => {
+      c = rep(c,
+        'for (const row of status.rows) groups[row.sessionKind === "unattributed" ? "unattributed" : row.sessionKind].push(row);',
+        'for (const row of status.rows ?? []) groups[row.sessionKind === "unattributed" ? "unattributed" : row.sessionKind].push(row);',
+        1, 'rows-iter')
+      c = rep(c,
+        'for (const path of current) if (next.rows.some((row) => row.path === path)) keep.add(path);',
+        'for (const path of current) if ((next.rows ?? []).some((row) => row.path === path)) keep.add(path);',
+        1, 'keep-rows')
+      c = rep(c,
+        'setSelected((current) => current !== null && next.rows.some((row) => row.path === current) ? current : null);',
+        'setSelected((current) => current !== null && (next.rows ?? []).some((row) => row.path === current) ? current : null);',
+        1, 'sel-rows')
+      c = rep(c,
+        'status.phase === "pending" && status.pendingSubagents.length > 0 &&',
+        'status.phase === "pending" && (status.pendingSubagents?.length ?? 0) > 0 &&',
+        1, 'pending-gate')
+      c = rep(c,
+        'status.pendingSubagents.length,',
+        'status.pendingSubagents?.length ?? 0,',
+        1, 'pending-count')
+      c = rep(c,
+        'status.history.length > 0 &&',
+        'status.history?.length > 0 &&',
+        1, 'history-gate')
+      c = rep(c,
+        'children: status.history.length',
+        'children: status.history?.length ?? 0',
+        1, 'history-count')
+      c = rep(c,
+        'children: [...status.history].reverse().map((record) => {',
+        'children: [...status.history ?? []].reverse().map((record) => {',
+        1, 'history-list')
+      return c
+    }
+    results.push({ ...rewrite(p, '.bak-q108', apply, failures), version: ver })
+  }
+
+  // src 源码同步(非运行时产物;防本地 rebuild 复现旧缺陷,锚点漂移 FAIL 时安全跳过)
+  {
+    const p = path.join(dir, 'src', 'index.ts')
+    if (fs.existsSync(p)) {
+      const { rep, failures } = makeCtx('turn-review/src-index.ts')
+      const apply = (c) => {
+        c = rep(c,
+          "tracker.get(sessionId) ?? { sessionId, phase: 'idle' }",
+          "tracker.get(sessionId) ?? {\n        sessionId,\n        phase: 'idle',\n        rows: [],\n        pendingSubagents: [],\n        snapshotError: null,\n        history: [],\n      }",
+          1, 'idle-shape')
+        return c
+      }
+      results.push({ ...rewrite(p, '.bak-q108', apply, failures), version: ver })
+    }
+  }
+  {
+    const p = path.join(dir, 'src', 'client', 'ReviewPanel.tsx')
+    if (fs.existsSync(p)) {
+      const { rep, failures } = makeCtx('turn-review/src-ReviewPanel.tsx')
+      const apply = (c) => {
+        c = rep(c, 'for (const row of status.rows) {', 'for (const row of status.rows ?? []) {', 1, 'rows-iter')
+        c = rep(c,
+          'if (next.rows.some(row => row.path === path)) keep.add(path)',
+          'if ((next.rows ?? []).some(row => row.path === path)) keep.add(path)',
+          1, 'keep-rows')
+        c = rep(c,
+          'setSelected(current => (current !== null && next.rows.some(row => row.path === current) ? current : null))',
+          'setSelected(current => (current !== null && (next.rows ?? []).some(row => row.path === current) ? current : null))',
+          1, 'sel-rows')
+        c = rep(c,
+          "status.phase === 'pending' && status.pendingSubagents.length > 0 &&",
+          "status.phase === 'pending' && (status.pendingSubagents?.length ?? 0) > 0 &&",
+          1, 'pending-gate')
+        c = rep(c, '{status.pendingSubagents.length}', '{status.pendingSubagents?.length ?? 0}', 1, 'pending-count')
+        c = rep(c, 'status.history.length > 0 &&', 'status.history?.length > 0 &&', 1, 'history-gate')
+        c = rep(c, '{status.history.length}', '{status.history?.length ?? 0}', 1, 'history-count')
+        c = rep(c, '{[...status.history].reverse().map(record => {', '{[...status.history ?? []].reverse().map(record => {', 1, 'history-list')
+        return c
+      }
+      results.push({ ...rewrite(p, '.bak-q108', apply, failures), version: ver })
+    }
+  }
+
+  return results
+}
+
+// ---- [J] dsh-joi-channel-theme 装饰层读写分离(2026-08-26,问题109) ----
+//       症状: 侧边卡片开合时(长会话+joi 皮肤)整个会话框「抬起再落下」+ 明显卡顿。
+//       根因: 布局动画本体是 [A] A3 段 #root 的 300ms 过渡(本轮已移除);joi 侧放大器
+//       是 reconcile 每次 MutationObserver/resize 触发都全量重算装饰,paintTexture 与
+//       applyHalo 在同循环里交替「读布局(getBoundingClientRect)↔ 写 class」——class 写入
+//       使布局失效,下一次读被迫整页强制回流;长会话数万节点逐帧触发 = 布局抖动,
+//       滚动锚定与贴底逻辑被拖出可见的「抬起-落下」。
+//       J1 paintTexture 两阶段(先纯读收集,再统一写类);J2 applyHalo 同法。
+//       读集中一次回流,写集中一次失效,整趟 reconcile 从 O(命中数) 次强制回流降为 1 次。
+function patchJoiTheme() {
+  const p = path.join(PLUGINS, 'dsh-joi-channel-theme', 'lib', 'client.js')
+  if (!fs.existsSync(p)) return [{ file: 'dsh-joi-theme', missing: true }]
+  const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-joi-channel-theme', 'package.json'), 'utf8')).version
+  const { rep, failures } = makeCtx('joi-theme/client.js')
+
+  const apply = (c) => {
+    // J1 paintTexture 两阶段: 先收集命中再统一加类,消除读-写交替的强制回流
+    c = rep(c,
+      '\t\t\tlet hit = 0;\n\t\t\tfor (const el of document.querySelectorAll("body div")) {\n\t\t\t\tif (hit >= 8) break;\n\t\t\t\tconst r = el.getBoundingClientRect();\n\t\t\t\tif (r.width < window.innerWidth * .45 || r.height < window.innerHeight * .45) continue;\n\t\t\t\tif (getComputedStyle(el).backgroundColor !== base) continue;\n\t\t\t\tel.classList.add(TEX_CLASS);\n\t\t\t\thit++;\n\t\t\t}\n\t\t\treturn hit;',
+      '\t\t\tconst found = [];\n\t\t\tfor (const el of document.querySelectorAll("body div")) {\n\t\t\t\tif (found.length >= 8) break;\n\t\t\t\tconst r = el.getBoundingClientRect();\n\t\t\t\tif (r.width < window.innerWidth * .45 || r.height < window.innerHeight * .45) continue;\n\t\t\t\tif (getComputedStyle(el).backgroundColor !== base) continue;\n\t\t\t\tfound.push(el);\n\t\t\t}\n\t\t\tfor (const el of found) el.classList.add(TEX_CLASS);\n\t\t\treturn found.length;',
+      1, 'texture-two-phase')
+    // J2 applyHalo 两阶段: 先读全部 block 矩形再统一 toggle 类
+    c = rep(c,
+      '\t\t\tfor (const block of blocks) {\n\t\t\t\tconst r = block.getBoundingClientRect();\n\t\t\t\tblock.classList.toggle(HALO_CLASS, boxes.some((b) => intersects(r, b)));\n\t\t\t}',
+      '\t\t\tconst marks = [];\n\t\t\tfor (const block of blocks) {\n\t\t\t\tconst r = block.getBoundingClientRect();\n\t\t\t\tmarks.push([block, boxes.some((b) => intersects(r, b))]);\n\t\t\t}\n\t\t\tfor (const [block, on] of marks) block.classList.toggle(HALO_CLASS, on);',
+      1, 'halo-two-phase')
+    return c
+  }
+
+  return [{ ...rewrite(p, '.bak-q109', apply, failures), version: ver }]
+}
+
 // ---- 入口 ----
 function replayAll(log = () => {}) {
   const out = { ok: true, items: [] }
-  for (const r of [...patchBetterSidebar(), ...patchNodeNav(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup()]) {
+  for (const r of [...patchBetterSidebar(), ...patchNodeNav(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme()]) {
     if (r.missing) { log(`[patches] ${r.file}: 未安装,跳过`); continue }
     out.items.push(r)
     if (r.ok) log(`[patches] ${r.file}@${r.version}: ${r.already ? '已是补丁态' : '已恢复本地定制'}`)

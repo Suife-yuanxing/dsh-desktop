@@ -125,10 +125,27 @@ window.__ModuleLoader__.load({
 			".pm_search{border-radius:10px;transition:border-color .15s,box-shadow .15s}",
 			".pm_search:focus-within{border-color:#d97757;box-shadow:0 0 0 3px rgba(217,119,87,.12)}",
 			// ---- [R20→R47] 动效令牌兜底单一来源(better-sidebar 补丁冲掉时仍有效) ----
-			// [R47] 节奏统一 300→240ms ease-out(用户要求 180-250ms);Claude 曲线即强 ease-out,
-			// 保留曲线不变只提速,侧栏/中列/entry 全部随令牌同步。
-			":root{--dsh-bsr-slide-duration:240ms;--dsh-bsr-slide-ease:cubic-bezier(.32,.72,0,1)}",
+			// [R47→优化] 节奏升级 240→380ms 强缓出(更多过渡帧,opacity+scale 协同);曲线 cubic-bezier(.16,.67,.11,.99)
+			// 侧栏/中列/entry/panel 全部随令牌同步,展开 380ms 23 帧@60fps。
+			":root{--dsh-bsr-slide-duration:380ms;--dsh-bsr-slide-ease:cubic-bezier(.16,.67,.11,.99)}",
 			"#root > div[data-slot=\"root\"] > div{transition:grid-template-columns var(--dsh-bsr-slide-duration) var(--dsh-bsr-slide-ease)!important}",
+			// ---- [perf] 侧边栏展开/关闭性能优化:隔离对话区布局,避免大量消息时的重排卡顿 ----
+			// 1) #root 提升为合成层,GPU 加速 margin-right/width 过渡(侧栏开合不触发全页重排)
+			"#root{will-change:margin-right,width}",
+			// 2) 对话内容区布局隔离:contain:layout style 阻止侧栏 margin 变化向内传播重排
+			"[data-slot=\"conversation\"]{contain:layout style}",
+			// 3) 对话消息虚拟化:content-visibility:auto 跳过屏幕外消息的渲染(500+条时收益巨大)
+			//    contain-intrinsic-size 提供占位高度防止滚动条跳动
+			"[data-chat-flow] > *{content-visibility:auto;contain-intrinsic-size:auto 120px}",
+			// 4) 对话流根容器 contain:paint 防止子元素重绘波及侧栏
+			"[data-chat-flow]{contain:paint style}",
+			// ---- [perf] 编辑器大文件渲染优化:侧栏编辑器打开 246KB+ 手册等大文件时跳过屏幕外内容 ----
+			// 5) 编辑器 markdown 预览:content-visibility 跳过视口外的渲染块
+			"[class*=\"_editorMd\"] > *{content-visibility:auto;contain-intrinsic-size:auto 200px}",
+			// 6) 编辑器 markdown 预览容器自身 contain:paint 防止子元素重绘泄漏
+			"[class*=\"_editorMd\"]{contain:paint style}",
+			// 7) CodeMirror 编辑器:内部已虚拟化,外层加 contain 防布局抖动
+			"[class*=\"_editorCm\"]{contain:layout style}",
 			// ---- [R20] 中栏三视图(任务/SSH/记忆)显隐过渡:与侧栏 300ms 同节奏(此前 .2s 与 frame grid .3s 不一致);
 			// translateY 弱化为 4px 减少与 layout 过渡的合成层竞争 ----
 			"@keyframes dshVtViewIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}",
@@ -180,7 +197,7 @@ window.__ModuleLoader__.load({
 			".dsh-node-nav-bottom:hover{opacity:1;background:transparent!important;border-color:#d97757!important}",
 			// ---- [问题93] better-sidebar 入口 Claude 风卡片化:双钮包进圆角胶囊卡片 ----
 			// (令牌色自适应亮/暗主题;几何定位由 installSidebarEntryPin 驱动,右距写在行内/令牌)
-			'[class*="_toggleCluster"]{background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,.10),0 1px 3px rgba(0,0,0,.06);padding:3px;transition:right .3s cubic-bezier(.32,.72,0,1),background .15s ease,border-color .15s ease}',
+			'[class*="_toggleCluster"]{background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,.10),0 1px 3px rgba(0,0,0,.06);padding:3px;transition:right var(--dsh-bsr-slide-duration,.38s) var(--dsh-bsr-slide-ease,cubic-bezier(.16,.67,.11,.99)),background .15s ease,border-color .15s ease}',
 			'[class*="_toggleCluster"] button{border-radius:7px;transition:background .15s ease}',
 			'[class*="_toggleCluster"] button:hover{background:var(--dsw-alias-fill-l2)}',
 			// [R27→问题58→b13问题2] 可见性:仅当 body 挂 dsh-vt-chatflow-on(installSidebarDotSync
@@ -192,7 +209,7 @@ window.__ModuleLoader__.load({
 			"body:not(.dsh-vt-chatflow-on) .dsh-node-nav-rail,body:not(.dsh-vt-chatflow-on) .dsh-node-nav-miss{opacity:0!important;visibility:hidden!important;pointer-events:none!important}",
 			// ---- [R22] 边界:窄屏隐藏 rail;reduced-motion 全关动效 ----
 			"@media (max-width:900px){.dsh-node-nav-rail{display:none!important}}",
-			"@media (prefers-reduced-motion:reduce){#root > div[data-slot=\"root\"] > div{transition:none!important}html[data-dsh-taskboard-active] [data-dsh-taskboard-view],html[data-dsh-ssh-active] [data-dsh-ssh-view],html[data-dsh-mnemon-active] [data-dsh-mnemon-view]{animation:none!important}.dsh-node-nav-dot-active{animation:none!important}.dsh-node-nav-dot,.dsh-node-nav-bottom,.dsh-node-nav-rail,.dsh-node-nav-line{transition:none!important}}",
+			"@media (prefers-reduced-motion:reduce){#root > div[data-slot=\"root\"] > div{transition:none!important}html[data-dsh-taskboard-active] [data-dsh-taskboard-view],html[data-dsh-ssh-active] [data-dsh-ssh-view],html[data-dsh-mnemon-active] [data-dsh-mnemon-view]{animation:none!important}.dsh-node-nav-dot-active{animation:none!important}.dsh-node-nav-dot,.dsh-node-nav-bottom,.dsh-node-nav-rail,.dsh-node-nav-line{transition:none!important}[class*=\"_panel\"],[class*=\"_toggleCluster\"],[class*=\"_bottomPanel\"]{transition:none!important}}",
 			// ---- [问题1] 设置导航统一入口:隐藏「皮肤中心」「宠物」独立导航项 ----
 			// (内容保留可激活,皮肤页入口卡编程 click 隐藏项跳转;data-section-id 由 installSettingsNavPatch 注入)
 			"button[data-section-id=\"skin-center\"],button[data-section-id=\"pet\"]{display:none!important}",
@@ -266,7 +283,12 @@ window.__ModuleLoader__.load({
 			// agent-preset/sidebar-card/plugins),内容挤在左侧留大片空白。语义后缀寻址(哈希前缀
 			// 随构建浮动,同 R32 navCell 手法);:not(:has(market active)) 排除市场(有专属 3 列排版)。
 			(function () {
-				var NM = 'div[role="dialog"]:not(:has(button[data-section-id="market"][class*="_active"]))';
+				// [问题108 根因修复] NM 增设置弹窗锁 :has(button[data-section-id]):原前缀只排除
+				// market 激活,导致上下文计量弹层(同为 role=dialog 且无 nav 按钮)被 _rows 等
+				// 宽幅排版规则误命中——图例 dl(类名 [hash]_rows)被强改成 360px 列宽 grid,
+				// dd 数值被挤出 264px 面板遭 overflow:hidden 裁剪不可见。设置弹窗打开时
+				// nav 按钮必在(问题83 微任务同步标记),锁后全部 R43 规则精准限定设置弹窗。
+				var NM = 'div[role="dialog"]:has(button[data-section-id]):not(:has(button[data-section-id="market"][class*="_active"]))';
 				return [
 					// 1) section 根解除窄幅上限,随内容区(992px)填充
 					NM + ' [data-slot="settings.section"]>[class*="_section"],'
@@ -317,7 +339,47 @@ window.__ModuleLoader__.load({
 			// pointer-events:none / position:absolute inset:0 挂到表面本体,设置面板会"透明不可点"、
 			// composer 被压扁失联——无论玻璃开关/皮肤/主题何态,此处恒保表面可交互与原生定位。
 			'div[role="dialog"][class*="_panel"],[data-composer-card]{pointer-events:auto!important}',
-			"[data-composer-card]{position:relative!important;inset:auto!important}"
+			"[data-composer-card]{position:relative!important;inset:auto!important}",
+			// [问题110] 侧边卡片开合时输入框「抬起-回落」修复:核心 composer 在列宽变化时
+			// 临时给输入卡打 inline「height/max-width .32s」过渡(宽列收窄→文本重排换行→
+			// 卡片增高 40px,顶边上抬)。q109 已把 #root 布局改瞬时,这段 320ms 动画成了
+			// 唯一还在漂的层——输入框晚于整页 320ms 漂浮上抬,读作「抬起然后回复」。
+			// 1ms 而非 none:保留过渡机制,若宿主依赖 transitionend 清理 inline height,
+			// 零时长/none 会吞事件致内联高度残留;1ms 视觉瞬时且事件照发。
+			"[data-composer-card]{transition-duration:1ms!important;transition-delay:0s!important}",
+			// [问题111后续] 1ms 压缩后仍残留「向上扩展→定格400ms→跳回」双峰。实测时序:
+			// 展开是两步布局——主列先瞬跳 1120→629(比最终 853 还窄 224px),核心高度
+			// 管理器在这个错误中间态测量文本换行,inline 定格 height:133.3px;随后列
+			// 渐宽回 853,但高度被定格不动,~460ms 后管理器收尾重测才设回 93.3px——
+			// 93→133(跳)→定格→93(跳) 即用户所见。根治:height:auto 恒覆盖 inline 定格,
+			// 高度随列宽渐变实时跟随(窄→宽平滑回落),与整页布局同拍,无独立漂移。
+			// 安全性:q111 已把 card 过渡全压 1ms(高度变化本就瞬时),auto 不引入新
+			// 突变;inline 的 transition 声明与 transitionend 清理链照常运作(1ms 后
+			// 事件照发,t=861 清空 inline 实证),仅 height 值本身不再被定格。
+			"[data-composer-card]{height:auto!important}",
+			// [问题111c] 双峰的真根源:面板空间预留是 #root 的 margin-right(0→507px)
+			// 瞬间生效(q110 移除 A3 过渡后遗留),主列宽度瞬间 1120→629(比最终 853 还
+			// 窄),输入卡被压窄 780→589 触发内部换行、高度跳 133.3,随后原生侧栏收起
+			// (frame grid 过渡 0.38s)渐宽回 853,文本展开、高度又落回 93.3——「向上
+			// 扩大然后恢复」。根治:#root 的 margin-right/width 补上与 frame grid 完全
+			// 同拍(0.38s cubic-bezier(.16,.67,.11,.99),实测取自 live computed)的过渡:
+			// 主列宽度 = 容器(渐缩) - 侧栏轨道(渐缩) 单调变化 1120→853,卡片 max-width
+			// 780 全程不被触发,零换行零高度变化。q110 教训重评:当时移除是因 joi 读写
+			// 抖动放大每帧重排([J] 段已修),且 grid 过渡本就每帧重排同一子树无卡顿,
+			// 同拍加回不新增重排帧数。width 一并过渡:实测 margin(507)与宽度缩量(491)
+			// 不一致,宽度另有 calc 驱动,双过渡保证所有相关属性同步动画。
+			"#root{transition:margin-right .38s cubic-bezier(0.16,0.67,0.11,0.99),width .38s cubic-bezier(0.16,0.67,0.11,0.99)!important}",
+			// ---- [R62→聊天区同步] 滚动条邻近显现(侧栏 + 中栏聊天区) ----
+			// 默认滚动条隐形(thumb 透明),鼠标进入容器右缘感应带(installScrollbarProximity
+			// 挂 .dsh-sb-near)才显色,移开即隐。轨道恒 8px 占位与 dsh 全局一致——显隐
+			// 不改变内容宽度,零布局跳动(实测滚动条占位 gap=8,非 overlay)。thumb 收 2px
+			// 边距(视觉 4px)更精致;亮暗主题 light-dark 自适应(不支持则中性灰兜底)。
+			"[data-dsh-sb]::-webkit-scrollbar{width:8px;height:8px}",
+			"[data-dsh-sb]::-webkit-scrollbar-track{background:transparent}",
+			"[data-dsh-sb]::-webkit-scrollbar-thumb{background:transparent;border-radius:99px;border:2px solid transparent;background-clip:padding-box}",
+			"[data-dsh-sb]::-webkit-scrollbar-corner{background:transparent}",
+			"[data-dsh-sb].dsh-sb-near::-webkit-scrollbar-thumb{background:rgba(127,127,127,.35);background:light-dark(rgba(0,0,0,.26),rgba(255,255,255,.34))}",
+			"[data-dsh-sb].dsh-sb-near::-webkit-scrollbar-thumb:hover{background:rgba(127,127,127,.55);background:light-dark(rgba(0,0,0,.42),rgba(255,255,255,.5))}"
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -1178,7 +1240,7 @@ window.__ModuleLoader__.load({
 			}, { capture: true });
 		}
 
-		/** [R48→问题59→问题73] Apple 风格液态玻璃——多层折射/透光,严格限定四类表面:
+		/** [R48→问题59→问题73→R65] Apple 风格液态玻璃——多层折射/透光,严格限定四类表面:
 		 *  ① 设置面板 ② 聊天输入框(composer) ③ 侧边栏 ④ 工作区(列表+空态功能卡)。
 		 *  其余表面保持原生样式(不再全局染 bg-layer 令牌)。
 		 *  视觉分层:折射层(SVG feTurbulence+feDisplacementMap 经 backdrop-filter url()
@@ -1190,51 +1252,63 @@ window.__ModuleLoader__.load({
 		function glassCss() {
 			var dark = false;
 			try { dark = (getComputedStyle(document.documentElement).colorScheme || "").indexOf("dark") >= 0; } catch (e) { /* 默认浅色 */ }
-			var tint = dark ? "28,30,36" : "255,255,255";
-			var edge = dark ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.60)";
-			var edgeDim = dark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.30)";
+			var tint = dark ? "26,30,40" : "243,247,255";
+			var edge = dark ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.72)";
+			var edgeDim = dark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.34)";
 			var innerShade = dark ? "rgba(0,0,0,.28)" : "rgba(60,70,90,.10)";
-			var shadowA = dark ? ".38" : ".16";
+			var shadowA = dark ? ".44" : ".20";
 			var refr = glassSvgSupported() ? "url(#dsh-lg-refract) " : "";
 			// 一级表面:重折射 + 微对比增强玻璃质感;二级(工作区/侧栏底层):轻折射。
-			var f1 = refr + "blur(20px) saturate(1.6) brightness(" + (dark ? "0.92" : "1.06") + ") contrast(1.02)";
-			var f2 = refr + "blur(12px) saturate(1.4)";
+			var f1 = refr + "blur(20px) saturate(1.72) brightness(" + (dark ? "0.9" : "1.07") + ") contrast(1.03)";
+			var f2 = refr + "blur(12px) saturate(1.5)";
 			// 一级表面 = 设置面板 + composer。[问题73] 本版本面板无 role=dialog,
 			// 按语义后缀 _panel 寻址(排除 panelBody 内层防双层折射);面板自身即
 			// overlay 根,无 fixed 后代,backdrop-filter 无包含块风险(壁纸态同法已验证)。
-			var SURF = '[data-composer-card],[class*="_panel"]:not([class*="panelBody"])';
+			var PN = ':not([class*="panelBody"]):not([class*="panelIcon"]):not([class*="panelView"]):not([class*="panelResize"]):not([class*="panelHidden"])';
+			// [R65] 五重排除同步入无壁纸态(SURF/定位加固同用):面板工具元素非玻璃面。
+			// [问题108] 第六重排除:上下文计量弹层——其 CSS Modules 类名恰为 [hash]_panel
+			// (tsdown pattern [hash]_[local]),被一级表面规则误命中后换 40% 半透明玻璃底+
+			// ::after 流光盖住 12px 小号文字。结构寻址排除(composer 内唯一 dialog),
+			// 该弹层保留原生不透明菜单底(无壁纸态 --dsw-specific-menu 令牌完好)。
+			PN += ':not([data-composer-card] div[role="dialog"])';
+			var SURF = '[data-composer-card],[class*="_panel"]' + PN;
 			// [b13问题1/3] ::after 选择器必须逐个展开,伪元素不会自动分派到列表每一项。
-			var SURFA = '[data-composer-card]::after,[class*="_panel"]:not([class*="panelBody"])::after';
+			var SURFA = '[data-composer-card]::after,[class*="_panel"]' + PN + '::after';
 			// 遮罩边缘化前缀同理逐项展开(html.dsh-lg-mask 只挂首项是选择器拼接陷阱)。
-			var MASKA = 'html.dsh-lg-mask [data-composer-card]::after,html.dsh-lg-mask [class*="_panel"]:not([class*="panelBody"])::after';
-			var depthShadow = "inset 0 1px 0 " + edge + ",inset 0 -1px 0 " + innerShade + ",0 2px 8px rgba(0,0,0," + (dark ? ".22" : ".08") + "),0 16px 40px rgba(0,0,0," + shadowA + ")";
+			var MASKA = 'html.dsh-lg-mask [data-composer-card]::after,html.dsh-lg-mask [class*="_panel"]' + PN + '::after';
+			var sideL = dark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.22)";
+			var sideR = dark ? "rgba(255,255,255,.04)" : "rgba(255,255,255,.10)";
+			var depthShadow = "inset 0 1px 0 " + edge + ",inset 1px 0 0 " + sideL + ",inset -1px 0 0 " + sideR + ",inset 0 -1px 0 " + innerShade + ",0 2px 8px rgba(0,0,0," + (dark ? ".22" : ".07") + "),0 16px 40px rgba(0,0,0," + shadowA + ")";
 			return [
-				// 氛围渐变垫底(fixed):玻璃纵深的光源;三光斑分层,仅渲染氛围不覆盖任何表面。
-				"body{background-image:radial-gradient(55% 45% at 18% 10%, rgba(77,107,254," + (dark ? ".20" : ".12") + "), transparent 62%),radial-gradient(48% 42% at 86% 84%, rgba(103,153,254," + (dark ? ".16" : ".09") + "), transparent 58%),radial-gradient(30% 24% at 55% 40%, rgba(147,197,253," + (dark ? ".08" : ".06") + "), transparent 70%)!important;background-attachment:fixed!important}",
+				// [R65] 氛围渐变垫底(fixed)升级:边缘 vignette 暗化(非玻璃舞台沉下去)+蓝紫四光斑(玻璃后景色材丰富,折射肉眼可见;stormaref 守则一:玻璃需要衬底)。
+				"body{background-image:radial-gradient(150% 115% at 50% 42%, transparent " + (dark ? "52%" : "55%") + ", rgba(" + (dark ? "2,4,14" : "10,16,48") + "," + (dark ? ".22" : ".07") + ") 100%),radial-gradient(44% 38% at 82% 16%, rgba(155,118,255," + (dark ? ".12" : ".09") + "), transparent 64%),radial-gradient(55% 45% at 18% 10%, rgba(77,107,254," + (dark ? ".28" : ".20") + "), transparent 62%),radial-gradient(48% 42% at 86% 84%, rgba(103,153,254," + (dark ? ".24" : ".15") + "), transparent 58%),radial-gradient(30% 24% at 55% 40%, rgba(147,197,253," + (dark ? ".12" : ".09") + "), transparent 70%)!important;background-attachment:fixed!important}",
 				// 一级表面(设置面板/composer):折射滤镜 + 半透明主题玻璃底 + 张力圆角 + 多层深度影。
-				SURF + "{backdrop-filter:" + f1 + "!important;-webkit-backdrop-filter:" + f1 + "!important;background-color:color-mix(in srgb, rgba(" + tint + ",1) " + (dark ? "46%" : "54%") + ", transparent)!important;border:1px solid " + edgeDim + "!important;border-radius:20px!important;box-shadow:" + depthShadow + "!important}",
+			// [R59→R65] tint 微升一档(亮 38→40/暗 34→36)换对比度:更亮的玻璃岛对更暗的舞台;透明度代价小,保持 R59 的「薄」。
+			SURF + "{backdrop-filter:" + f1 + "!important;-webkit-backdrop-filter:" + f1 + "!important;background-color:color-mix(in srgb, rgba(" + tint + ",1) " + (dark ? "36%" : "40%") + ", transparent)!important;border:1px solid " + edgeDim + "!important;border-radius:20px!important;box-shadow:" + depthShadow + "!important}",
 				// [问题62] 面板定位加固:absolute+inset:0+margin:auto 硬居中,不再依赖
-				// overlay flex 或 static 位置(曾被入场动画包含块钉在 (0,0))。
-				'[class*="_panel"]:not([class*="panelBody"]){position:absolute!important;inset:0!important;margin:auto!important}',
+			// overlay flex 或 static 位置(曾被入场动画包含块钉在 (0,0))。
+			// [R58] 限定 _overlay 直接子级(设置面板):better-sidebar 右栏停靠面板挂普通
+			// DIV(z:40),被 inset:0 命中会跳成居中模态,须排除(壁纸态实测后回修)。
+			'[class*="_overlay"]>[class*="_panel"]' + PN + '{position:absolute!important;inset:0!important;margin:auto!important}',
 				// 表面张力凸感 + 静态对角镜面光泽(顶部径向凸光 + 135° 扫光;鼠标流光另走 ::after)
-				SURF + "{background-image:radial-gradient(120% 80% at 50% 0%, rgba(255,255,255," + (dark ? ".08" : ".14") + "), transparent 55%),linear-gradient(135deg, rgba(255,255,255," + (dark ? ".05" : ".09") + "), rgba(255,255,255,0) 38%, rgba(255,255,255,0) 62%, rgba(255,255,255," + (dark ? ".03" : ".05") + "))!important}",
-				// 指针跟踪边缘高光:视口坐标 radial 在 ::after 内随 --lg-px/py 流动。
-				// pointer-events:none;边缘 mask 仅在支持时生效(不支持则高光铺全表面,更柔)。
-				SURFA + "{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:radial-gradient(260px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255," + (dark ? ".16" : ".32") + "), transparent 65%)}",
+				SURF + "{background-image:radial-gradient(120% 80% at 50% 0%, rgba(255,255,255," + (dark ? ".10" : ".17") + "), transparent 55%),linear-gradient(135deg, rgba(255,255,255," + (dark ? ".06" : ".11") + "), rgba(255,255,255,0) 38%, rgba(255,255,255,0) 62%, rgba(255,255,255," + (dark ? ".04" : ".06") + "))!important}",
+				// 指针跟踪边缘高光+右下角静态补光(R61 双光源):视口坐标 radial 随 --lg-px/py
+			// 流动;第二层恒定角光。pointer-events:none;边缘 mask 仅在支持时生效。
+			SURFA + "{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;background-image:radial-gradient(260px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255," + (dark ? ".18" : ".36") + "), transparent 65%),radial-gradient(55% 45% at 88% 94%, rgba(255,255,255," + (dark ? ".06" : ".08") + "), transparent 60%)}",
 				MASKA + "{-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;padding:2px}",
 				// 侧栏根:不含 backdrop-filter;**不加 isolation/z-index**——任何栈上下文都会
 				// 把内部 z:1000 的设置 overlay 困在侧栏绘制顺序内(被中列盖住,问题62)。
-				'div[data-slot="sidebar"]>div[class*="_root"]{position:relative!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (dark ? "44%" : "52%") + ', transparent)!important;background-image:radial-gradient(320px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255,' + (dark ? ".07" : ".10") + "), transparent 65%),linear-gradient(180deg, rgba(255,255,255," + (dark ? ".04" : ".08") + "), rgba(255,255,255,0) 30%)!important;border:1px solid " + edgeDim + "!important;border-radius:20px!important;box-shadow:" + depthShadow + "!important}",
+				'div[data-slot="sidebar"]>div[class*="_root"]{position:relative!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (dark ? "34%" : "40%") + ', transparent)!important;background-image:radial-gradient(320px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255,' + (dark ? ".08" : ".12") + "), transparent 65%),linear-gradient(180deg, rgba(255,255,255," + (dark ? ".05" : ".10") + "), rgba(255,255,255,0) 30%)!important;border:1px solid " + edgeDim + "!important;border-radius:20px!important;box-shadow:" + depthShadow + "!important}",
 				// 工作区(表面④):侧栏内二级折射层——叠在玻璃侧栏之上形成 Apple 式
 				// 多层透光深度;列表无 fixed 后代,backdrop-filter 安全。轻色调+内顶光。
-				'div[data-slot="sidebar.workspaces"]{position:relative!important;backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (dark ? "26%" : "30%") + ', transparent)!important;border-radius:16px;border:1px solid ' + edgeDim + '!important;box-shadow:inset 0 1px 0 ' + edgeDim + '!important}',
+				'div[data-slot="sidebar.workspaces"]{position:relative!important;backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (dark ? "22%" : "24%") + ', transparent)!important;border-radius:16px;border:1px solid ' + edgeDim + '!important;box-shadow:inset 0 1px 0 ' + edgeDim + '!important}',
 				// 工作区空态功能卡(文件/源码/任务/终端/浏览器):玻璃卡片观感;
 				// 卡片无定位子树,轻模糊安全。
-				'button[class*="paneCard"]{backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (dark ? "34%" : "42%") + ', transparent)!important;border:1px solid ' + edgeDim + '!important;box-shadow:inset 0 1px 0 ' + edgeDim + ',0 6px 18px rgba(0,0,0,' + (dark ? ".24" : ".08") + ')!important}',
+				'button[class*="paneCard"]{backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (dark ? "28%" : "34%") + ', transparent)!important;border:1px solid ' + edgeDim + '!important;box-shadow:inset 0 1px 0 ' + edgeDim + ',0 6px 18px rgba(0,0,0,' + (dark ? ".24" : ".08") + ')!important}',
 				// 二级玻璃层(侧栏):z-index:-1 沉到内容之下(不糊掉侧栏文字,问题62);
 				// 只模糊"侧栏背后"的页面氛围层。折射滤镜仅此处与二级表面使用(纯装饰层
 				// 无定位子树,无包含块风险)。::after 携带鼠标流光。
-				".dsh-vt-glasspane{position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;backdrop-filter:" + f2 + ";-webkit-backdrop-filter:" + f2 + ";background:linear-gradient(160deg, rgba(255,255,255," + (dark ? ".06" : ".10") + "), rgba(255,255,255,0) 45%)}",
+				".dsh-vt-glasspane{position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;backdrop-filter:" + f2 + ";-webkit-backdrop-filter:" + f2 + ";background:linear-gradient(160deg, rgba(255,255,255," + (dark ? ".07" : ".12") + "), rgba(255,255,255,0) 45%)}",
 				".dsh-vt-glasspane::after{content:'';position:absolute;inset:0;border-radius:inherit;background:radial-gradient(300px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255," + (dark ? ".09" : ".14") + "), transparent 65%)}",
 			].join("");
 		}
@@ -1257,8 +1331,50 @@ window.__ModuleLoader__.load({
 			return _glassSvgOk;
 		}
 
-		// [问题59] 折射滤镜 SVG(隐藏):低频噪声驱动的位移图 → 透过玻璃的背景产生
-		// 微妙透镜扭曲。scale 6 保持可读性;玻璃关闭/壁纸态移除。
+		// [问题59→R59→R65] 折射滤镜 SVG(隐藏):升级为「边缘透镜 + 有机涟漪」双段位移——
+		// ① lens 段:canvas 生成的 SDF 边缘位移图(feImage dataURL),中心零位移、
+		//    边缘带径向外推(smoothstep 过渡)→ 背景文字滑过玻璃边缘时被真实弯曲折射
+		//    (参考 czlnav/shuding 的 liquid glass 实现);
+		// ② turbulence 段:低频噪声微扰叠加液态感。
+		// 位移图 R/G 通道编码 dx/dy(中性 128);color-interpolation-filters=sRGB 保证
+		// 通道字节精确(默认 linearRGB 会把中性点偏移出恒定位移)。
+		// 滤镜区域收紧为 0,0,100%,100%(feImage 百分比按滤镜区域解析,外扩区域会把
+		// 位移带推出元素可见范围)。玻璃关闭/非玻璃态移除。
+		var _lensMapUrl = null;
+		function lensMapUrl() {
+			if (_lensMapUrl) return _lensMapUrl;
+			var S = 256, BAND = 0.20;
+			var c = document.createElement("canvas");
+			c.width = S; c.height = S;
+			var ctx = c.getContext("2d");
+			var img = ctx.createImageData(S, S);
+			var d = img.data;
+			function smooth(a, b, t) { t = Math.max(0, Math.min(1, (t - a) / (b - a))); return t * t * (3 - 2 * t); }
+			for (var y = 0; y < S; y++) {
+				for (var x = 0; x < S; x++) {
+					var u = (x + 0.5) / S, v = (y + 0.5) / S;
+					var ex = Math.min(u, 1 - u), ey = Math.min(v, 1 - v);
+					// 边缘带强度:贴边 1 → 带内界 0
+					var tx = smooth(BAND, 0, ex), ty = smooth(BAND, 0, ey);
+					// 径向向外(左半 dx 负/右半 dx 正,同 y)——背景被"挤"向边缘的透镜观感
+					var dx = u < 0.5 ? -tx : tx;
+					var dy = v < 0.5 ? -ty : ty;
+					var m = Math.sqrt(dx * dx + dy * dy);
+					if (m > 1) { dx /= m; dy /= m; } // 角落两轴叠加归一
+					var p = (y * S + x) * 4;
+					d[p] = Math.round(128 + dx * 127);
+					d[p + 1] = Math.round(128 + dy * 127);
+					d[p + 2] = 128;
+					d[p + 3] = 255;
+				}
+			}
+			ctx.putImageData(img, 0, 0);
+			_lensMapUrl = c.toDataURL("image/png");
+			return _lensMapUrl;
+		}
+		// [R61] 色散三通道常量:R 最强(+4)/G 基准(0)/B 中等(+2)——真实光学彩虹边缘
+		// (玻璃边缘 R/G/B 位移差 2-4px,经 blur 后呈柔和彩虹条纹;rizroze/xobiomesh 手法)。
+		var LG_CA = { R: 4, G: 0, B: 2 };
 		function syncGlassSvg(enable) {
 			if (typeof document === "undefined") return;
 			var ex = document.getElementById("dsh-lg-svg");
@@ -1269,7 +1385,23 @@ window.__ModuleLoader__.load({
 				s.setAttribute("width", "0"); s.setAttribute("height", "0");
 				s.style.cssText = "position:absolute;width:0;height:0;overflow:hidden";
 				s.setAttribute("aria-hidden", "true");
-				s.innerHTML = '<defs><filter id="dsh-lg-refract" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.007 0.011" numOctaves="2" seed="7" stitchTiles="stitch" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="6" xChannelSelector="R" yChannelSelector="G"/></filter></defs>';
+				// [R61] 三通道色散滤镜:每通道独立 feDisplacementMap(R 最强/B 中/G 基准)→
+				// feColorMatrix 单通道隔离→feBlend screen 重组→turbulence 涟漪(全通道等权)→
+				// 末尾 feGaussianBlur 0.6 抗锯齿(消位移拉丝,xobiomesh 手法)。
+				s.innerHTML = '<defs><filter id="dsh-lg-refract" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">'
+					+ '<feImage href="' + lensMapUrl() + '" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="lens"/>'
+					+ '<feDisplacementMap id="dsh-lg-dispR" in="SourceGraphic" in2="lens" scale="' + (30 + LG_CA.R) + '" xChannelSelector="R" yChannelSelector="G" result="dR"/>'
+					+ '<feColorMatrix in="dR" type="matrix" values="1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0" result="cR"/>'
+					+ '<feDisplacementMap id="dsh-lg-dispG" in="SourceGraphic" in2="lens" scale="' + (30 + LG_CA.G) + '" xChannelSelector="R" yChannelSelector="G" result="dG"/>'
+					+ '<feColorMatrix in="dG" type="matrix" values="0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 0" result="cG"/>'
+					+ '<feDisplacementMap id="dsh-lg-dispB" in="SourceGraphic" in2="lens" scale="' + (30 + LG_CA.B) + '" xChannelSelector="R" yChannelSelector="G" result="dB"/>'
+					+ '<feColorMatrix in="dB" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 1 0" result="cB"/>'
+					+ '<feBlend in="cR" in2="cG" mode="screen" result="rg"/>'
+					+ '<feBlend in="rg" in2="cB" mode="screen" result="rgb"/>'
+					+ '<feTurbulence type="fractalNoise" baseFrequency="0.007 0.011" numOctaves="2" seed="7" stitchTiles="stitch" result="n"/>'
+					+ '<feDisplacementMap id="dsh-lg-disp2" in="rgb" in2="n" scale="5" xChannelSelector="R" yChannelSelector="G" result="rip"/>'
+					+ '<feGaussianBlur in="rip" stdDeviation="0.6"/>'
+					+ '</filter></defs>';
 				document.body.appendChild(s);
 			} else if (ex) {
 				ex.remove();
@@ -1303,34 +1435,101 @@ window.__ModuleLoader__.load({
 					p.remove();
 				} catch (e) { /* 不边缘化亦可 */ }
 			} else if (_lgTrack) {
-				document.removeEventListener("mousemove", _lgTrack);
-				_lgTrack = null;
-				document.documentElement.style.removeProperty("--lg-px");
-				document.documentElement.style.removeProperty("--lg-py");
-			}
+			document.removeEventListener("mousemove", _lgTrack);
+			_lgTrack = null;
+			document.documentElement.style.removeProperty("--lg-px");
+			document.documentElement.style.removeProperty("--lg-py");
 		}
+	}
 
-		/** [问题76→问题77] 侧栏氛围渐变(壁纸态):多停靠点主题感知轻纱(上浓下淡),
-		 *  托住侧栏内容又透出壁纸。inline 注入胜过白边透明链的 stylesheet !important;
-		 *  关闭/非壁纸态清除。侧栏根未挂载时短退避重试(页面启动早期皮肤状态先到)。 */
-		function syncSidebarVeil(enable, gradient, tries) {
-			if (typeof document === "undefined") return;
-			var root = document.querySelector('div[data-slot="sidebar"]>div[class*="_root"]');
-			if (!root) {
-				tries = tries || 0;
-				if (enable && tries < 30) window.setTimeout(function () { syncSidebarVeil(enable, gradient, tries + 1); }, 200);
-				return;
+	// [R59→R61→R65] 滚动交互泵:监听任意滚动容器(捕获,scroll 不冒泡但捕获可见)——文字滑过
+	// 玻璃下方时按滚动速度抬升折射强度(G 基准 30→64 / 涟漪 5→14,R/B 通道随色散
+	// 偏移同步抬升),rAF 衰减回落,静止即恢复基线——「液体被搅动后平静」的交互感
+	// (参考 sohumsuthar liquid-glass 的 scroll-velocity 思路)。reduced-motion 直接
+	// 旁路;玻璃关闭解绑并把 scale 归零位(基础值+色散偏移)。
+	var _lgMotion = null;
+	function syncGlassMotion(enable) {
+		if (typeof document === "undefined") return;
+		if (enable) {
+			if (_lgMotion) return;
+			var BASE = 30, BOOST = 34, BASE2 = 5, BOOST2 = 9;
+			var st = { raf: 0, cur: 0, target: 0, last: new WeakMap() };
+			var reduce = false;
+			try { reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { /* 环境无 matchMedia */ }
+			var apply = function () {
+				// [R61] 三通道写入:G 基准,R/B 叠加色散偏移(滚动越快彩虹条纹越宽)
+				var g = Math.round(BASE + st.cur * BOOST);
+				var ids = { "dsh-lg-dispG": g, "dsh-lg-dispR": g + LG_CA.R, "dsh-lg-dispB": g + LG_CA.B };
+				for (var k in ids) {
+					var el = document.getElementById(k);
+					if (el) el.setAttribute("scale", String(ids[k]));
+				}
+				var d2 = document.getElementById("dsh-lg-disp2");
+				if (d2) d2.setAttribute("scale", String(Math.round(BASE2 + st.cur * BOOST2)));
+			};
+			var tick = function () {
+				st.raf = 0;
+				st.cur += (st.target - st.cur) * 0.18;
+				if (st.target > 0.01) st.target *= 0.9;
+				if (st.cur < 0.01 && st.target < 0.01) { st.cur = 0; apply(); return; }
+				apply();
+				st.raf = window.requestAnimationFrame(tick);
+			};
+			var onScroll = function (e) {
+				if (reduce) return;
+				var t = e.target;
+				if (!t) return;
+				var top = t === document ? (window.scrollY || document.documentElement.scrollTop || 0) : t.scrollTop;
+				if (typeof top !== "number") return;
+				var prev = st.last.has(t) ? st.last.get(t) : top;
+				st.last.set(t, top);
+				var delta = Math.abs(top - prev);
+				if (delta < 1) return;
+				var v = Math.min(1, delta / 60);
+				if (v > st.target) st.target = v;
+				if (!st.raf) st.raf = window.requestAnimationFrame(tick);
+			};
+			document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+			_lgMotion = { onScroll: onScroll, st: st, apply: apply };
+		} else if (_lgMotion) {
+			document.removeEventListener("scroll", _lgMotion.onScroll, { capture: true });
+			if (_lgMotion.st.raf) window.cancelAnimationFrame(_lgMotion.st.raf);
+			_lgMotion = null;
+			var reset = { "dsh-lg-dispG": String(30 + LG_CA.G), "dsh-lg-dispR": String(30 + LG_CA.R), "dsh-lg-dispB": String(30 + LG_CA.B) };
+			for (var k2 in reset) {
+				var el2 = document.getElementById(k2);
+				if (el2) el2.setAttribute("scale", reset[k2]);
 			}
-			if (enable) {
-				root.style.setProperty('background-image', gradient, 'important');
-			} else {
-				root.style.removeProperty('background-image');
-			}
+			var d2 = document.getElementById("dsh-lg-disp2");
+			if (d2) d2.setAttribute("scale", "5");
 		}
+	}
 
-		/** [R48/问题56] 侧栏玻璃层:无壁纸且玻璃开启时,在侧栏根首位插入 absolute 玻璃层
-		 *  (backdrop-filter 若直接加在侧栏根会创建包含块,把内部 fixed 设置 overlay 困住);
-		 * 关闭/壁纸态移除。侧栏根未挂载时短退避重试。 */
+		/** [问题76→问题77→R58] 侧栏玻璃态(壁纸态,inline 全量注入):tint 玻璃底+
+	 *  指针流光/纵向轻纱图层+边线+圆角+多层深度影。#root 白边透明链 specificity
+	 *  (1,1,4)+!important 盖得过一切 stylesheet 规则,唯 inline !important 能赢
+	 *  (问题76 实证);关闭/非壁纸态逐属性清除。侧栏根未挂载时短退避重试
+	 *  (页面启动早期皮肤状态先到)。 */
+	function syncSidebarVeil(enable, styles, tries) {
+		if (typeof document === "undefined") return;
+		var root = document.querySelector('div[data-slot="sidebar"]>div[class*="_root"]');
+		if (!root) {
+			tries = tries || 0;
+			if (enable && tries < 30) window.setTimeout(function () { syncSidebarVeil(enable, styles, tries + 1); }, 200);
+			return;
+		}
+		var KEYS = ["background-image", "background-color", "border", "border-radius", "box-shadow"];
+		for (var i = 0; i < KEYS.length; i++) {
+			var k = KEYS[i];
+			if (enable && styles && styles[k]) root.style.setProperty(k, styles[k], "important");
+			else root.style.removeProperty(k);
+		}
+	}
+
+		/** [R48/问题56→R58] 侧栏玻璃层:无壁纸+玻璃开 → z:-1 折射玻璃层(glassCss 形态);
+	 *  壁纸态 → z:0 流动光层(无模糊,纯投光,R52 形态)。两种形态均为侧栏根首位
+	 *  absolute 子层(backdrop-filter 若直接加在侧栏根会创建包含块,把内部 fixed
+	 *  设置 overlay 困住);关闭态移除。侧栏根未挂载时短退避重试。 */
 		function syncGlassPane(enable, tries) {
 			if (typeof document === "undefined") return;
 			var root = document.querySelector('div[data-slot="sidebar"]>div[class*="_root"]');
@@ -1367,31 +1566,64 @@ window.__ModuleLoader__.load({
 			var hasBg = !!(state.bg && state.bg.url);
 			if (hasBg) {
 				var dim = typeof state.dim === "number" ? state.dim : 0.45;
-				// [问题72→问题76→问题77] 可读性氛围补偿(非包围层):不新增白框/边框/卡片,
-				// 主题感知的低透明度多停靠点渐变+两级交互反馈+双层细阴影托住内容。
+				// [R58] 液态玻璃·壁纸态:问题77 的静态轻纱升级为「折射+流光+多层深度」的
+				// 动态玻璃——四类表面(设置面板/输入卡/侧栏/工作区)与无壁纸态 glassCss()
+				// 同源的视觉语言,新增慢速流动扫光(dshLgFlow)与指针流光(--lg-px/py);
+				// 可读性由 玻璃底 tint + 壁纸 dim 遮罩 + 文字轻影 三层兜底。
 				var darkBg = false;
 				try { darkBg = (getComputedStyle(document.documentElement).colorScheme || "").indexOf("dark") >= 0; } catch (e) { /* 默认浅色 */ }
-				// [问题77] 侧栏氛围渐变改 4 停靠点(0/42/78/100%):两端各加一档过渡,
-				// 消除 2 停靠点在中段的色阶分界感;整体仍是上浓下淡保住壁纸纵深。
-				var veilGrad = darkBg
-					? "linear-gradient(180deg,rgba(10,12,18,.32) 0%,rgba(10,12,18,.20) 42%,rgba(10,12,18,.10) 78%,rgba(10,12,18,.06) 100%)"
-					: "linear-gradient(180deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.17) 42%,rgba(255,255,255,.09) 78%,rgba(255,255,255,.05) 100%)";
+				// ---- 玻璃令牌(与 glassCss 同族,壁纸态微调) ----
+				var tint = darkBg ? "26,30,40" : "243,247,255";
+				var edgeDim = darkBg ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.34)";
+				var innerShade = darkBg ? "rgba(0,0,0,.28)" : "rgba(60,70,90,.10)";
+				var refr = glassSvgSupported() ? "url(#dsh-lg-refract) " : "";
+				// 一级表面(输入卡/设置面板):重折射+微亮度对比;二级(工作区/功能卡):轻折射
+				var f1 = refr + "blur(20px) saturate(1.72) brightness(" + (darkBg ? "0.9" : "1.07") + ") contrast(1.03)";
+				var f2 = refr + "blur(12px) saturate(1.5)";
+				var depthShadow = "inset 0 1px 0 " + (darkBg ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.72)") + ",inset 1px 0 0 " + (darkBg ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.22)") + ",inset -1px 0 0 " + (darkBg ? "rgba(255,255,255,.04)" : "rgba(255,255,255,.10)") + ",inset 0 -1px 0 " + innerShade + ",0 2px 8px rgba(0,0,0," + (darkBg ? ".22" : ".07") + "),0 16px 40px rgba(0,0,0," + (darkBg ? ".44" : ".20") + ")";
+				// 一级表面选择器(本版本面板无 role=dialog,按语义后缀 _panel 寻址,
+				// 排除 panelBody 内层防双层折射;排除 panelIcon/panelView/panelResize/
+				// panelHidden 工具元素——整套玻璃(圆角+边线+深度影)落在 17px 图标或
+				// 9px 拖拽条上会呈异物感,实测后收窄;面板自身即 overlay 根,无包含块风险)
+				var PN = ':not([class*="panelBody"]):not([class*="panelIcon"]):not([class*="panelView"]):not([class*="panelResize"]):not([class*="panelHidden"])';
+				// [问题108] 第六重排除:上下文计量弹层(类名 [hash]_panel 误命中一级表面,
+				// 玻璃底+流光盖文字;其底另由下方重建规则补偿,见 [问题108] 条目)。
+				PN += ':not([data-composer-card] div[role="dialog"])';
+				var SURF = '[data-composer-card],[class*="_panel"]' + PN;
+				var SURFA = '[data-composer-card]::after,[class*="_panel"]' + PN + '::after';
+				var MASKA = 'html.dsh-lg-mask [data-composer-card]::after,html.dsh-lg-mask [class*="_panel"]' + PN + '::after';
 				// [问题77] 交互反馈拆两级:悬停更柔、选中略深,层次更分明;无边框
 				var veilHover = darkBg ? "rgba(255,255,255,.08)" : "rgba(255,255,255,.30)";
 				var veilSelected = darkBg ? "rgba(255,255,255,.13)" : "rgba(255,255,255,.38)";
-				// 小控件轻纱(列表头/设置入口/功能卡):与悬停同族略浅,静息更安静
+				// 小控件轻纱(列表头/设置入口):与悬停同族略浅,静息更安静
 				var veilSoft = darkBg ? "rgba(255,255,255,.08)" : "rgba(255,255,255,.24)";
-				// [问题77] 关键承载层(输入卡/设置面板):不透明度略降+模糊半径加大,
-				// 内容仍清晰而壁纸/玻璃质感更充分透出;饱和度微提补偿磨砂后的灰化
-				var veilPanel = darkBg ? "rgba(12,14,20,.46)" : "rgba(255,255,255,.40)";
-				var veilBlur = "blur(22px) saturate(1.4)";
-				// [问题77] 双层阴影:贴近细影钉住表面+大半径漫射影给纵深,
-				// 透明度均低于单层旧值,避免生硬压黑/压白
-				var veilShadow = darkBg ? "0 1px 2px rgba(0,0,0,.32),0 10px 30px rgba(0,0,0,.34)" : "0 1px 2px rgba(0,0,0,.05),0 10px 30px rgba(0,0,0,.12)";
-				var veilShadowSoft = darkBg ? "0 1px 2px rgba(0,0,0,.22),0 6px 16px rgba(0,0,0,.20)" : "0 1px 2px rgba(0,0,0,.04),0 6px 16px rgba(0,0,0,.08)";
-				// [问题77] 文字轻影微调:暗主题改双层细影(偏移收窄+补一档贴身微影),
-				// 亮主题白柔光模糊收窄一档,清晰但不产生光晕感
+				// [问题77] 文字轻影:暗主题双层细影,亮主题白柔光分离深字(不描边)。
 				var veilTextShadow = darkBg ? "0 1px 2px rgba(0,0,0,.45),0 0 1px rgba(0,0,0,.18)" : "0 1px 2px rgba(255,255,255,.45)";
+				// [R58] 侧栏根背景图层:指针流光 + 4 停靠点纵向轻纱(上浓下淡保壁纸纵深;
+				// 底色改走 background-color 的玻璃 tint,轻纱透明度较问题77 下调一档)。
+				var veilGrad = "radial-gradient(320px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255," + (darkBg ? ".06" : ".10") + "), transparent 65%)," + (darkBg
+					? "linear-gradient(180deg,rgba(10,12,18,.22) 0%,rgba(10,12,18,.14) 42%,rgba(10,12,18,.07) 78%,rgba(10,12,18,.04) 100%)"
+					: "linear-gradient(180deg,rgba(255,255,255,.16) 0%,rgba(255,255,255,.10) 42%,rgba(255,255,255,.05) 78%,rgba(255,255,255,.03) 100%)");
+				// [R58] 侧栏根玻璃态:必须 inline 全量注入——#root 白边透明链 specificity
+				// (1,1,4)+!important 盖得过一切 stylesheet 规则,唯 inline !important 能赢
+				// (问题76 实证);tint 底+边线+圆角+多层深度影与 glassCss 侧栏同款。
+				var sidebarGlass = {
+					"background-color": "color-mix(in srgb, rgba(" + tint + ",1) " + (darkBg ? "34%" : "40%") + ", transparent)",
+					"background-image": veilGrad,
+					"border": "1px solid " + edgeDim,
+					"border-radius": "20px",
+					"box-shadow": depthShadow
+				};
+				// ---- [R60] 液态玻璃·三级表面(设置面板内容卡)令牌 ----
+				// 面板玻璃之上的行卡/分组卡/输入面/分段控件:轻 tint 纱+可辨边线。纯色层,
+				// 不加 backdrop-filter——面板已有 f1 折射模糊,内容层再叠会过度且费性能
+				// (Apple 分层同款:glass surface 之上是轻量 surface tint)。行卡层次由
+				// tint 差异呈现:静息<悬停<分段选中,边线较面板 edgeDim 提亮一档。
+				var veilCard = darkBg ? "rgba(28,30,36,.20)" : "rgba(255,255,255,.15)";
+				var veilCardHover = darkBg ? "rgba(28,30,36,.28)" : "rgba(255,255,255,.22)";
+				var veilCardSoft = darkBg ? "rgba(28,30,36,.14)" : "rgba(255,255,255,.10)";
+				var veilSegOn = darkBg ? "rgba(28,30,36,.36)" : "rgba(255,255,255,.32)";
+				var edgeCard = darkBg ? "rgba(255,255,255,.13)" : "rgba(255,255,255,.42)";
 				style.textContent = [
 					"#" + BG_LAYER_ID + "{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}",
 					"#" + BG_LAYER_ID + " img,#" + BG_LAYER_ID + " video{width:100%;height:100%;object-fit:cover;display:block}",
@@ -1452,10 +1684,28 @@ window.__ModuleLoader__.load({
 				// 与提示块(tip)。排除 label-*-foreground/inverted(前景白字非背景)与
 				// static-* 色板(语义色相底色保留,如成功/警告三级色)。
 				":root,body{--dsw-specific-sidebar-nav-item-active:transparent!important;--dsw-specific-sidebar-nav-item-hover:transparent!important;--dsw-specific-selector:transparent!important;--dsw-specific-input-major:transparent!important;--dsw-specific-login-input:transparent!important;--dsw-specific-tip:transparent!important;--dsw-alias-button-ghost-active-hover:transparent!important;--dsw-alias-button-primary-dimmed:transparent!important;--dsw-alias-markdown-citation:transparent!important;--dsw-alias-markdown-code-block-banner:transparent!important;--dsw-alias-markdown-code-block:transparent!important;--dsw-alias-markdown-inline-code:transparent!important;--dsw-alias-markdown-placeholder:transparent!important;--dsw-alias-markdown-tag:transparent!important}",
-				// 硬编码白底兜底:输入卡不走背景令牌(实测 rgb(255,255,255))。data-composer-card
-				// 是上游契约属性(测试同名寻址)。[问题76] 半透明磨砂承载层(无边框):
-				// 托住模型选择器/权限标签/按钮群,壁纸从磨砂层透出,不形成白框观感。
-				"[data-composer-card]{background:" + veilPanel + "!important;backdrop-filter:" + veilBlur + "!important;-webkit-backdrop-filter:" + veilBlur + "!important;box-shadow:" + veilShadow + "!important}",
+				// ---- [R58] 液态玻璃·一级表面(输入卡/设置面板) ----
+				// 硬编码白底兜底升级:输入卡不走背景令牌(实测 rgb(255,255,255)),与设置面板
+				// 一并升为重折射玻璃——tint 玻璃底+张力圆角+多层深度影+静态镜面光泽。
+				// 表面本体无 fixed 后代,backdrop-filter 无包含块风险(无壁纸态同法已验证)。
+				// [R59] tint 下调(亮 54→38/暗 46→34):透出更多壁纸,玻璃更「薄」;
+				// 可读性由 blur+saturate+brightness 与文字色本身兜底(实测 avgL≥0.75)。
+				SURF + "{backdrop-filter:" + f1 + "!important;-webkit-backdrop-filter:" + f1 + "!important;background-color:color-mix(in srgb, rgba(" + tint + ",1) " + (darkBg ? "36%" : "40%") + ", transparent)!important;border:1px solid " + edgeDim + "!important;border-radius:20px!important;box-shadow:" + depthShadow + "!important;background-image:radial-gradient(120% 80% at 50% 0%, rgba(255,255,255," + (darkBg ? ".10" : ".17") + "), transparent 55%),linear-gradient(135deg, rgba(255,255,255," + (darkBg ? ".06" : ".11") + "), rgba(255,255,255,0) 38%, rgba(255,255,255,0) 62%, rgba(255,255,255," + (darkBg ? ".04" : ".06") + "))!important}",
+				// [问题108] 上下文计量弹层底重建:上方第六重排除虽摘掉了玻璃误配,但壁纸透明化链
+				// 已把 --dsw-specific-menu(弹层唯一底源)置透明,弹层失底后 12px 小号次级灰字直接
+				// 浮在壁纸上不可见。结构寻址(composer 内唯一 dialog,与问题95 动画豁免同址)重建
+				// veil 底——较玻璃 tint 浓两档保小字对比,f2 轻折射柔化底衬;原生 12px 圆角保留。
+				'[data-composer-card] div[role="dialog"]{backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "74%" : "78%") + ', transparent)!important;border:1px solid ' + edgeDim + '!important;border-radius:12px!important;box-shadow:' + depthShadow + '!important}',
+				// [问题62] 面板定位加固:仅设置面板(_overlay z:1000 的直接子级 _panel)——
+				// absolute+inset:0+margin:auto 硬居中。不能宽配一切 _panel:better-sidebar
+				// 右栏面板(挂普通 DIV z:40,停靠式)若被 inset:0 命中会跳成居中模态(实测)。
+				'[class*="_overlay"]>[class*="_panel"]' + PN + '{position:absolute!important;inset:0!important;margin:auto!important}',
+				// [R58→R61] 指针流光+流动扫光+右下角静态补光(::after 三层背景):径向流光随
+				// --lg-px/py 指针移动,220% 超尺寸对角光带随 dshLgFlow 往返流动,第三层
+				// 右下角恒定微光构成双光源环境(Apple 指南 Layer 5:specular 双向照明);
+				// 边缘 mask 支持时仅走表面边缘(html.dsh-lg-mask),否则全表面低透铺光。
+				SURFA + "{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;background-image:radial-gradient(260px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255," + (darkBg ? ".18" : ".36") + "), transparent 65%),linear-gradient(115deg, transparent 42%, rgba(255,255,255," + (darkBg ? ".06" : ".09") + ") 50%, transparent 58%),radial-gradient(55% 45% at 88% 94%, rgba(255,255,255," + (darkBg ? ".06" : ".08") + "), transparent 60%);background-size:100% 100%,220% 220%,100% 100%;background-repeat:no-repeat;background-position:0 0,0% 100%,100% 100%;animation:dshLgFlow 14s ease-in-out infinite alternate}",
+				MASKA + "{-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;padding:2px}",
 				// 硬编码白底兜底(续):代码块/行内代码不走背景令牌(实测 rgb(249,250,251)/rgb(235,238,242))。
 				// md-code-block 是上游语义类(非哈希)可稳定寻址;容器留 5% 白底+模糊保代码区可辨,
 				// 内部 pre/banner 子层透明避免叠白。
@@ -1475,13 +1725,49 @@ window.__ModuleLoader__.load({
 				'div[data-slot="sidebar"] button[class*="trigger"]:hover,div[data-slot="sidebar"] button[class*="trigger"]:focus-visible{background:' + veilHover + '!important}',
 				// 3) 侧栏/工作区文字轻影:暗主题双层细影托浅字,亮主题白柔光分离深字(不描边)。
 				'div[data-slot="sidebar.workspaces"],div[data-slot="sidebar"] button[class*="trigger"]{text-shadow:' + veilTextShadow + '}',
-				// 4) 中栏工作区空态功能卡:轻纱底+双层柔影;悬停底色与阴影同步加深一档,有层次。
-				'button[class*="paneCard"]{background:' + veilSoft + '!important;box-shadow:' + veilShadowSoft + '!important;transition:background-color .18s ease,box-shadow .18s ease}',
-				'button[class*="paneCard"]:hover{background:' + veilHover + '!important;box-shadow:' + veilShadow + '!important}',
-				// 5) 设置面板半透明磨砂承载层:导航/区段/行卡全部托住,壁纸从磨砂透出。
-				//    本版本面板无 role=dialog,按语义后缀 _panel 寻址(排除 panelBody 防双层模糊);
-				//    面板自身即 overlay 根,无 fixed 后代,backdrop-filter 无包含块风险。
-				'[class*="_panel"]:not([class*="panelBody"]){background:' + veilPanel + '!important;backdrop-filter:' + veilBlur + '!important;-webkit-backdrop-filter:' + veilBlur + '!important;box-shadow:' + veilShadow + '!important}',
+				// 4) [R58] 中栏工作区空态功能卡:二级玻璃(轻折射+tint+内顶光+边线);
+				//    悬停 tint 与阴影同步加深一档。卡片无定位子树,轻模糊安全。
+				'button[class*="paneCard"]{backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "28%" : "34%") + ', transparent)!important;border:1px solid ' + edgeDim + '!important;box-shadow:inset 0 1px 0 ' + edgeDim + ',0 6px 18px rgba(0,0,0,' + (darkBg ? ".24" : ".08") + ')!important;transition:background-color .18s ease,box-shadow .18s ease,border-color .18s ease}',
+				'button[class*="paneCard"]:hover{background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "34%" : "40%") + ', transparent)!important;box-shadow:inset 0 1px 0 ' + edgeDim + ',0 10px 26px rgba(0,0,0,' + (darkBg ? ".30" : ".12") + ')!important}',
+				// ---- [R58] 液态玻璃·侧栏与工作区 ----
+				// 5) 工作区列表(二级表面):轻折射玻璃板;扫光图层与指针流光沉在内容
+				//    之下(元素背景层,不糊文字),background-position 随 dshLgFlow 流动。
+				//    列表无 fixed 后代,backdrop-filter 安全(无壁纸态同法已验证)。
+				'div[data-slot="sidebar.workspaces"]{position:relative!important;backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "22%" : "24%") + ', transparent)!important;border:1px solid ' + edgeDim + '!important;border-radius:16px!important;box-shadow:inset 0 1px 0 ' + edgeDim + '!important;background-image:radial-gradient(280px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255,' + (darkBg ? ".05" : ".08") + '), transparent 65%),linear-gradient(115deg, transparent 42%, rgba(255,255,255,' + (darkBg ? ".04" : ".06") + ') 50%, transparent 58%)!important;background-size:100% 100%,220% 220%;background-repeat:no-repeat;background-position:0 0,0% 100%;animation:dshLgFlow 14s ease-in-out infinite alternate}',
+				// 6) 侧栏根定位锚:玻璃底/边线/圆角/深度影走 inline(sidebarGlass,见上),
+				//    此处只锚 position——#root 透明链不管 position,stylesheet 即可。
+				'div[data-slot="sidebar"]>div[class*="_root"]{position:relative!important}',
+				// 7) 侧栏流动光层(.dsh-vt-glasspane 壁纸态形态):z:0 盖在非定位内容之上、
+				//    工作区玻璃板与设置 overlay(z:1000)之下,只投低透流光+扫光,无
+				//    backdrop-filter——不模糊文字,纯「光在玻璃上流动」;z:-1 形态在壁纸
+				//    层(position:fixed z:0)之下不可见,故壁纸态必须换 z:0。
+				'.dsh-vt-glasspane{position:absolute;inset:0;z-index:0;pointer-events:none;border-radius:inherit;background-image:radial-gradient(300px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255,' + (darkBg ? ".05" : ".09") + '), transparent 65%),linear-gradient(115deg, transparent 42%, rgba(255,255,255,' + (darkBg ? ".03" : ".05") + ') 50%, transparent 58%);background-size:100% 100%,220% 220%;background-repeat:no-repeat;background-position:0 0,0% 100%;animation:dshLgFlow 14s ease-in-out infinite alternate}',
+				// 8) [R58→R61] 流动扫光关键帧:第二图层(220% 对角光带)background-position
+				//    往返流动;第一(指针流光)/第三(右下角补光)位置恒定。多出的位置值
+				//    对两层元素无害(CSS 忽略多余层位置)。reduced-motion 时全部关闭。
+				'@keyframes dshLgFlow{from{background-position:0 0,0% 100%,100% 100%}to{background-position:0 0,100% 0%,100% 100%}}',
+				'@media (prefers-reduced-motion:reduce){[data-composer-card]::after,[class*="_panel"]:not([class*="panelBody"])::after,div[data-slot="sidebar.workspaces"],.dsh-vt-glasspane{animation:none!important}}',
+				// ---- [R60] 液态玻璃·三级表面(设置面板内容卡,插件模块重点) ----
+				// 限定 [class*="_overlay"] 内:mq_dock(fixed 队列坞,自带实底玻璃)与侧栏
+				// 不受牵连。dshvt 自管类(pm_/cm_/vt_/sk_/ps_/skn_)为稳定类名;官方插件
+				// 配置卡/分段选择器按语义后缀寻址(_a_card/_setCard/_setSeg/_setSegOn,
+				// 哈希前缀浮动后缀稳定,R43 手法)——问题102 教训:后缀宽配须确认无异物,
+				// 上述后缀均为插件配置页专属结构。
+				// A1. 行卡(插件管理/Web UI 插件/皮肤资产/预设行):轻纱+边线;悬停加深一档
+				'[class*="_overlay"] .pm_row,[class*="_overlay"] .cm_row,[class*="_overlay"] .skn_row,[class*="_overlay"] .cm_mini{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important}',
+				'[class*="_overlay"] .pm_row:hover,[class*="_overlay"] .cm_row:hover,[class*="_overlay"] .skn_row:hover{background-color:' + veilCardHover + '!important}',
+				// A2. 输入面/详情块(搜索框/文本域/代码块/展开详情):更轻一档,焦点仍走主 css 橙环
+				'[class*="_overlay"] .pm_search,[class*="_overlay"] .ps_txt,[class*="_overlay"] .sk_code,[class*="_overlay"] .pm_detail{background-color:' + veilCardSoft + '!important;border-color:' + edgeCard + '!important}',
+				// A3. 分组卡(vt_card,底色令牌已被透明链置空)与分段标签激活态(底色令牌同被置空):
+				// 轻纱托底;sk_tabOn 用 veilCardHover 与静息 tab 拉开对比
+				'[class*="_overlay"] .vt_card{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important}',
+				'[class*="_overlay"] .sk_tabOn{background-color:' + veilCardHover + '!important;border-color:' + edgeCard + '!important}',
+				// B. 官方插件配置(插件 tab 首页):分组卡(_a_card,可折叠)/设置卡(_setCard)/
+				//    分段选择器(_setSeg 容器+ _setSegOn 选中钮,选中态原为纯文字色差,
+				//    壁纸态几乎不可辨识——补纱底后一眼可辨)
+				'[class*="_overlay"] [class*="_a_card"],[class*="_overlay"] [class*="_setCard"]{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important}',
+				'[class*="_overlay"] [class*="_setSeg"]{background-color:' + veilCardSoft + '!important;border-radius:10px}',
+				'[class*="_overlay"] [class*="_setSegOn"]{background-color:' + veilSegOn + '!important}',
 				].join("");
 			} else {
 				// [R48→问题71] 无壁纸时:仅当 glass 显式为 true 才应用毛玻璃;
@@ -1513,17 +1799,20 @@ window.__ModuleLoader__.load({
 				skinMedia.video = null;
 				layer.remove();
 			}
-			// [问题76→问题77] 侧栏氛围渐变:inline 注入(stylesheet 规则会被白边透明链的
-			// div[data-slot="sidebar"]>*{background:transparent!important} 盖掉);
-			// 皮肤关闭时清除。侧栏未挂载时短退避重试(同 syncGlassPane)。
-			syncSidebarVeil(hasBg, hasBg ? veilGrad : null);
-			// [R48/问题56→问题71] 侧栏玻璃层:无壁纸且 glass 显式 true 才注入;
-			// 其余情况移除(状态缺失默认关,避免壁纸透明化/关闭态残留与默认自启)。
+			// [问题76→问题77→R58] 侧栏玻璃态:inline 全量注入(stylesheet 规则会败给
+			// #root 白边透明链,见 syncSidebarVeil);皮肤关闭时逐属性清除。
+			// 侧栏未挂载时短退避重试(同 syncGlassPane)。
+			syncSidebarVeil(hasBg, hasBg ? sidebarGlass : null);
+			// [R48/问题56→问题71→R58] 侧栏玻璃层:壁纸态=z:0 流动光层;无壁纸且 glass
+			// 显式 true=z:-1 折射玻璃层;其余情况移除(状态缺失默认关,避免残留与自启)。
 			var glassActive = !hasBg && state.glass === true;
-			syncGlassPane(glassActive);
-			// [问题59] 液态玻璃配套:折射滤镜 SVG + 指针跟踪高光,随玻璃开关同生共死
-			syncGlassSvg(glassActive);
-			syncGlassTracking(glassActive);
+			var lgActive = hasBg || glassActive;
+			syncGlassPane(lgActive);
+			// [问题59→R58→R59] 液态玻璃配套:折射滤镜 SVG(边缘透镜+涟漪) + 指针
+			// 跟踪流光 + 滚动交互泵(文字滑过玻璃时折射脉动),壁纸态同开。
+			syncGlassSvg(lgActive);
+			syncGlassTracking(lgActive);
+			syncGlassMotion(lgActive);
 			var audioEl = document.getElementById(AUDIO_ID);
 			if (state.audio && state.audio.url) {
 				if (!audioEl) {
@@ -1698,7 +1987,8 @@ window.__ModuleLoader__.load({
 					}) : null,
 					cur.audio ? h("button", { className: "pm_btn", onClick: function () { patchState({ audio: null }, function () { setMsg("已停止氛围音频"); }); } }, "停止") : null));
 
-			// [R48→问题71] 液态玻璃开关:仅默认官方皮肤(无壁纸)生效;壁纸启用时置灰提示。
+			// [R48→问题71→R58] 液态玻璃开关:仅控制默认官方皮肤(无壁纸)态;
+			// 壁纸态已内置液态玻璃(折射+指针流光+流动扫光),壁纸启用时置灰提示。
 			// 默认关(显式 true 才开):避免启动/切模块时状态缺失导致玻璃被误点亮。
 			var glassOn = cur.glass === true;
 			var glassDisabled = !!cur.bg;
@@ -1709,8 +1999,8 @@ window.__ModuleLoader__.load({
 						h("span", { className: "cm_name" }, "液态玻璃效果"),
 						h("span", { className: "cm_src" }, "仅官方皮肤")),
 					h("div", { className: "cm_desc" }, glassDisabled
-						? "当前已启用自定义壁纸——液态玻璃仅在默认官方皮肤下生效,关闭背景后可用。"
-						: "聊天输入框/侧边栏/设置面板/工作区面板应用毛玻璃+微折射+半透明层次;关闭则回原生纯色。")),
+						? "当前已启用自定义壁纸——壁纸态已内置液态玻璃(边缘透镜折射+指针流光+流动扫光+滚动涟漪交互),无需开关;此开关仅控制无壁纸的官方皮肤态。"
+						: "聊天输入框/侧边栏/设置面板/工作区面板应用毛玻璃+边缘透镜折射+滚动涟漪交互;关闭则回原生纯色。")),
 				h("div", { className: "cm_side" },
 					h("button", {
 						type: "button",
@@ -1718,7 +2008,7 @@ window.__ModuleLoader__.load({
 						disabled: glassDisabled,
 						"aria-pressed": glassOn && !glassDisabled,
 						"aria-label": "液态玻璃效果开关",
-						title: glassDisabled ? "启用自定义壁纸时不可用" : "切换液态玻璃效果",
+						title: glassDisabled ? "壁纸态液态玻璃已内置,此开关仅对官方皮肤生效" : "切换液态玻璃效果",
 						onClick: function () { patchState({ glass: !glassOn }, function () { setMsg(!glassOn ? "液态玻璃已开启" : "液态玻璃已关闭,恢复原生样式"); }); },
 					}, h("span", { className: "cm_swDot" }))));
 
@@ -2707,6 +2997,102 @@ window.__ModuleLoader__.load({
 		sync();
 	}
 
+	// ---------- [R62→聊天区同步] 滚动条邻近显现(侧栏 + 中栏聊天区) ----------
+	// 侧边栏(会话列表等)与中栏对话列(聊天流等)内滚动容器的滚动条改为邻近感应:
+	// 默认隐形(CSS thumb 透明,轨道恒 8px 占位零布局跳动),鼠标进入容器右缘 44px
+	// 感应带(纵向外扩 20px)挂 .dsh-sb-near 显色,移开即隐。容器发现=初始+退避
+	// 扫描+作用域 MO 防抖重扫(会话增删/聊天流挂载/React 重挂载/新容器变为可滚);
+	// mousemove rAF 节流逐容器判距。鼠标离开窗口(document mouseleave)全量收隐,
+	// 防浮显残留。滚动功能不受影响(仅视觉);better-sidebar 右栏滚动条不在此列(插件域)。
+	function installScrollbarProximity() {
+		if (typeof document === "undefined") return;
+		var NEAR = 44, PAD_Y = 20, RESCAN_DELAY = 500;
+		// [sync] 作用域:侧栏 + 中栏对话列(两者均为 data-slot 稳定契约;右栏归插件域)
+		var SCOPES = ['div[data-slot="sidebar"]', 'div[data-slot="conversation"]'];
+		var cache = [];
+		function collect() {
+			var scopes = [];
+			for (var k = 0; k < SCOPES.length; k++) {
+				var s = document.querySelector(SCOPES[k]);
+				if (s) scopes.push(s);
+			}
+			if (!scopes.length) return;
+			// 全量重建:全局摘旧标记(防元素跨作用域复用/移出作用域的 near 残留),再扫可滚容器重标
+			var olds = document.querySelectorAll("[data-dsh-sb]");
+			for (var j = 0; j < olds.length; j++) {
+				olds[j].removeAttribute("data-dsh-sb");
+				olds[j].classList.remove("dsh-sb-near");
+			}
+			cache = [];
+			for (var k = 0; k < scopes.length; k++) {
+				var els = scopes[k].querySelectorAll("*");
+				for (var i = 0; i < els.length; i++) {
+					var el = els[i];
+					if (el.scrollHeight <= el.clientHeight + 4) continue;
+					var st = getComputedStyle(el);
+					if (!/(auto|scroll)/.test(st.overflowY)) continue;
+					var r = el.getBoundingClientRect();
+					if (r.width < 5 || r.height < 5) continue;
+					el.setAttribute("data-dsh-sb", "1");
+					cache.push(el);
+				}
+			}
+		}
+		var raf = 0, mx = -1, my = -1;
+		function tick() {
+			raf = 0;
+			var live = [];
+			for (var i = 0; i < cache.length; i++) {
+				var el = cache[i];
+				if (!el.isConnected) continue; // 脱离 DOM:弃缓存(标记随元素淘汰)
+				live.push(el);
+				var r = el.getBoundingClientRect();
+				var near = mx >= r.right - NEAR && mx <= r.right + 16 && my >= r.top - PAD_Y && my <= r.bottom + PAD_Y;
+				if (near !== el.classList.contains("dsh-sb-near")) el.classList.toggle("dsh-sb-near", near);
+			}
+			cache = live;
+		}
+		function onMove(e) {
+			mx = e.clientX; my = e.clientY;
+			if (!raf) raf = window.requestAnimationFrame(tick);
+		}
+		function onLeave() {
+			mx = -1; my = -1;
+			if (!raf) raf = window.requestAnimationFrame(tick);
+		}
+		document.addEventListener("mousemove", onMove, { passive: true });
+		document.addEventListener("mouseleave", onLeave);
+		collect();
+		// 作用域内结构变化(会话增删/聊天流挂载/重挂载)防抖重扫;作用域根未挂载时退避重试(启动早期)
+		var t = 0;
+		var mo = new MutationObserver(function () {
+			window.clearTimeout(t);
+			t = window.setTimeout(collect, RESCAN_DELAY);
+		});
+		var observed = {};
+		var start = function (tries) {
+			// 迟到挂载:发现新作用域即补一次重扫(observe 之前的挂载突变不触发回调)
+			var mounted = false;
+			for (var k = 0; k < SCOPES.length; k++) {
+				var s = document.querySelector(SCOPES[k]);
+				if (!s || observed[SCOPES[k]] === s) continue;
+				mo.observe(s, { childList: true, subtree: true });
+				observed[SCOPES[k]] = s;
+				mounted = true;
+			}
+			if (mounted) { window.clearTimeout(t); t = window.setTimeout(collect, 0); }
+			// 两个作用域都就位即停;否则退避重试(启动早期/暂未进非聊天页不强制)
+			var all = true;
+			for (var k = 0; k < SCOPES.length; k++) {
+				var s2 = document.querySelector(SCOPES[k]);
+				if (!s2 || observed[SCOPES[k]] !== s2) { all = false; break; }
+			}
+			if (all) return;
+			if ((tries || 0) < 30) window.setTimeout(function () { start((tries || 0) + 1); }, 500);
+		};
+		start();
+	}
+
 	// ---------- [问题62] 设置弹窗被侧栏列裁剪的解除 ----------
 	// 设置弹窗挂载在侧栏 footArea 内,祖先 sidebarCol/frame 均 overflow:hidden:
 	// fixed overlay 虽不被包含块围困,却被祖先裁剪得"加载不出来"(全屏不可见)。
@@ -2887,7 +3273,15 @@ window.__ModuleLoader__.load({
 		if (has) window.setTimeout(mqTick, delay || 1200);
 	}
 	function mqEnqueue(name, url, btn) {
-		if (!url) return;
+		if (!url) {
+			// [q107] 源链接识别失败:可见反馈,不再静默(锚点再漂移时一眼可见)
+			if (btn) {
+				btn.textContent = "源失效";
+				btn.style.color = "var(--dsw-alias-state-error-primary, #cf222e)";
+				window.setTimeout(function () { btn.textContent = "+队列"; btn.style.color = ""; }, 1600);
+			}
+			return;
+		}
 		var flash = function (txt) {
 			if (!btn) return;
 			btn.textContent = txt; btn.classList.add("mqAddOn");
@@ -2986,8 +3380,11 @@ window.__ModuleLoader__.load({
 			var card = mqFindCard(holder);
 			var nameEl = card && card.querySelector('[class*="_nm"]');
 			var name = (nameEl && (nameEl.getAttribute("title") || nameEl.textContent) || "").trim();
-			var srcA = card && card.querySelector('a[class*="_src"]');
-			var url = srcA ? srcA.getAttribute("href") : "";
+			// [q107] dshmarket 1.21.2 起卡片无独立 _src 链接:名称元素本身即链接
+			// (a.nmLink,href=p.url,与安装接口同源);旧锚点失配 → url 空 → mqEnqueue
+			// 静默返回 =「+队列点击无响应」。两代锚点兼容。
+			var srcA = card && (card.querySelector('a[class*="_src"]') || card.querySelector('a[class*="nmLink"]'));
+			var url = srcA ? (srcA.getAttribute("href") || "") : "";
 			var add = document.createElement("button");
 			add.type = "button";
 			add.className = "mqAdd";
@@ -3035,6 +3432,8 @@ window.__ModuleLoader__.load({
 		installMarketQueue();
 		// [R43] 皮肤中心/宠物页返回按钮(内容区顶部胶囊,跳回皮肤区段)
 		installSectionBackButtons();
+		// [R62] 侧栏滚动条邻近显现:默认隐形,鼠标接近容器右缘感应带才显色
+		installScrollbarProximity();
 		// [问题4] 提示词增强按钮已迁至独立插件 dsh-enhance-prompt(2026-08),dshvt 不再注入,避免双挂载。
 			// 「插件」区段:唯一的"插件管理"tab(合并原只读清单;上游 all tab 行已禁用)
 			ctx.effect(() => ctx.locale.register(NS2, {
