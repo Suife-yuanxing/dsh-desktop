@@ -323,9 +323,12 @@ function startDsh() {
   if (runtime.fallback) log('[dshRuntime] 本次按 official 启动(上方 breadcrumb 已留痕)')
   let cmd, args
   if (runtime.mode === 'local') {
-    // 本仓 CLI 无 --no-open(该 flag 官方 rc.8 才引入),本地构建 web 不自动开浏览器。
+    // 本仓 CLI 无 --no-open(该 flag 官方 rc.8 才引入),web 不自动开浏览器。
+    // --expose-internals:本仓 web 组合含 cordis-plugin-hmr,vendor/hmr 构造期硬性
+    // 要求该 node flag(v0.5.0 部署批实测:缺它 boot 必崩);仅 local 轨附加,
+    // official 轨的 npx 树由其自身装配处理,不受影响。
     cmd = runtime.node
-    args = [runtime.bin, 'web']
+    args = ['--expose-internals', runtime.bin, 'web']
     log(`启动 dsh(本地构建): ${cmd} ${args.join(' ')}`)
   } else {
     // [问题55] 快速路径:npx 缓存命中锁定版本 → 直接 node bin.js web,省去 npx 包装层

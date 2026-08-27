@@ -111,6 +111,8 @@ DSH 版本锁定机制：
 行为约定：
 
 - 仅 `local` 目标做能力探测（`bin.js` 存在 + node.exe 可解析），任何异常都记录 breadcrumb 到 `desktop.log` 并折叠回 official 启动——回滚只需把 `dshRuntime` 改回 `"official"`
+- local 轨 spawn 参数固定为 `node --expose-internals <bin.js> web`：本仓 web 组合含 cordis-plugin-hmr，loader 构造期硬性要求暴露 internals（官方轨 npx 树自行装配，不受影响）
+- local 轨首次启用前需完成 monorepo 依赖闭包组装：在 deepseek-harness 内执行本仓的 `powershell -File scripts/link-local-runtime.ps1`，把全部 workspace 成员依赖链接镜像到其根 node_modules（幂等可重放；monorepo 重装依赖后需再跑一次）
 - 壳设置 UI 不提供该开关，配置文件编辑即切换手段
 - 版本锁（`dshVersion`）仅约束 official 轨的 npx 安装规格，local 轨以构建产物自身为准
 
@@ -143,7 +145,8 @@ dsh-desktop/
 ├── icon.ico             # Windows 图标
 ├── scripts/             # 构建与校验脚本
 │   ├── check-dist-lock.mjs
-│   └── check-dsh-runtime.mjs
+│   ├── check-dsh-runtime.mjs
+│   └── link-local-runtime.ps1
 ├── docs/                # 文档
 ├── dsh-plugin/          # DSH 插件相关
 └── .github/             # GitHub 工作流
