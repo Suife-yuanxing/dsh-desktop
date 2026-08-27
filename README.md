@@ -11,6 +11,7 @@ dsh-desktop 是一个 Electron 桌面壳，将 DeepSeek Harness (DSH) 的 Web �
 ### 核心功能
 
 - **DSH 版本锁定** -- 通过 `~/.dsh/desktop-config.json` 锁定 DSH 版本，避免意外更新导致不兼容
+- **dsh 运行时双轨** -- `dshRuntime` 配置项在官方 npx/缓存路径与本地构建产物之间切换，任一侧异常可一键切回另一侧（v0.5.0）
 - **自动更新** -- 支持 DSH 运行时更新（npm）和壳自身更新（electron-updater）
 - **崩溃自愈** -- 自动检测 DSH 服务崩溃，指数退避重启（最多 3 次），失败后通知用户手动处理
 - **多窗口** -- 多个主窗口共享同一 DSH 服务实例
@@ -98,6 +99,33 @@ DSH 版本锁定机制：
 - 版本切换失败会自动回滚到之前版本
 - 支持版本预检：切换前验证新版可正常运行
 
+### dsh 运行时双轨切换（v0.5.0）
+
+`~/.dsh/desktop-config.json` 新增字段控制 dsh 运行时来源：
+
+| 字段 | 取值 | 语义 |
+|------|------|------|
+| `dshRuntime` | `"official"`（缺省）或 `"local"` | `"official"` 沿用既有 npx/缓存快速路径（行为不变）；`"local"` 直接执行本地构建目录下的 `bin.js` |
+| `dshLocalDir` | 目录绝对路径（可选） | local 轨的构建产物目录；缺省向上探测兄弟仓 `deepseek-harness/apps/cli/lib` |
+
+行为约定：
+
+- 仅 `local` 目标做能力探测（`bin.js` 存在 + node.exe 可解析），任何异常都记录 breadcrumb 到 `desktop.log` 并折叠回 official 启动——回滚只需把 `dshRuntime` 改回 `"official"`
+- 壳设置 UI 不提供该开关，配置文件编辑即切换手段
+- 版本锁（`dshVersion`）仅约束 official 轨的 npx 安装规格，local 轨以构建产物自身为准
+
+示例：
+
+```json
+{
+  "dshVersion": "0.1.0-rc.6",
+  "dshRuntime": "local",
+  "dshLocalDir": "D:\\deepseek harness\\deepseek-harness\\apps\\cli\\lib"
+}
+```
+
+启动来源校验：`npm run verify:runtime`（plain-node 断言 resolveDshRuntime 各分支与日志留痕）。
+
 ## 项目结构
 
 ```
@@ -113,8 +141,9 @@ dsh-desktop/
 ├── whale-data.js        # 鲸鱼娘数据
 ├── logo.png             # 应用图标
 ├── icon.ico             # Windows 图标
-├── scripts/             # 构建脚本
-│   └── check-dist-lock.mjs
+├── scripts/             # 构建与校验脚本
+│   ├── check-dist-lock.mjs
+│   └── check-dsh-runtime.mjs
 ├── docs/                # 文档
 ├── dsh-plugin/          # DSH 插件相关
 └── .github/             # GitHub 工作流

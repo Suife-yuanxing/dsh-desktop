@@ -6,7 +6,8 @@ import { existsSync, openSync, closeSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 const distRoots = readdirSync('.', { withFileTypes: true })
-  .filter((e) => e.isDirectory() && /^dist-v0\.3/.test(e.name))
+  // 版本化输出目录:历史 dist-v0.3 与 v0.5.0 起 directories.output 覆盖产出的 dist-X.Y.Z 同样受锁检测保护
+  .filter((e) => e.isDirectory() && /^dist(-v)?\d+(\.\d+)*$/.test(e.name))
   .map((e) => e.name)
 
 const targets = []

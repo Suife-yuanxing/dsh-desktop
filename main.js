@@ -1,6 +1,7 @@
-// dsh-desktop 主进程 v0.3
+// dsh-desktop 主进程 v0.5.0
 // v0.1 Electron 壳 | v0.2 启动页+崩溃自愈 | v0.3 多窗口+dsh版本锁+dsh更新+壳自更新+全中文菜单
-// dsh 运行时经 npx 调用(PATH→注册表),版本锁存于 ~/.dsh/desktop-config.json,插件化零破坏。
+// v0.5.0 联合工作区里程碑:dsh 运行时双轨切换(official npx/缓存路径 ↔ local 本地构建 bin.js)
+// dsh 运行时经 npx 调用(PATH→注册表),版本锁与 dshRuntime 存于 ~/.dsh/desktop-config.json,插件化零破坏。
 const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain, net: electronNet } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const net = require('node:net')
@@ -87,7 +88,13 @@ let restarting = false // 服务重启互斥(托盘/API 共用)
 function loadConfig() {
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
-    if (typeof raw.dshVersion === 'string' && raw.dshVersion.length > 0) return raw
+    // [v0.5.0] 放宽到「含合法 dshVersion 或声明 dshRuntime」即整文件生效,
+    // 并始终补齐 dshVersion 默认值——否则仅切换运行时而未带版本锁的用户配置
+    // 会被整体丢弃,dshRuntime 也随之失效。
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)
+      && ((typeof raw.dshVersion === 'string' && raw.dshVersion.length > 0) || typeof raw.dshRuntime === 'string')) {
+      return { dshVersion: DEFAULT_DSH_VERSION, ...raw }
+    }
   } catch { /* 首次运行或损坏,走默认 */ }
   return { dshVersion: DEFAULT_DSH_VERSION }
 }
@@ -249,6 +256,58 @@ function resolveCachedDshBin(version) {
   return null
 }
 
+// [v0.5.0] 双轨:本地构建运行时目录的默认探测。
+// 源码仓交付路线 = 本地构建 + 壳双轨切换;兄弟仓布局为
+// <工作区>/dsh-desktop 与 <工作区>/deepseek-harness 并列,安装版/便携版被
+// 移动后向上最多三层仍找不到 bin.js 时返回 null(随后由 resolveDshRuntime
+// 记日志回退官方路径)。显式 dshLocalDir 配置优先于本默认值。
+function resolveDefaultLocalDir() {
+  const anchors = app.isPackaged ? [path.dirname(process.execPath), __dirname] : [__dirname]
+  try {
+    for (const anchor of [...new Set(anchors)]) {
+      let dir = anchor
+      for (let i = 0; i < 3; i++) {
+        const candidates = [
+          path.join(dir, 'deepseek-harness', 'apps', 'cli', 'lib'),
+          path.join(dir, 'apps', 'cli', 'lib'),
+        ]
+        for (const cand of candidates) {
+          if (fs.existsSync(path.join(cand, 'bin.js'))) return cand
+        }
+        dir = path.dirname(dir)
+      }
+    }
+  } catch { /* 探测失败按缺失处理 */ }
+  return null
+}
+
+const DEFAULT_LOCAL_DIR = resolveDefaultLocalDir()
+
+/**
+ * 解析本次启动使用的 dsh 运行时来源(v0.5.0 双轨)。
+ * 'official'(缺省)沿用 npx/缓存快速路径,行为不变;'local' 直接执行本地构建
+ * 目录(dshLocalDir 或探测到的兄弟仓 apps/cli/lib)下的 bin.js。任一能力探测
+ * 失败(bin 缺失/node.exe 解析不到)都记 desktop.log breadcrumb 并折叠回
+ * official——回滚仅需把配置改回 official。
+ * @param {{ dshRuntime?: string, dshLocalDir?: string }} config - 壳配置(desktop-config.json 载入态)。
+ * @returns {{ mode: 'official'|'local', fallback?: boolean, node?: string, bin?: string }}
+ */
+function resolveDshRuntime(config = cfg) {
+  if ((config.dshRuntime ?? 'official') !== 'local') return { mode: 'official' }
+  const dir = (typeof config.dshLocalDir === 'string' && config.dshLocalDir.trim()) ? config.dshLocalDir.trim() : DEFAULT_LOCAL_DIR
+  const bin = dir ? path.join(dir, 'bin.js') : null
+  if (!bin || !fs.existsSync(bin)) {
+    log(`[dshRuntime] local runtime missing at ${bin ?? String(dir)}; falling back to official`)
+    return { mode: 'official', fallback: true }
+  }
+  const node = resolveNodeExe()
+  if (!node) {
+    log('[dshRuntime] node.exe unresolvable(PATH 与注册表均失败); falling back to official')
+    return { mode: 'official', fallback: true }
+  }
+  return { mode: 'local', node, bin }
+}
+
 function startDsh() {
   // [问题88] 每次启动 dsh 前重放本地补丁守护:市场更新/外部整写可能在壳运行期改掉
   // profile patch 禁用行(如 web-ui-better-sidebar 去重守护,问题53/70),服务级重启
@@ -258,39 +317,50 @@ function startDsh() {
     const r = replayLocalPatches((l) => log(l))
     if (!r.ok) log('补丁重放存在 FAIL(不阻断启动,详见上方日志)')
   } catch (e) { log(`补丁重放异常: ${e.message}`) }
-  // [问题55] 快速路径:npx 缓存命中锁定版本 → 直接 node bin.js web,省去 npx 包装层
-  const binJs = resolveCachedDshBin()
-  const nodeExe = binJs ? resolveNodeExe() : null
+  // [v0.5.0] 双轨解析:'local' 直跑本地构建 bin.js;'official'(含能力探测失败折返)
+  // 保持 npx 快速路径既有语义原样——环境注入/版本锁旁路/补丁重放均不变。
+  const runtime = resolveDshRuntime(cfg)
+  if (runtime.fallback) log('[dshRuntime] 本次按 official 启动(上方 breadcrumb 已留痕)')
   let cmd, args
-  if (binJs && nodeExe) {
-    cmd = nodeExe
-    // [问题69] --no-open:rc.8 起 dsh web 默认自动开默认浏览器(壳场景多余——壳自加载
-    // Web UI)。官方 CLI 开关 --no-open;rc.7 及以下不认此 flag(unknown option 即崩),
-    // 故仅在版本 ≥0.1.0-rc.8 时追加(配置层已由 profile patch web-runtime 行兜底)。
-    const noOpen = semverGt(cfg.dshVersion, '0.1.0-rc.7') ? ['--no-open'] : []
-    args = [binJs, 'web', ...noOpen]
-    log(`启动 dsh(快速路径,绕过 npx): ${cmd} ${args.join(' ')}`)
+  if (runtime.mode === 'local') {
+    // 本仓 CLI 无 --no-open(该 flag 官方 rc.8 才引入),本地构建 web 不自动开浏览器。
+    cmd = runtime.node
+    args = [runtime.bin, 'web']
+    log(`启动 dsh(本地构建): ${cmd} ${args.join(' ')}`)
   } else {
-    const npx = resolveNpxCommand()
-    if (!npx) {
-      log('未找到可用的 npx(PATH 与注册表均失败)')
-      return false
-    }
-    // 版本锁:npx -y @deepseek-ai/dsh@<version> web;-y 免交互安装缺失版本
-    // --prefer-offline: 已缓存版本跳过注册表元数据往返,重启提速 1-2s(缺缓存时行为不变)
-    // [问题78] 缓存缺失时的补装也固定官方源,与更新链同源,杜绝镜像漂移
-    const spec = `@deepseek-ai/dsh@${cfg.dshVersion}`
-    // [问题69] 同快速路径:--no-open 仅 rc.8+ 支持(rc.7- 传了即 unknown option 崩)
-    const noOpen = semverGt(cfg.dshVersion, '0.1.0-rc.7') ? ['--no-open'] : []
-    if (npx.toLowerCase().endsWith('.cmd')) {
-      // Windows: .cmd 不能直接 spawn(Node 安全限制),须经 cmd /c
-      cmd = 'cmd.exe'
-      args = ['/c', npx, ...REGISTRY_ARGS, '--prefer-offline', '-y', spec, 'web', ...noOpen]
+    // [问题55] 快速路径:npx 缓存命中锁定版本 → 直接 node bin.js web,省去 npx 包装层
+    const binJs = resolveCachedDshBin()
+    const nodeExe = binJs ? resolveNodeExe() : null
+    if (binJs && nodeExe) {
+      cmd = nodeExe
+      // [问题69] --no-open:rc.8 起 dsh web 默认自动开默认浏览器(壳场景多余——壳自加载
+      // Web UI)。官方 CLI 开关 --no-open;rc.7 及以下不认此 flag(unknown option 即崩),
+      // 故仅在版本 ≥0.1.0-rc.8 时追加(配置层已由 profile patch web-runtime 行兜底)。
+      const noOpen = semverGt(cfg.dshVersion, '0.1.0-rc.7') ? ['--no-open'] : []
+      args = [binJs, 'web', ...noOpen]
+      log(`启动 dsh(快速路径,绕过 npx): ${cmd} ${args.join(' ')}`)
     } else {
-      cmd = npx
-      args = [...REGISTRY_ARGS, '--prefer-offline', '-y', spec, 'web', ...noOpen]
+      const npx = resolveNpxCommand()
+      if (!npx) {
+        log('未找到可用的 npx(PATH 与注册表均失败)')
+        return false
+      }
+      // 版本锁:npx -y @deepseek-ai/dsh@<version> web;-y 免交互安装缺失版本
+      // --prefer-offline: 已缓存版本跳过注册表元数据往返,重启提速 1-2s(缺缓存时行为不变)
+      // [问题78] 缓存缺失时的补装也固定官方源,与更新链同源,杜绝镜像漂移
+      const spec = `@deepseek-ai/dsh@${cfg.dshVersion}`
+      // [问题69] 同快速路径:--no-open 仅 rc.8+ 支持(rc.7- 传了即 unknown option 崩)
+      const noOpen = semverGt(cfg.dshVersion, '0.1.0-rc.7') ? ['--no-open'] : []
+      if (npx.toLowerCase().endsWith('.cmd')) {
+        // Windows: .cmd 不能直接 spawn(Node 安全限制),须经 cmd /c
+        cmd = 'cmd.exe'
+        args = ['/c', npx, ...REGISTRY_ARGS, '--prefer-offline', '-y', spec, 'web', ...noOpen]
+      } else {
+        cmd = npx
+        args = [...REGISTRY_ARGS, '--prefer-offline', '-y', spec, 'web', ...noOpen]
+      }
+      log(`启动 dsh(npx): ${cmd} ${args.join(' ')}`)
     }
-    log(`启动 dsh(npx): ${cmd} ${args.join(' ')}`)
   }
   dshChild = spawn(cmd, args, {
     cwd: os.homedir(),
@@ -2538,4 +2608,11 @@ if (!app.requestSingleInstanceLock()) {
       app.quit()
     }
   })
+}
+
+// [v0.5.0] plain-node 校验钩子:scripts/check-dsh-runtime.mjs 以 Module._load
+// stub 替换 electron 后加载本文件,抓取 resolveDshRuntime 断言双轨四分支。
+// Electron 主进程里 process.versions.electron 存在 → 不导出,运行态零影响。
+if (!process.versions.electron && typeof module !== 'undefined' && module.exports) {
+  module.exports = { resolveDshRuntime, resolveDefaultLocalDir }
 }
