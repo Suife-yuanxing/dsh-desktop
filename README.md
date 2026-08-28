@@ -113,7 +113,7 @@ DSH 版本锁定机制：
 - 仅 `local` 目标做能力探测（`bin.js` 存在 + node.exe 可解析），任何异常都记录 breadcrumb 到 `desktop.log` 并折叠回 official 启动——回滚只需把 `dshRuntime` 改回 `"official"`
 - local 轨 spawn 参数固定为 `node --expose-internals <bin.js> web`：本仓 web 组合含 cordis-plugin-hmr，loader 构造期硬性要求暴露 internals（官方轨 npx 树自行装配，不受影响）
 - local 轨首次启用前需完成 monorepo 依赖闭包组装：在 deepseek-harness 内执行本仓的 `powershell -File scripts/link-local-runtime.ps1`，把全部 workspace 成员依赖链接镜像到其根 node_modules（幂等可重放；monorepo 重装依赖后需再跑一次）
-- 壳设置 UI 不提供该开关，配置文件编辑即切换手段
+- 壳设置 UI 不提供该开关，配置文件编辑即切换手段（v0.5.1 起设置界面可切换，见下节）
 - 版本锁（`dshVersion`）仅约束 official 轨的 npx 安装规格，local 轨以构建产物自身为准
 
 示例：
@@ -127,6 +127,16 @@ DSH 版本锁定机制：
 ```
 
 启动来源校验：`npm run verify:runtime`（plain-node 断言 resolveDshRuntime 各分支与日志留痕）。
+
+### 运行时轨道开关与联合工作区（v0.5.1）
+
+双轨切换进设置界面，配置文件编辑仍是等价的回滚手段：
+
+- **壳设置窗口**（菜单「文件 → 设置」，Ctrl+,）：「运行时」卡片提供轨道切换按钮与本地构建目录/bin.js 状态展示
+- **Web UI 设置 → 更新**：「运行时轨道」分组提供同款切换（内联确认，切换经 202 编排 + 轮询）与「联合工作区」灰度开关
+- 切换编排复用版本切换的回滚语义：目标轨道在 60s 切换预算内未就绪 → 自动还原原轨道并重启；本地 bin 缺失等折叠回退场景会如实警示（不谎报成功）
+- **联合工作区灰度开关**：写 `~/.dsh/cordis.patch.yml` 的 `host-apiproxy` 配置行（`federatedWorkspacesEnabled`）。硬约束：**仅本地构建轨道可写**——官方 npm 包无此功能代码，写入会被官方 schema 拒载。开关块为壳独占管理的标准格式，手写内容会被拒绝读写并引导手动编辑
+- 切换进行中（`switching`/`restarting` 互斥）时 `/switch`、`/restart`、`/runtime/track` 互相拒绝（409）
 
 ## 项目结构
 
