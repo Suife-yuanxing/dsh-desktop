@@ -135,7 +135,7 @@ DSH 版本锁定机制：
 - **壳设置窗口**（菜单「文件 → 设置」，Ctrl+,）：「运行时」卡片提供轨道切换按钮与本地构建目录/bin.js 状态展示
 - **Web UI 设置 → 更新**：「运行时轨道」分组提供同款切换（内联确认，切换经 202 编排 + 轮询）与「联合工作区」灰度开关
 - 切换编排复用版本切换的回滚语义：目标轨道在 60s 切换预算内未就绪 → 自动还原原轨道并重启；本地 bin 缺失等折叠回退场景会如实警示（不谎报成功）
-- **联合工作区灰度开关**：写 `~/.dsh/cordis.patch.yml` 的 `host-apiproxy` 配置行（`federatedWorkspacesEnabled`）。硬约束：**仅本地构建轨道可写**——官方 npm 包无此功能代码，写入会被官方 schema 拒载。开关块为壳独占管理的标准格式，手写内容会被拒绝读写并引导手动编辑
+- **联合工作区灰度开关**：写 `~/.dsh/cordis.patch.yml` 的 `api-gateway` 配置行（`federatedWorkspacesEnabled`；该行 id 是 apiproxy 模块在 web profile 组合树里的行 id，`host-apiproxy` 只是模块短名，拿它当行 id 会挂空——v0.5.2 勘正）。硬约束：**仅本地构建轨道可写**——官方 npm 包无此功能代码，写入会被官方 schema 拒载。开关块为壳独占管理的标准格式，手写内容会被拒绝读写并引导手动编辑
 - 切换进行中（`switching`/`restarting` 互斥）时 `/switch`、`/restart`、`/runtime/track` 互相拒绝（409）
 
 ### 便携版 local 轨修复与图片预览 portal 修复（v0.5.2）

@@ -1039,16 +1039,19 @@ function runtimeStatePayload() {
   }
 }
 
-// ---------- 联合工作区灰度开关:home patch 的 host-apiproxy 配置行 ----------
+// ---------- 联合工作区灰度开关:home patch 的 api-gateway 配置行 ----------
 // 行格式由本壳独占管理(persona 同款 canonical 守卫)。patch 的 config 为整体替换
 // 语义(R30 教训:少带字段会让 schema 校验失败/丢默认),故四字段全显式写入——
 // 前三个与本地构建 apiproxy Config schema 的默认值一致(nativeOpen 在 Windows
 // 桌面本就为真),第四个是灰度位本体。官方包无 federated 字段,写入路径由
 // /federation/toggle 与 IPC 双闸限制在 local 轨道。删除整块 = 恢复默认(灰度关)。
+// [v0.5.2 勘正] patch 条目按组合树"行 id"寻址:apiproxy 模块在 web profile
+// (dsh-web-app/cordis.patch.yml)里的行 id 是 api-gateway;'host-apiproxy' 只是
+// 模块名 @deepseek-ai/dsh-host-apiproxy 的短名,拿它当行 id 会挂空、灰度位被
+// 静默忽略(0.5.2 活体验证实测)。
+const FEDERATION_ENTRY_ID = 'api-gateway'
 
-const FEDERATION_ENTRY_ID = 'host-apiproxy'
-
-/** host-apiproxy 管理块的标准形态(enabled 决定灰度位取值)。 */
+/** api-gateway 管理块的标准形态(enabled 决定灰度位取值)。 */
 function federationCanonicalLines(enabled) {
   return [
     `- id: ${FEDERATION_ENTRY_ID}`,
@@ -1060,7 +1063,7 @@ function federationCanonicalLines(enabled) {
   ]
 }
 
-/** home patch 中 host-apiproxy 行是否为壳管理的标准格式(两种灰度位取值均可)。 */
+/** home patch 中 api-gateway 行是否为壳管理的标准格式(两种灰度位取值均可)。 */
 function isCanonicalFederationRow(hit, lines) {
   const body = lines.slice(hit.start, hit.end).join('\n')
   return body === federationCanonicalLines(true).join('\n') || body === federationCanonicalLines(false).join('\n')
