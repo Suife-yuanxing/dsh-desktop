@@ -138,6 +138,16 @@ DSH 版本锁定机制：
 - **联合工作区灰度开关**：写 `~/.dsh/cordis.patch.yml` 的 `host-apiproxy` 配置行（`federatedWorkspacesEnabled`）。硬约束：**仅本地构建轨道可写**——官方 npm 包无此功能代码，写入会被官方 schema 拒载。开关块为壳独占管理的标准格式，手写内容会被拒绝读写并引导手动编辑
 - 切换进行中（`switching`/`restarting` 互斥）时 `/switch`、`/restart`、`/runtime/track` 互相拒绝（409）
 
+### 便携版 local 轨修复与图片预览 portal 修复（v0.5.2）
+
+两个实测缺陷修复：
+
+- **默认探测打包态修复**：0.5.1 便携版 exe 由 Temp 解压目录启动，`process.execPath`/`__dirname` 锚点向上都够不着工作区 ⇒ `resolveDefaultLocalDir()` 恒返回 null，local 轨静默回退官方（`[dshRuntime] local runtime missing at null` breadcrumb），联合工作区开关因此置灰。v0.5.2 补两类锚点：
+  - `PORTABLE_EXECUTABLE_DIR`——electron-builder 便携版启动时注入的真实 exe 所在目录（首个打包态锚点）；
+  - `DSH_LOCAL_DIR` 环境变量——显式覆盖，优先级高于一切探测（安装版/非常规布局用）。
+  回归锁：`npm run verify:runtime` 新增两条断言（PORTABLE 锚点先于 dev `__dirname` 命中夹具；env 覆盖一切锚点）。
+- **第三方插件 dsh-vision-router 图片预览修复**：该插件的 presentation boundary 垫片为 rc.8+ 自带一份 `PresentedImage`/`ImageGallery`（官方 rc.8 起不再导出 attachment React 实现），其「查看原图」浮层以 `position:fixed` **就地**渲染在消息流里，被祖先的 `content-visibility:auto`/`contain:paint` 困在单条消息的盒子内——点击模型图片后全屏遮罩只盖一条消息、大图从盒中溢出（表现为显示异常）。修复 = 浮层改经 `ReactDOM.createPortal(document.body)` 挂载（与官方 `ImageLightbox` 同法）。该插件为市场安装（非工作区源码），修复直接落在安装产物 `~/.dsh/profiles/web/node_modules/dsh-vision-router/lib/client-presentation-boundary-main.js`（原文件备份 `.bak-portal`），并配幂等重放器：**插件市场/self-update 覆盖安装后跑 `npm run fix:vision-router-portal` 重打**（锚点不匹配即上游改版，脚本拒改报错）
+
 ## 项目结构
 
 ```
