@@ -1,7 +1,9 @@
-// dsh-desktop 主进程 v0.5.1
+// dsh-desktop 主进程 v0.5.2
 // v0.1 Electron 壳 | v0.2 启动页+崩溃自愈 | v0.3 多窗口+dsh版本锁+dsh更新+壳自更新+全中文菜单
 // v0.5.0 联合工作区里程碑:dsh 运行时双轨切换(official npx/缓存路径 ↔ local 本地构建 bin.js)
 // v0.5.1 双轨切换进设置(壳设置窗口 Ctrl+, + Web UI 更新区;切换失败自动回滚)+ 联合工作区灰度开关(仅本地轨可写)
+// v0.5.2 便携版 local 轨修复:默认探测补 PORTABLE_EXECUTABLE_DIR 锚点(0.5.1 打包态探测恒 null
+//        ⇒ local 恒回退官方、联邦开关置灰)+ DSH_LOCAL_DIR 环境变量覆盖
 // dsh 运行时经 npx 调用(PATH→注册表),版本锁与 dshRuntime 存于 ~/.dsh/desktop-config.json,插件化零破坏。
 const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain, net: electronNet } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
@@ -262,8 +264,16 @@ function resolveCachedDshBin(version) {
 // <工作区>/dsh-desktop 与 <工作区>/deepseek-harness 并列,安装版/便携版被
 // 移动后向上最多三层仍找不到 bin.js 时返回 null(随后由 resolveDshRuntime
 // 记日志回退官方路径)。显式 dshLocalDir 配置优先于本默认值。
+// [v0.5.2] 便携版打包态 process.execPath 指向 Temp 解压目录、__dirname 在
+// asar 内,两者向上都够不着工作区 ⇒ 默认探测恒 null、local 轨永远回退官方
+// (0.5.1 实测,联邦开关因此置灰)。补两类锚点:electron-builder 便携版的
+// PORTABLE_EXECUTABLE_DIR(真实 exe 所在目录,随启动注入)与 DSH_LOCAL_DIR
+// 环境变量(安装版/非常规布局的显式覆盖,优先级最高)。
 function resolveDefaultLocalDir() {
-  const anchors = app.isPackaged ? [path.dirname(process.execPath), __dirname] : [__dirname]
+  if (process.env.DSH_LOCAL_DIR) return process.env.DSH_LOCAL_DIR
+  const anchors = app.isPackaged
+    ? [process.env.PORTABLE_EXECUTABLE_DIR, path.dirname(process.execPath), __dirname]
+    : [__dirname]
   try {
     for (const anchor of [...new Set(anchors)]) {
       let dir = anchor

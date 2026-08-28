@@ -110,6 +110,40 @@ harness.resolveDshRuntime({ dshRuntime: 'local', dshLocalDir: missingDir }, { qu
 const afterQuiet = readTail(logFile, 5)
 check('quiet mode suppresses breadcrumb', JSON.stringify(afterQuiet) === JSON.stringify(beforeQuiet))
 
+// ---- [v0.5.2] 打包态锚点回归 ----
+// 0.5.1 便携版 exe 解压到 Temp 运行,execPath/__dirname 锚点向上都够不着工作区
+// ⇒ 默认探测恒 null、local 轨静默回退官方(联邦开关置灰)。dev harness 里
+// __dirname 必然命中真实兄弟仓,无法断言 null;回归锁两件可断言的事:
+// ① electron-builder 便携版注入的 PORTABLE_EXECUTABLE_DIR 被采纳,且其命中
+//    (scratch 夹具)先于 __dirname 命中(真实兄弟仓);
+// ② DSH_LOCAL_DIR 环境变量覆盖一切锚点。
+const repoLib = join(scratch, 'deepseek-harness', 'apps', 'cli', 'lib')
+mkdirSync(repoLib, { recursive: true })
+writeFileSync(join(repoLib, 'bin.js'), '// harness probe\n')
+const prevExecPath = process.execPath
+const prevIsPackaged = electronStub.app.isPackaged
+const prevPortableEnv = process.env.PORTABLE_EXECUTABLE_DIR
+const prevLocalEnv = process.env.DSH_LOCAL_DIR
+try {
+  electronStub.app.isPackaged = true
+  delete process.env.DSH_LOCAL_DIR
+  delete process.env.PORTABLE_EXECUTABLE_DIR
+  process.execPath = join(scratch, 'x', 'y', 'z', 'DeepSeek Harness.exe')
+  process.env.PORTABLE_EXECUTABLE_DIR = join(scratch, 'portable-dist')
+  check('PORTABLE_EXECUTABLE_DIR anchor wins before dev __dirname',
+    harness.resolveDefaultLocalDir() === repoLib, String(harness.resolveDefaultLocalDir()))
+  process.env.DSH_LOCAL_DIR = goodHome
+  check('DSH_LOCAL_DIR env overrides all anchors',
+    harness.resolveDefaultLocalDir() === goodHome, String(harness.resolveDefaultLocalDir()))
+} finally {
+  process.execPath = prevExecPath
+  electronStub.app.isPackaged = prevIsPackaged
+  if (prevPortableEnv === undefined) delete process.env.PORTABLE_EXECUTABLE_DIR
+  else process.env.PORTABLE_EXECUTABLE_DIR = prevPortableEnv
+  if (prevLocalEnv === undefined) delete process.env.DSH_LOCAL_DIR
+  else process.env.DSH_LOCAL_DIR = prevLocalEnv
+}
+
 try { rmSync(scratch, { recursive: true, force: true }) } catch { /* temp cleanup best-effort */ }
 
 if (failures.length) {
