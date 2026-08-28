@@ -104,6 +104,12 @@ check('breadcrumb appended to desktop.log',
   after.some((l) => l.includes('[dshRuntime] local runtime missing')),
   'expected "[dshRuntime] local runtime missing" trail in ~/.dsh/logs/desktop.log')
 
+// [v0.5.1] quiet 模式不写 breadcrumb:GET /runtime/state 等只读轮询通道不刷日志
+const beforeQuiet = readTail(logFile, 5)
+harness.resolveDshRuntime({ dshRuntime: 'local', dshLocalDir: missingDir }, { quiet: true })
+const afterQuiet = readTail(logFile, 5)
+check('quiet mode suppresses breadcrumb', JSON.stringify(afterQuiet) === JSON.stringify(beforeQuiet))
+
 try { rmSync(scratch, { recursive: true, force: true }) } catch { /* temp cleanup best-effort */ }
 
 if (failures.length) {
