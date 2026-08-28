@@ -394,7 +394,13 @@ window.__ModuleLoader__.load({
 			"[data-dsh-sb]::-webkit-scrollbar-thumb{background:transparent;border-radius:99px;border:2px solid transparent;background-clip:padding-box}",
 			"[data-dsh-sb]::-webkit-scrollbar-corner{background:transparent}",
 			"[data-dsh-sb].dsh-sb-near::-webkit-scrollbar-thumb{background:rgba(127,127,127,.35);background:light-dark(rgba(0,0,0,.26),rgba(255,255,255,.34))}",
-			"[data-dsh-sb].dsh-sb-near::-webkit-scrollbar-thumb:hover{background:rgba(127,127,127,.55);background:light-dark(rgba(0,0,0,.42),rgba(255,255,255,.5))}"
+			"[data-dsh-sb].dsh-sb-near::-webkit-scrollbar-thumb:hover{background:rgba(127,127,127,.55);background:light-dark(rgba(0,0,0,.42),rgba(255,255,255,.5))}",
+			// ---- [用户 2026-08-29] 去除会话顶部「Session log」按钮 ----
+			// 会话头右侧的会话日志下载钮(upstream 功能,主人不要)。按 CSS module
+			// 本地名后缀寻址:构建哈希前缀(如 u9XLuq_)随构建漂移,`_sessionLogButton`
+			// 后缀源自源码类名、official 与 local 两轨同源稳定;前缀通配故双轨通用。
+			// 纯视觉移除,功能面(轨迹 tab/会话日志数据)不受影响。
+			"button[class*=\"_sessionLogButton\"]{display:none!important}"
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
