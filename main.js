@@ -1,6 +1,7 @@
-// dsh-desktop 主进程 v0.5.0
+// dsh-desktop 主进程 v0.5.1
 // v0.1 Electron 壳 | v0.2 启动页+崩溃自愈 | v0.3 多窗口+dsh版本锁+dsh更新+壳自更新+全中文菜单
 // v0.5.0 联合工作区里程碑:dsh 运行时双轨切换(official npx/缓存路径 ↔ local 本地构建 bin.js)
+// v0.5.1 双轨切换进设置(壳设置窗口 Ctrl+, + Web UI 更新区;切换失败自动回滚)+ 联合工作区灰度开关(仅本地轨可写)
 // dsh 运行时经 npx 调用(PATH→注册表),版本锁与 dshRuntime 存于 ~/.dsh/desktop-config.json,插件化零破坏。
 const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain, net: electronNet } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
@@ -290,19 +291,22 @@ const DEFAULT_LOCAL_DIR = resolveDefaultLocalDir()
  * 失败(bin 缺失/node.exe 解析不到)都记 desktop.log breadcrumb 并折叠回
  * official——回滚仅需把配置改回 official。
  * @param {{ dshRuntime?: string, dshLocalDir?: string }} config - 壳配置(desktop-config.json 载入态)。
+ * @param {{ quiet?: boolean }} [opts] - quiet=true 静默模式:状态轮询等只读调用
+ *   不写 breadcrumb 日志(否则每次轮询刷屏);启动路径不传,失败必留痕。
  * @returns {{ mode: 'official'|'local', fallback?: boolean, node?: string, bin?: string }}
  */
-function resolveDshRuntime(config = cfg) {
+function resolveDshRuntime(config = cfg, opts = {}) {
+  const quiet = !!opts.quiet
   if ((config.dshRuntime ?? 'official') !== 'local') return { mode: 'official' }
   const dir = (typeof config.dshLocalDir === 'string' && config.dshLocalDir.trim()) ? config.dshLocalDir.trim() : DEFAULT_LOCAL_DIR
   const bin = dir ? path.join(dir, 'bin.js') : null
   if (!bin || !fs.existsSync(bin)) {
-    log(`[dshRuntime] local runtime missing at ${bin ?? String(dir)}; falling back to official`)
+    if (!quiet) log(`[dshRuntime] local runtime missing at ${bin ?? String(dir)}; falling back to official`)
     return { mode: 'official', fallback: true }
   }
   const node = resolveNodeExe()
   if (!node) {
-    log('[dshRuntime] node.exe unresolvable(PATH 与注册表均失败); falling back to official')
+    if (!quiet) log('[dshRuntime] node.exe unresolvable(PATH 与注册表均失败); falling back to official')
     return { mode: 'official', fallback: true }
   }
   return { mode: 'local', node, bin }
@@ -989,6 +993,143 @@ async function applyDshLatest() {
   if (latest === cfg.dshVersion) return { ok: true, note: '已是最新版' }
   switchDshVersion(latest) // 内部自带预检+回滚+switching 互斥
   return { ok: true, accepted: true }
+}
+
+// ---------- v0.5.1 运行时轨道状态/切换 + 联合工作区灰度开关 ----------
+
+/** 轨道中文名(日志与 UI 文案共用)。 */
+const TRACK_ZH = { official: '官方(npm)', local: '本地构建' }
+
+/**
+ * 运行时轨道状态快照(轨道意愿 vs 实际生效 + 本地轨可用性 + 联邦灰度态)。
+ * 供 GET /runtime/state 与壳设置窗口 IPC 共用;quiet 解析避免轮询刷日志。
+ */
+function runtimeStatePayload() {
+  const runtime = resolveDshRuntime(cfg, { quiet: true })
+  const track = cfg.dshRuntime === 'local' ? 'local' : 'official'
+  const localDir = (typeof cfg.dshLocalDir === 'string' && cfg.dshLocalDir.trim()) ? cfg.dshLocalDir.trim() : DEFAULT_LOCAL_DIR
+  const localBinExists = !!(localDir && fs.existsSync(path.join(localDir, 'bin.js')))
+  const fed = readFederatedSwitch()
+  return {
+    track,
+    effective: runtime.mode,
+    fallback: !!runtime.fallback,
+    localDir,
+    localBinExists,
+    federated: {
+      enabled: fed.enabled === true,
+      // 功能代码只存在于本地构建(官方 0.1.1-rc.2 实测无 federatedWorkspaces);
+      // 开关可写前提 = 本地轨且本地 bin 在位,官方轨写入会被官方 schema 拒载。
+      supported: track === 'local' && localBinExists,
+      ...(fed.error ? { error: fed.error } : {}),
+    },
+    switching: switching || restarting,
+    dshVersion: cfg.dshVersion,
+    shellVersion: app.getVersion(),
+  }
+}
+
+// ---------- 联合工作区灰度开关:home patch 的 host-apiproxy 配置行 ----------
+// 行格式由本壳独占管理(persona 同款 canonical 守卫)。patch 的 config 为整体替换
+// 语义(R30 教训:少带字段会让 schema 校验失败/丢默认),故四字段全显式写入——
+// 前三个与本地构建 apiproxy Config schema 的默认值一致(nativeOpen 在 Windows
+// 桌面本就为真),第四个是灰度位本体。官方包无 federated 字段,写入路径由
+// /federation/toggle 与 IPC 双闸限制在 local 轨道。删除整块 = 恢复默认(灰度关)。
+
+const FEDERATION_ENTRY_ID = 'host-apiproxy'
+
+/** host-apiproxy 管理块的标准形态(enabled 决定灰度位取值)。 */
+function federationCanonicalLines(enabled) {
+  return [
+    `- id: ${FEDERATION_ENTRY_ID}`,
+    '  config:',
+    '    nativeOpen: true',
+    '    sessionExportCompressionLevel: 6',
+    '    coldBlankProbeMaxBytes: 1024',
+    `    federatedWorkspacesEnabled: ${enabled ? 'true' : 'false'}`,
+  ]
+}
+
+/** home patch 中 host-apiproxy 行是否为壳管理的标准格式(两种灰度位取值均可)。 */
+function isCanonicalFederationRow(hit, lines) {
+  const body = lines.slice(hit.start, hit.end).join('\n')
+  return body === federationCanonicalLines(true).join('\n') || body === federationCanonicalLines(false).join('\n')
+}
+
+/** 读联合工作区灰度态;error 非空 = 条目存在但非本工具标准格式(引导手动编辑)。 */
+function readFederatedSwitch() {
+  const { entries, lines } = parseHomePatch()
+  const hit = entries.find((e) => e.id === FEDERATION_ENTRY_ID)
+  if (!hit) return { enabled: false }
+  if (!isCanonicalFederationRow(hit, lines)) {
+    return { enabled: null, error: `cordis.patch.yml 中 ${FEDERATION_ENTRY_ID} 行不是本工具的标准格式,请手动编辑该文件` }
+  }
+  const m = lines.slice(hit.start, hit.end).join('\n').match(/federatedWorkspacesEnabled:\s*(true|false)/)
+  return { enabled: m ? m[1] === 'true' : false }
+}
+
+/** 写/删联合工作区灰度行。enable=false 删整块恢复默认(灰度关)。 */
+function writeFederatedSwitch(enable) {
+  const { entries, lines, valid } = parseHomePatch()
+  if (!valid) return { ok: false, error: 'cordis.patch.yml 含顶层数组以外的内容,为安全起见请手动编辑该文件' }
+  const hit = entries.find((e) => e.id === FEDERATION_ENTRY_ID)
+  if (!enable) {
+    if (!hit) return { ok: true }
+    if (!isCanonicalFederationRow(hit, lines)) return { ok: false, error: `条目 ${FEDERATION_ENTRY_ID} 有手写内容,请手动编辑` }
+    lines.splice(hit.start, hit.end)
+    while (lines[hit.start] !== undefined && lines[hit.start].trim() === '' && lines[hit.start + 1] !== undefined && lines[hit.start + 1].trim() === '') lines.splice(hit.start, 1)
+  } else {
+    if (hit) {
+      if (!isCanonicalFederationRow(hit, lines)) return { ok: false, error: `条目 ${FEDERATION_ENTRY_ID} 有手写内容,请手动编辑` }
+      // 已是标准块:仅翻转灰度位行,不重复追加
+      for (let i = hit.start; i < hit.end; i++) {
+        if (/^\s+federatedWorkspacesEnabled:/.test(lines[i])) { lines[i] = '    federatedWorkspacesEnabled: true'; break }
+      }
+    } else {
+      if (lines.length && lines[lines.length - 1].trim() !== '') lines.push('')
+      lines.push(...federationCanonicalLines(true), '')
+    }
+  }
+  try { writeHomePatch(lines) } catch (e) { return { ok: false, error: `写入失败: ${e.message}` } }
+  return { ok: true }
+}
+
+/**
+ * 运行时轨道切换编排:写轨 → 重启服务(切换预算) → 就绪确认;失败自动回滚
+ * 原轨道(镜像 applyDshVersion 的回滚语义,防坏轨道进入崩溃循环)。调用方
+ * 已持有 switching 互斥并完成合法性与幂等检查。
+ * @returns {{ ok: boolean, warn?: string, error?: string }}
+ */
+async function runTrackSwitch(mode) {
+  const prev = cfg.dshRuntime === 'local' ? 'local' : 'official'
+  settingsStatus({ phase: 'apply', message: `正在切换运行时轨道为 ${TRACK_ZH[mode]} 并重启服务…` })
+  cfg.dshRuntime = mode
+  saveConfig(cfg)
+  rebuildTray()
+  log(`[dshRuntime] 轨道切换 ${prev} → ${mode}`)
+  await restartDsh(SWITCH_TIMEOUT_MS)
+  if (await isHttpOk()) {
+    loadUrlAll(DSH_URL)
+    const resolved = resolveDshRuntime(cfg, { quiet: true })
+    if (resolved.fallback) {
+      // 服务活着,但实际是折叠回 official 在跑——诚实告知,不谎报"切换成功"
+      const warn = `${TRACK_ZH[mode]}轨道未真正生效(本地 bin 缺失或 node.exe 不可解析),本次实际按${TRACK_ZH[resolved.mode]}运行。请检查本地构建目录后重试。`
+      log(`[dshRuntime] ${warn}`)
+      settingsStatus({ phase: 'warn', message: warn })
+      return { ok: true, warn }
+    }
+    settingsStatus({ phase: 'ok', message: `已切换到 ${TRACK_ZH[mode]}轨道。` })
+    notify('运行时轨道', `已切换到${TRACK_ZH[mode]}。`)
+    return { ok: true }
+  }
+  log(`[dshRuntime] ${mode} 轨道 ${SWITCH_TIMEOUT_MS / 1000}s 未就绪,自动回滚到 ${prev}`)
+  notify('运行时轨道切换失败', `${TRACK_ZH[mode]}启动超时,已自动回滚到${TRACK_ZH[prev]}。`)
+  settingsStatus({ phase: 'rollback', message: `${TRACK_ZH[mode]}启动超时,已自动回滚到${TRACK_ZH[prev]}。` })
+  cfg.dshRuntime = prev
+  saveConfig(cfg)
+  rebuildTray()
+  await restartDsh()
+  return { ok: false, error: `${TRACK_ZH[mode]}启动超时,已自动回滚到${TRACK_ZH[prev]}。` }
 }
 
 // ---------- 窗口(共享服务多开) ----------
@@ -2272,6 +2413,37 @@ function startShellApi() {
         shell.openExternal(`${GITHUB_SHELL}/releases/latest`)
         return send(200, { ok: true })
       }
+      // ---------- [v0.5.1] 运行时轨道与联合工作区(Web UI 更新区经此驱动) ----------
+      if (req.method === 'GET' && url.pathname === '/runtime/state') {
+        return send(200, runtimeStatePayload())
+      }
+      if (req.method === 'POST' && url.pathname === '/runtime/track') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { track } = JSON.parse(body || '{}')
+        if (track !== 'official' && track !== 'local') return send(400, { ok: false, error: 'track 必须为 official 或 local' })
+        if (switching || restarting) return send(409, { ok: false, error: '已有切换或重启在进行' })
+        if (track === (cfg.dshRuntime === 'local' ? 'local' : 'official')) {
+          return send(200, { ok: true, note: '已是该轨道', state: runtimeStatePayload() })
+        }
+        // 202 + 轮询惯用法:前端轮询 /runtime/state 至 !switching(同 /updates/apply-dsh)
+        switching = true
+        runTrackSwitch(track).finally(() => { switching = false })
+        return send(202, { ok: true, accepted: true })
+      }
+      if (req.method === 'POST' && url.pathname === '/federation/toggle') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { enabled } = JSON.parse(body || '{}')
+        if (typeof enabled !== 'boolean') return send(400, { ok: false, error: 'enabled 必须为布尔值' })
+        if (!runtimeStatePayload().federated.supported) {
+          return send(400, { ok: false, error: '联合工作区仅本地构建轨道可用(官方包无此功能代码);请先切换运行时轨道为本地构建' })
+        }
+        const r = writeFederatedSwitch(enabled)
+        if (!r.ok) return send(400, { ok: false, error: r.error })
+        log(`[dshRuntime] 联合工作区灰度开关 → ${enabled ? '开' : '关'}`)
+        return send(200, { ok: true, enabled, state: runtimeStatePayload() })
+      }
       if (req.method === 'POST' && url.pathname === '/persona') {
         let body = ''
         for await (const chunk of req) body += chunk
@@ -2380,9 +2552,34 @@ function setupSettingsIpc() {
     dshVersion: cfg.dshVersion,
     channel: canShellSelfUpdate ? 'NSIS 安装版(支持自更新)' : isPortable ? '便携版(手动更新)' : '开发模式',
     switching,
+    runtime: runtimeStatePayload(),
   }))
   ipcMain.on('dsh-settings:check-dsh-update', () => { checkDshUpdate(true) })
   ipcMain.on('dsh-settings:check-shell-update', () => { checkShellUpdate() })
+  // [v0.5.1] 运行时轨道切换:全程 await 编排(含回滚),进度经 dsh-settings:status 推送
+  ipcMain.handle('dsh-runtime:set-track', async (_e, mode) => {
+    if (mode !== 'official' && mode !== 'local') return { ok: false, error: 'track 必须为 official 或 local' }
+    if (switching || restarting) return { ok: false, error: '已有切换或重启在进行' }
+    if (mode === (cfg.dshRuntime === 'local' ? 'local' : 'official')) {
+      return { ok: true, note: '已是该轨道', state: runtimeStatePayload() }
+    }
+    switching = true
+    try {
+      const r = await runTrackSwitch(mode)
+      return { ...r, state: runtimeStatePayload() }
+    } finally { switching = false }
+  })
+  // [v0.5.1] 联合工作区灰度开关:仅本地轨可写(官方包 schema 无此字段)
+  ipcMain.handle('dsh-federation:set', (_e, enabled) => {
+    if (typeof enabled !== 'boolean') return { ok: false, error: 'enabled 必须为布尔值' }
+    if (!runtimeStatePayload().federated.supported) {
+      return { ok: false, error: '联合工作区仅本地构建轨道可用(官方包无此功能代码);请先切换运行时轨道为本地构建' }
+    }
+    const r = writeFederatedSwitch(enabled)
+    if (!r.ok) return { ok: false, error: r.error }
+    log(`[dshRuntime] 联合工作区灰度开关 → ${enabled ? '开' : '关'}`)
+    return { ok: true, enabled, state: runtimeStatePayload() }
+  })
   // 日志查看:返回 desktop.log 最近 N 行(默认 300,上限 2000)
   ipcMain.handle('dsh-logs:tail', (_e, lines = 300) => {
     const n = Math.max(1, Math.min(Number(lines) || 300, 2000))
