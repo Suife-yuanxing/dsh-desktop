@@ -68,6 +68,18 @@
     <div class="hint">壳的历史版本可到 GitHub Releases 手动下载。</div>
   </div>
 
+  <h2>运行时</h2>
+  <div class="card">
+    <div class="row"><span class="label">运行时轨道</span><span class="value" id="rt-track">-</span></div>
+    <div class="row"><span class="label">本地构建目录</span><span class="value" id="rt-localdir">-</span></div>
+    <div class="row"><span class="label">联合工作区(实验)</span><span class="value"><label style="cursor:pointer"><input type="checkbox" id="chk-fed"> 启用灰度</label></span></div>
+    <div class="actions">
+      <button class="btn" id="btn-track-local">切换到本地构建</button>
+      <button class="btn" id="btn-track-official">切换到官方</button>
+    </div>
+    <div class="hint">官方轨道 = npx/缓存 npm 包;本地轨道 = 源码仓构建 bin.js(前提:运行 deepseek-harness/scripts/link-local-runtime.ps1 组装依赖闭包)。切换失败自动回滚原轨道。联合工作区功能仅存在于本地构建,官方轨道下不可启用。</div>
+  </div>
+
   <h2>日志</h2>
   <div class="card">
     <div class="toolbar">
@@ -95,7 +107,70 @@
     document.getElementById('dsh-version').textContent = state.dshVersion || '-'
     document.getElementById('shell-version').textContent = state.shellVersion || '-'
     document.getElementById('channel').textContent = state.channel || '-'
+    renderRuntime()
   }
+
+  // ---------- [v0.5.1] 运行时轨道 + 联合工作区 ----------
+  let rtBusy = false
+  const elTrack = document.getElementById('rt-track')
+  const elLocalDir = document.getElementById('rt-localdir')
+  const chkFed = document.getElementById('chk-fed')
+  const btnLocal = document.getElementById('btn-track-local')
+  const btnOfficial = document.getElementById('btn-track-official')
+
+  function renderRuntime() {
+    const rt = state.runtime
+    if (!rt) return
+    const trackZh = rt.track === 'local' ? '本地构建' : '官方(npm)'
+    const effZh = rt.effective === 'local' ? '本地构建' : '官方(npm)'
+    elTrack.textContent = rt.track === rt.effective
+      ? trackZh
+      : `${trackZh}(实际按${effZh}${rt.fallback ? ':本地缺失回退' : ''})`
+    elLocalDir.textContent = rt.localDir
+      ? rt.localDir + (rt.localBinExists ? '' : ' · bin.js 缺失')
+      : '未探测到(兄弟仓 deepseek-harness/apps/cli/lib)'
+    elLocalDir.style.color = rt.localDir && !rt.localBinExists ? '#f85149' : ''
+    chkFed.checked = rt.federated.enabled === true
+    chkFed.disabled = rtBusy || !rt.federated.supported
+    chkFed.title = rt.federated.supported
+      ? ''
+      : '仅本地构建轨道可用(官方包无此功能代码)'
+    btnLocal.disabled = rtBusy || rt.track === 'local'
+    btnOfficial.disabled = rtBusy || rt.track === 'official'
+  }
+
+  async function setTrack(mode) {
+    if (rtBusy) return
+    rtBusy = true
+    renderRuntime()
+    setStatus('正在切换运行时轨道并重启服务…', 'busy')
+    try {
+      const r = await api.setRuntimeTrack(mode)
+      if (!r.ok) setStatus(r.error || '切换被拒绝', 'fail')
+      else if (r.warn) setStatus(r.warn, 'busy')
+      else if (r.note) setStatus(r.note, 'ok')
+      else setStatus('轨道已切换。', 'ok')
+    } catch (e) { setStatus('切换失败: ' + e.message, 'fail') }
+    rtBusy = false
+    refresh()
+  }
+  btnLocal.addEventListener('click', () => setTrack('local'))
+  btnOfficial.addEventListener('click', () => setTrack('official'))
+
+  chkFed.addEventListener('change', async () => {
+    if (rtBusy) return
+    const want = chkFed.checked
+    rtBusy = true
+    renderRuntime()
+    setStatus(want ? '正在启用联合工作区…' : '正在关闭联合工作区…', 'busy')
+    try {
+      const r = await api.setFederated(want)
+      if (!r.ok) setStatus(r.error || '操作被拒绝', 'fail')
+      else setStatus(want ? '已写入灰度配置,dsh 热载生效;工作区选择界面如未出现入口请重载界面。' : '已恢复默认(灰度关)。', 'ok')
+    } catch (e) { setStatus('操作失败: ' + e.message, 'fail') }
+    rtBusy = false
+    refresh()
+  })
 
   async function refresh() {
     try {

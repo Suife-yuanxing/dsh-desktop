@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('dshDesktop', {
     checkDshUpdate: () => ipcRenderer.send('dsh-settings:check-dsh-update'),
     checkShellUpdate: () => ipcRenderer.send('dsh-settings:check-shell-update'),
     onStatus: (cb) => ipcRenderer.on('dsh-settings:status', (_e, s) => cb(s)),
+    // [v0.5.1] 运行时轨道切换(含回滚编排)与联合工作区灰度开关;进度经 onStatus 推送
+    setRuntimeTrack: (mode) => ipcRenderer.invoke('dsh-runtime:set-track', mode),
+    setFederated: (enabled) => ipcRenderer.invoke('dsh-federation:set', enabled),
   },
   // 日志查看:tail 读取最近 N 行
   logs: {
