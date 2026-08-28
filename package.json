@@ -11,7 +11,8 @@
     "predist": "node scripts/check-dist-lock.mjs",
     "dist": "electron-builder --win --config builder.yml --publish never",
     "verify:runtime": "node scripts/check-dsh-runtime.mjs",
-    "fix:vision-router-portal": "node scripts/patch-vision-router-portal.mjs"
+    "fix:vision-router-portal": "node scripts/patch-vision-router-portal.mjs",
+    "fix:mnemon-settings-visibility": "node scripts/patch-mnemon-settings-visibility.mjs"
   },
   "devDependencies": {
     "electron": "^33.0.0",

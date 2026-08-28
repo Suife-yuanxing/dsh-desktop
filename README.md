@@ -147,6 +147,7 @@ DSH 版本锁定机制：
   - `DSH_LOCAL_DIR` 环境变量——显式覆盖，优先级高于一切探测（安装版/非常规布局用）。
   回归锁：`npm run verify:runtime` 新增两条断言（PORTABLE 锚点先于 dev `__dirname` 命中夹具；env 覆盖一切锚点）。
 - **第三方插件 dsh-vision-router 图片预览修复**：该插件的 presentation boundary 垫片为 rc.8+ 自带一份 `PresentedImage`/`ImageGallery`（官方 rc.8 起不再导出 attachment React 实现），其「查看原图」浮层以 `position:fixed` **就地**渲染在消息流里，被祖先的 `content-visibility:auto`/`contain:paint` 困在单条消息的盒子内——点击模型图片后全屏遮罩只盖一条消息、大图从盒中溢出（表现为显示异常）。修复 = 浮层改经 `ReactDOM.createPortal(document.body)` 挂载（与官方 `ImageLightbox` 同法）。该插件为市场安装（非工作区源码），修复直接落在安装产物 `~/.dsh/profiles/web/node_modules/dsh-vision-router/lib/client-presentation-boundary-main.js`（原文件备份 `.bak-portal`），并配幂等重放器：**插件市场/self-update 覆盖安装后跑 `npm run fix:vision-router-portal` 重打**（锚点不匹配即上游改版，脚本拒改报错）
+- **第三方插件 dsh-mnemon 设置卡静默死控件修复（0.5.2 后补丁，随仓脚本交付）**：记忆系统设置卡的不可用告警 guard 原要求 core+interaction 两个设置快照**同时** unavailable 才显示；单侧 RPC 失败（瞬时超时/Host 未就绪）时卡片照常渲染但 `coreDisabled=true`——展示形态（Sidebar/Buildin）等单选组静默禁用、零提示（「无法切换」体感）。修复 = guard 改 `||`（任一不可用即显式告警）+ 告警页附「重试 / Retry」按钮原地重载两个快照。落在安装产物 `lib/client.js`（备份 `.bak-visibility`），重放器 `npm run fix:mnemon-settings-visibility`；插件升级覆盖后重跑即可
 
 ## 项目结构
 
