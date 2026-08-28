@@ -369,6 +369,21 @@ window.__ModuleLoader__.load({
 			// 同拍加回不新增重排帧数。width 一并过渡:实测 margin(507)与宽度缩量(491)
 			// 不一致,宽度另有 calc 驱动,双过渡保证所有相关属性同步动画。
 			"#root{transition:margin-right .38s cubic-bezier(0.16,0.67,0.11,0.99),width .38s cubic-bezier(0.16,0.67,0.11,0.99)!important}",
+			// [问题112] 开合侧边卡片:窗口化下主列「下潜-回弹」根治(输入框上抬挤压 + 文本手风琴)。
+			// 结构性根因:面板空间预留(#root margin-right 先行动画)把主列压到比最终值还窄
+			// ~240px——左栏收起是核心 UI 对中栏变窄的响应式行为,必须等下潜发生才触发,
+			// 时序不可重排;主列穿过卡片换行阈值 → 高度 93→133→93 上抬 40px 挤压对话,
+			// 对话文本 wrap→unwrap→rewrap 手风琴。最大化时主列全程 >780 卡片被 max-width
+			// 钉死故无症状(问题111c 不变式仅在宽窗成立)。修复:开合窗口期(installPushClamp
+			// 挂 .dsh-vt-push-clamp,950ms)给中栏轨道子元素方向不对称双钳制——
+			// 开:地板 min-width=最终宽(主列下潜时内容列不再变窄,溢出部分恰被滑入的面板
+			// 覆盖/贴其左缘;卡片全程 ≥ 最终宽 707@1400 窗,永不换行、高度恒定);
+			// 合:天花板 max-width=最终宽(收起时 margin 先消、左栏后展,主列会向上过冲
+			// ~200px 再回落,天花板钉住 → 文本只做一次单调重排)。两方向主列全程单调,
+			// 且被钳帧内子树零重排(长会话性能)。寻址沿 better-sidebar layout.css 同款双
+			// 选择器([data-pane="conversation"] 与 :has(> [data-slot="conversation"]),
+			// 当前宿主仅后者命中,双写防改名)。
+			"html.dsh-vt-push-clamp #root [data-dsh-frame] > [data-pane=\"conversation\"],html.dsh-vt-push-clamp #root :has(> [data-slot=\"conversation\"]){min-width:var(--dsh-vt-push-mw,none)!important;max-width:var(--dsh-vt-push-mx,none)!important}",
 			// ---- [R62→聊天区同步] 滚动条邻近显现(侧栏 + 中栏聊天区) ----
 			// 默认滚动条隐形(thumb 透明),鼠标进入容器右缘感应带(installScrollbarProximity
 			// 挂 .dsh-sb-near)才显色,移开即隐。轨道恒 8px 占位与 dsh 全局一致——显隐
@@ -1090,7 +1105,54 @@ window.__ModuleLoader__.load({
 					setSt({ status: "ready", info: s, check: null });
 				}).catch(function (e) { setSt({ status: "error", message: String((e && e.message) || e) }); });
 			};
-			react.useEffect(function () { load(); }, []);
+
+			// ---------- [v0.5.1] 运行时轨道 + 联合工作区灰度(壳 /runtime/* 与 /federation/toggle) ----------
+			var rt = react.useState({ status: "loading" });
+			var confirmTrack = react.useState(null);
+			var rtBusy = react.useState(false);
+			var setRtBusy = rtBusy[1];
+			var loadRt = function () {
+				// 旧壳无 /runtime/state(404 {error:"not found"}) → oldshell 态:仅提示升级,控件不渲染
+				api("/runtime/state").then(function (s) {
+					if (!s || !s.track) { rt[1]({ status: "oldshell" }); return; }
+					rt[1]({ status: "ready", info: s });
+				}).catch(function () { rt[1]({ status: "oldshell" }); });
+			};
+			react.useEffect(function () { load(); loadRt(); }, []);
+
+			var pollTrackDone = function () {
+				// 切换为 202 异步编排(写轨→重启→失败回滚);轮询到 !switching 即编排结束
+				setRtBusy(true);
+				var poll = setInterval(function () {
+					api("/runtime/state").then(function (s) {
+						if (s && s.switching) return;
+						clearInterval(poll);
+						setRtBusy(false);
+						if (s && s.track) rt[1]({ status: "ready", info: s });
+						load();
+					}).catch(function () { /* 编排进行中,继续轮询 */ });
+				}, 1500);
+			};
+			var doTrack = function (mode) {
+				setRtBusy(true);
+				setMsg("正在切换运行时轨道并重启服务…");
+				api("/runtime/track", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ track: mode }) }).then(function (r) {
+					confirmTrack[1](null);
+					if (!r.ok) { setRtBusy(false); setMsg(r.error || "切换被拒绝"); return; }
+					if (r.note) { setRtBusy(false); setMsg(r.note); loadRt(); return; }
+					pollTrackDone();
+				}).catch(function (e) { setRtBusy(false); confirmTrack[1](null); setMsg("请求失败: " + e.message); });
+			};
+			var doFed = function (enabled) {
+				setRtBusy(true);
+				setMsg(enabled ? "正在启用联合工作区…" : "正在关闭联合工作区…");
+				api("/federation/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: enabled }) }).then(function (r) {
+					setRtBusy(false);
+					if (!r.ok) { setMsg(r.error || "操作被拒绝"); loadRt(); return; }
+					setMsg(enabled ? "已写入灰度配置,dsh 热载生效;工作区选择界面如未出现入口请重载界面。" : "已恢复默认(灰度关)。");
+					if (r.state && r.state.track) rt[1]({ status: "ready", info: r.state });
+				}).catch(function (e) { setRtBusy(false); setMsg("请求失败: " + e.message); });
+			};
 
 			var doCheck = function () {
 				setBusy(true); setMsg("正在检查更新(壳 GitHub Releases + dsh npm)…");
@@ -1160,12 +1222,64 @@ window.__ModuleLoader__.load({
 					c && c.dshError ? h("span", { className: "pm_tag pm_tagErr" }, "检查失败") : null));
 
 		var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("结束") >= 0 || msg[0].indexOf("完成") >= 0 || msg[0].indexOf("最新") >= 0 ? " pm_msgOk" : "");
+
+		// [v0.5.1] 运行时轨道组:轨道行(切换含内联确认,编排失败自动回滚) + 联邦灰度行(仅本地轨)
+		var rtBody;
+		if (rt[0].status === "loading") rtBody = h("div", { className: "pm_msg" }, "正在读取运行时轨道…");
+		else if (rt[0].status === "oldshell") rtBody = h("div", { className: "pm_msg" }, "当前壳版本过旧(需 v0.5.1+):运行时轨道与联合工作区开关不可用,请更新桌面壳。");
+		else {
+			var r0 = rt[0].info;
+			var trackZh = r0.track === "local" ? "本地构建" : "官方(npm)";
+			var effZh = r0.effective === "local" ? "本地构建" : "官方(npm)";
+			var trackBtn = r0.track === "local"
+				? (confirmTrack[0] === "official"
+					? h("div", { className: "cm_confirm" },
+						h("span", { className: "cm_confirmTxt" }, "将切换到官方轨道并重启 dsh 服务,确认？"),
+						h("button", { className: "cm_btnDanger", disabled: rtBusy[0], onClick: function () { doTrack("official"); } }, "确认切换"),
+						h("button", { className: "cm_btnGhost", onClick: function () { confirmTrack[1](null); } }, "取消"))
+					: h("button", { className: "pm_btn", disabled: rtBusy[0] || busy[0], onClick: function () { confirmTrack[1]("official"); } }, "切换到官方"))
+				: (confirmTrack[0] === "local"
+					? h("div", { className: "cm_confirm" },
+						h("span", { className: "cm_confirmTxt" }, "将切换到本地构建轨道并重启 dsh 服务(失败自动回滚),确认？"),
+						h("button", { className: "cm_btnDanger", disabled: rtBusy[0], onClick: function () { doTrack("local"); } }, "确认切换"),
+						h("button", { className: "cm_btnGhost", onClick: function () { confirmTrack[1](null); } }, "取消"))
+					: h("button", { className: "pm_btn", disabled: rtBusy[0] || busy[0], onClick: function () { confirmTrack[1]("local"); } }, "切换到本地构建"));
+			rtBody = h("div", { className: "pm_list" },
+				h("div", { className: "pm_row" + (rtBusy[0] ? " pm_rowOff" : "") },
+					h("div", { className: "pm_left" },
+						h("span", { className: "pm_name" }, "dsh 运行时轨道"),
+						h("span", { className: "pm_id" },
+							"当前 " + trackZh
+							+ (r0.track === r0.effective ? "" : "(实际按" + effZh + (r0.fallback ? ":本地缺失回退" : "") + ")")
+							+ " · " + (r0.localDir || "未探测到本地目录")
+							+ (r0.localDir ? (r0.localBinExists ? " · bin.js 在位" : " · bin.js 缺失") : ""))),
+					h("div", { className: "pm_right" },
+						r0.fallback ? h("span", { className: "pm_tag pm_tagErr" }, "回退运行") : null,
+						trackBtn)),
+				h("div", { className: "pm_row" + (rtBusy[0] ? " pm_rowOff" : "") },
+					h("div", { className: "pm_left" },
+						h("span", { className: "pm_name" }, "联合工作区(实验)"),
+						h("span", { className: "pm_id" },
+							(r0.federated && r0.federated.error) ? r0.federated.error
+								: "会话可跨多个磁盘文件夹读写(fs+bash);功能仅存在于本地构建" + (r0.federated && r0.federated.enabled ? " · 已启用" : ""))),
+					h("div", { className: "pm_right" },
+						h(SkillSwitch, {
+							on: !!(r0.federated && r0.federated.enabled),
+							disabled: rtBusy[0] || !(r0.federated && r0.federated.supported),
+							title: (r0.federated && r0.federated.supported) ? (r0.federated.enabled ? "关闭" : "启用") : "仅本地构建轨道可用(官方包无此功能)",
+							onClick: function () { doFed(!(r0.federated && r0.federated.enabled)); },
+						}))));
+		}
+
 		return h("div", { className: "vt_page" },
 			h("div", { className: "vt_head" },
 				h("h2", { className: "vt_h2" }, "更新"),
-				h("p", { className: "vt_intro" }, "桌面壳与 dsh 服务的版本状态与更新通道。")),
+				h("p", { className: "vt_intro" }, "桌面壳与 dsh 服务的版本状态与更新通道;运行时轨道(官方/本地构建)与联合工作区灰度也在此切换。")),
 			h("div", { className: "vt_group vt_span" },
 				h("div", { className: "pm_list vt_2col" }, [shellRow, dshRow])),
+			h("div", { className: "vt_group vt_span" },
+				h("div", { className: "vt_groupTitle" }, "运行时轨道"),
+				rtBody),
 			h("div", { className: "ps_btns" },
 				h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { doCheck(); } }, "检查更新"),
 				h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { api("/updates/open-releases", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } }, "打开 Releases 页")),
@@ -2965,21 +3079,31 @@ window.__ModuleLoader__.load({
 			if (!dlg) return;
 			var active = dlg.querySelector('[class*="_active"][data-section-id]');
 			var sid = active ? active.getAttribute("data-section-id") : "";
+			// [K2f 2026-08-28] 四个二级子页(基础设置/专家/备份与迁移/Vision Router):
+			// 导航行已隐藏(K2d),active 落在 data-dsh-sub 行上——检测后注入返回胶囊,
+			// 点击回「通用设置」入口卡页(按钮复用现有 vt_backBar 样式,同 R44 模式)。
+			var subActive = dlg.querySelector('[class*="_active"][data-dsh-sub="true"]');
 			var options = dlg.querySelector('[class*="_options"]');
 			if (!options) return;
 			var bar = options.querySelector(":scope > [data-dsh-back]");
-			var want = (sid === "skin-center" || sid === "pet") && !!document.querySelector('button[data-section-id="skin"]');
-			if (!want) { if (bar) bar.remove(); return; }
-			if (bar) return;
+			var target = "";
+			if ((sid === "skin-center" || sid === "pet") && document.querySelector('button[data-section-id="skin"]')) target = "skin";
+			else if (subActive && document.querySelector('button[data-section-id="general"]')) target = "general";
+			if (!target) { if (bar) bar.remove(); return; }
+			var label = target === "skin" ? "返回皮肤设置" : "返回通用设置";
+			// 已存在且目标一致:幂等跳过(React 重渲染冲掉后由 MO 自愈重注)
+			if (bar && bar.dataset.dshTarget === target) return;
+			if (bar) bar.remove();
 			bar = document.createElement("div");
 			bar.dataset.dshBack = "1";
+			bar.dataset.dshTarget = target;
 			bar.className = "vt_backBar";
 			bar.setAttribute("role", "button");
 			bar.setAttribute("tabindex", "0");
-			bar.setAttribute("aria-label", "返回皮肤设置");
-			bar.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5 5 8l4.5 4.5"/></svg><span>返回皮肤设置</span>';
+			bar.setAttribute("aria-label", label);
+			bar.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5 5 8l4.5 4.5"/></svg><span>' + label + '</span>';
 			bar.addEventListener("click", function () {
-				var btn = document.querySelector('button[data-section-id="skin"]');
+				var btn = document.querySelector('button[data-section-id="' + target + '"]');
 				if (btn) btn.click();
 			});
 			bar.addEventListener("keydown", function (ev) {
@@ -3396,6 +3520,46 @@ window.__ModuleLoader__.load({
 			holder.appendChild(add);
 		}
 	}
+	// [问题112] 开合侧边卡片主列下潜钳制(机制见 css 数组 [问题112] 注释)。
+	// 触发源:body[data-dsh-sidebar-collapsed](better-sidebar React 面板开合即写,
+	// 两个方向均在动画起点 ~50ms 内翻转)。开方向延迟 80ms 读 --dsh-sidebar-width:
+	// 该 var 由另一 React effect(writeGeometry)写入,与 attr effect 同一 commit 但
+	// 先后无保证,同步读可能拿到旧值 0(钳制过宽 → 释放时整列大回跳)。合方向无 var
+	// 依赖(左栏最终回 280)立即生效。钳制不对称:开只设地板(合方向若误设地板会在
+	// 起点把主列瞬间撑到最终宽,产生起始跳变);合只设天花板(开方向同理)。950ms
+	// 释放覆盖 margin 0.38s+左栏 0.3s 串行全程;用 setTimeout 而非 rAF/transitionend
+	// ——隐藏窗口冻结渲染管线时 MO+setTimeout 仍可靠(问题111c 验证注)。快速连按
+	// 由 arm() 重置计时+覆写双 var 自然接管。
+	function installPushClamp() {
+		var timer = null, delayTimer = null;
+		var arm = function (mw, mx) {
+			var html = document.documentElement;
+			html.style.setProperty("--dsh-vt-push-mw", mw);
+			html.style.setProperty("--dsh-vt-push-mx", mx);
+			html.classList.add("dsh-vt-push-clamp");
+			if (timer) window.clearTimeout(timer);
+			timer = window.setTimeout(function () {
+				timer = null;
+				html.classList.remove("dsh-vt-push-clamp");
+			}, 950);
+		};
+		var mo = new MutationObserver(function () {
+			if (delayTimer) { window.clearTimeout(delayTimer); delayTimer = null; }
+			if (document.body.hasAttribute("data-dsh-sidebar-collapsed")) {
+				// 合:面板移除,最终主列宽 = 100vw - 左栏展开轨宽(280);只设天花板防过冲
+				arm("none", "calc(100vw - 280px)");
+			} else {
+				// 开:等 writeGeometry 先行写入面板宽,再定地板值(56 = 左栏收起轨宽)
+				delayTimer = window.setTimeout(function () {
+					delayTimer = null;
+					var n = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--dsh-sidebar-width")) || 0;
+					if (n > 0) arm("calc(100vw - " + (n + 56) + "px)", "none");
+				}, 80);
+			}
+		});
+		mo.observe(document.body, { attributes: true, attributeFilter: ["data-dsh-sidebar-collapsed"] });
+	}
+
 	function installMarketQueue() {
 		mqLoad();
 		mqEnsureDock();
@@ -3434,6 +3598,8 @@ window.__ModuleLoader__.load({
 		installSectionBackButtons();
 		// [R62] 侧栏滚动条邻近显现:默认隐形,鼠标接近容器右缘感应带才显色
 		installScrollbarProximity();
+		// [问题112] 开合侧边卡片主列下潜钳制(输入框上抬挤压/文本手风琴/重排性能)
+		installPushClamp();
 		// [问题4] 提示词增强按钮已迁至独立插件 dsh-enhance-prompt(2026-08),dshvt 不再注入,避免双挂载。
 			// 「插件」区段:唯一的"插件管理"tab(合并原只读清单;上游 all tab 行已禁用)
 			ctx.effect(() => ctx.locale.register(NS2, {
@@ -3534,8 +3700,12 @@ window.__ModuleLoader__.load({
 			order: 14,
 				label: () => t6("nav"),
 				locale: NS6,
-			}, function SkinSectionHost() {
-			return react.createElement(SkinTab, { checkSkinCenter, checkPet });
+				children: { "settings.skin.item": {
+					kind: "list",
+					scope: "root"
+				} }
+			}, function SkinSectionHost(props) { // [K2d] 透传 renderSlot:皮肤页底部补 settings.skin.item 槽(joi 换装迁入)
+			return react.createElement("div", null, react.createElement(SkinTab, { checkSkinCenter, checkPet }), props && props.renderSlot ? props.renderSlot("settings.skin.item", {}) : null);
 		}));
 
 			ctx.effect(() => ctx.locale.register(NS7, {
@@ -3565,3 +3735,5 @@ window.__ModuleLoader__.load({
 		return module.exports;
 	}
 });
+
+/*dsh-local-patch:v2026-08-23*/
