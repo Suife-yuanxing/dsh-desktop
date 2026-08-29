@@ -1169,6 +1169,11 @@ function createSplash() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // 沙箱化 preload 加载器会把脚本路径嵌入生成代码一起编译,路径含引号
+      // (如用户名带撇号 ⇒ %TEMP% 解压目录)即炸 SyntaxError,preload 整体不
+      // 运行 ⇒ 桥丢失 ⇒ 注入的窗口控制按钮消失。本壳只加载本地回环内容,
+      // 关渲染器沙箱换回直载 loader(contextIsolation 仍开,nodeIntegration 仍关)。
+      sandbox: false,
     },
   })
   splashWindow.once('ready-to-show', () => splashWindow.show())
@@ -1316,6 +1321,9 @@ function createMainWindow({ show = false } = {}) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // 同 splash 窗:沙箱化 preload 加载器在含引号路径(便携版 %TEMP% 解压
+      // 目录,随用户名)下必炸,preload 不运行则窗口控制按钮无处依托。
+      sandbox: false,
       // 壁纸视频带声播放:Chromium 默认要求用户手势才允许非静音自动播放,
       // 桌面壳内放开(本地内容,等价原生应用行为)。
       autoplayPolicy: 'no-user-gesture-required',
@@ -2553,6 +2561,8 @@ function openSettings() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // 同主窗:沙箱化 preload 加载器在含引号路径下必炸(设置页 IPC 全靠桥)。
+      sandbox: false,
     },
   })
   settingsWindow.on('closed', () => { settingsWindow = null })
