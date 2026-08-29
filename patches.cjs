@@ -1052,19 +1052,278 @@ function patchJoiTheme() {
       '\t\t\tfor (const block of blocks) {\n\t\t\t\tconst r = block.getBoundingClientRect();\n\t\t\t\tblock.classList.toggle(HALO_CLASS, boxes.some((b) => intersects(r, b)));\n\t\t\t}',
       '\t\t\tconst marks = [];\n\t\t\tfor (const block of blocks) {\n\t\t\t\tconst r = block.getBoundingClientRect();\n\t\t\t\tmarks.push([block, boxes.some((b) => intersects(r, b))]);\n\t\t\t}\n\t\t\tfor (const [block, on] of marks) block.classList.toggle(HALO_CLASS, on);',
       1, 'halo-two-phase')
+    // [K1 2026-08-27] 换装入口迁址: settings.general.item → settings.skin.item
+    // 渲染落点由 [K2] 在 dshvt 皮肤页注入(settings.skin.item 槽)。当前存活副本已手工
+    // 迁移并带哨兵 → 重放走哨兵快速通道不会进入本分支;未来上游漂移刷新后重打,或上游
+    // 回归旧锚点时此分支兜底迁移。两种终态都合法,不算失败。
+    if (c.includes('ctx.slots.inject("settings.general.item"')) {
+      c = rep(c,
+        'ctx.slots.inject("settings.general.item", () => ctx.slots.register({\n\t\t\t\tname: "settings.general.item",',
+        'ctx.slots.inject("settings.skin.item", () => ctx.slots.register({\n\t\t\t\tname: "settings.skin.item",',
+        1, 'suit-slot-move')
+    } else if (!c.includes('ctx.slots.inject("settings.skin.item"')) {
+      failures.push('suit-slot-move: neither old nor new slot anchor found')
+    }
     return c
   }
 
   return [{ ...rewrite(p, '.bak-q109', apply, failures), version: ver }]
 }
 
+// ---- [K] 设置页合并(2026-08-27,问题110;v2 同日修订:通用设置二级页签方案) ----
+//       K1 joi 换装迁址 settings.general.item → settings.skin.item(执行体并入 patchJoiTheme 链)。
+//       K2 通用设置页(核心包 dsh-client-ui-settings-general;遍历全部 npx 缓存 + devlink 层):
+//         a) 新增账本条目 general-basics(基础设置页=原通用设置内容,顶层导航隐藏);
+//         b) GeneralSection 改为二级入口页:四张卡(基础设置/专家/备份与迁移/Vision Router);
+//         c) 导航行计算:三个顶层入口原样保留,同时在 general 行下挂四个缩进子行(sub: 前缀
+//            虚拟 id,壳渲染时映射回真实账本条目,不递归调用同槽 renderSlot);
+//         d) dshvt 皮肤页底部补 settings.skin.item 槽渲染点(K1 的落点)。
+//       v3 修订: v2 的内容区页签方案因「settings.section 渲染期间递归 renderSlot 同槽」被
+//       槽运行时错误边界拦截而废弃;v3 全部走壳层原生渲染路径,无任何递归。
+//       重放器语义:rewriteFresh(哨兵 + 上游漂移刷新);锚点不适配的旧缓存安全跳过不判失败。
+function patchSettingsNest() {
+  const results = []
+
+  // K2d dshvt 皮肤页槽渲染点:包装 SkinSectionHost,零侵入 SkinTab 本体
+  {
+    const p = path.join(PLUGINS, 'dsh-desktop-version-tab', 'lib', 'client.js')
+    if (!fs.existsSync(p)) {
+      results.push({ file: 'dshvt/client.js', missing: true })
+    } else {
+      const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-desktop-version-tab', 'package.json'), 'utf8')).version
+      const { rep, rex, failures } = makeCtx('dshvt/client.js')
+      const apply = (c) => {
+        c = rep(c,
+          'function SkinSectionHost() {',
+          'function SkinSectionHost(props) { // [K2d] 透传 renderSlot:皮肤页底部补 settings.skin.item 槽(joi 换装迁入)',
+          1, 'skin-host-sig')
+        c = rep(c,
+          'return react.createElement(SkinTab, { checkSkinCenter, checkPet });',
+          'return react.createElement("div", null, react.createElement(SkinTab, { checkSkinCenter, checkPet }), props && props.renderSlot ? props.renderSlot("settings.skin.item", {}) : null);',
+          1, 'skin-host-wrap')
+        // 槽声明:skin section 注册时补 children(settings.skin.item),joi 换装行的
+        // slots.inject 等待声明后自动落位;没有它 renderSlot 拿不到任何条目。
+        // dshvt 产物为 CRLF 行尾 → 用 \r?\n 正则锚定。
+        c = rex(c,
+          /locale: NS6,\r?\n\t\t\t\}, function SkinSectionHost\(props\) \{/,
+          'locale: NS6,\r\n\t\t\t\tchildren: { "settings.skin.item": {\r\n\t\t\t\t\tkind: "list",\r\n\t\t\t\t\tscope: "root"\r\n\t\t\t\t} }\r\n\t\t\t}, function SkinSectionHost(props) {',
+          1, 'skin-slot-declare')
+        return c
+      }
+      results.push({ ...rewrite(p, '.bak-nestskin', apply, failures), version: ver })
+    }
+  }
+
+  // K2a/b/c 通用设置核心包
+  const ZH_OLD = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置"\n\t\t};'
+  const ZH_NEW = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观、提示音、文件放入等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。"\n\t\t};'
+  const EN_OLD = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General"\n\t\t};'
+  const EN_NEW = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance, sounds, file drop and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups."\n\t\t};'
+  const GS_OLD = 'function GeneralSection({ renderSlot }) {\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: renderSlot("settings.general.item", {})\n\t\t\t});\n\t\t}'
+  const GS_NEW = 'function GeneralSection({ renderSlot, select, t, show }) {\n\t\t\t// [K2c v4] 通用设置双形态:show==="basics" 渲染原通用设置内容(基础设置子页);否则渲染二级入口卡\n\t\t\tif (show === "basics") {\n\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\t\tchildren: renderSlot("settings.general.item", {})\n\t\t\t\t});\n\t\t\t}\n\t\t\tconst entries = select === void 0 || t === void 0 ? [] : [\n\t\t\t\t["sub:basics", t("sub.basics"), t("sub.basics.desc")],\n\t\t\t\t["sub:agency-agents", t("sub.experts"), t("sub.experts.desc")],\n\t\t\t\t["sub:config-manager", t("sub.backup"), t("sub.backup.desc")],\n\t\t\t\t["sub:vision-router", t("sub.vision"), t("sub.vision.desc")]\n\t\t\t];\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenSubGrid",\n\t\t\t\t\tchildren: entries.map(([id, label, desc]) => (0, react_jsx_runtime.jsx)("button", {\n\t\t\t\t\t\ttype: "button",\n\t\t\t\t\t\tclassName: "sGenSubCard",\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tselect(id);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardTitle",\n\t\t\t\t\t\t\tchildren: label\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardDesc",\n\t\t\t\t\t\t\tchildren: desc\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardGo",\n\t\t\t\t\t\t\tchildren: "›"\n\t\t\t\t\t\t})]\n\t\t\t\t\t}, id))\n\t\t\t\t})\n\t\t\t});\n\t\t}'
+  // [K2d 2026-08-28] 用户需求:导航里四个二级子页行整体去除——通用页入口卡为唯一入口。
+  // 行保留在 DOM(childRows 仍注入,active/跳转链路依赖 rows 结构),仅 display:none
+  // (与 skin-center/pet 隐藏同款"内容保留可激活"模式)。
+  // [K2d 修正] 原 .Q6vcTq_navCell 是 css-modules hash 类名,上游升级后漂移为 VOzbGW_
+  // ——hash 锚定规则静默失配(旧缩进子行样式早已无效)。改属性选择器 button[data-dsh-sub]
+  // (K2a 自己注入的标记,hash 无关),加 !important 盖上游 navCell 的 display:flex。
+  // [K2e 2026-08-28] 入口卡重排:整行横向长方形(单列),贴 harness 原生设置行语言——
+  // hairline 边框(--dsw-alias-border-l2,同 vt_backBar)+ radius 8px(实测原生 ns_row/
+  // navCell 同款)+ 14px 标题/12px 描述左列、chevron 右列跨行居中(grid 三区布局,DOM 零改);
+  // hover 边框/标题/箭头转 Claude 橙 #d97757 + 箭头右移 3px,全过渡 Claude 曲线 .3s
+  // (cubic-bezier(.32,.72,0,1));reduced-motion 全关。
+  const CSSNEST_INJECT = '\t\tconst cssNest = "button[data-dsh-sub=\\"true\\"]{display:none!important}.sGenSubGrid{display:flex;flex-direction:column;gap:10px;margin-bottom:6px;width:100%}.sGenSubCard{box-sizing:border-box;display:grid;grid-template-columns:1fr auto;column-gap:12px;align-items:center;width:100%;min-height:58px;text-align:left;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:11px 14px;cursor:pointer;color:var(--dsw-alias-label-primary);font-family:inherit;transition:border-color .3s cubic-bezier(.32,.72,0,1),background-color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover{border-color:#d97757;background:var(--dsw-specific-sidebar-nav-item-hover)}.sGenSubCard:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px}.sGenSubCardTitle{grid-column:1;grid-row:1;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);transition:color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardTitle{color:#d97757}.sGenSubCardDesc{grid-column:1;grid-row:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)}.sGenSubCardGo{grid-column:2;grid-row:1/3;justify-self:end;color:var(--dsw-alias-label-tertiary);font-size:16px;line-height:1;transition:transform .3s cubic-bezier(.32,.72,0,1),color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardGo{transform:translateX(3px);color:#d97757}@media (prefers-reduced-motion:reduce){.sGenSubCard,.sGenSubCardTitle,.sGenSubCardGo{transition:none!important}.sGenSubCard:hover .sGenSubCardGo{transform:none}}";\n\t\tconst tagIdNest = "@deepseek-ai/dsh-client-ui-settings-general/nesting.module.css";\n\t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagIdNest) + "]") === null) {\n\t\t\tconst tag = document.createElement("style");\n\t\t\ttag.dataset.plugin = "@deepseek-ai/dsh-client-ui-settings-general";\n\t\t\ttag.dataset.pluginCss = tagIdNest;\n\t\t\ttag.textContent = cssNest;\n\t\t\tdocument.head.appendChild(tag);\n\t\t}\n'
+  const ROOTVAR_ANCHOR = '\t\tvar SettingsRoot_module_css_default = {'
+  const GENREG_OLD = 'label: () => t("general.nav"),\n\t\t\t\tlocale: NS,\n\t\t\t\tchildren: { "settings.general.item": {'
+  const GENREG_NEW = 'label: () => t("general.nav"),\n\t\t\t\tlocale: NS,\n\t\t\t\tinject: () => ({ t }),\n\t\t\t\tchildren: { "settings.general.item": {'
+  const BASICS_REG_OLD = '\t\t\t}, GeneralSection));'
+  const BASICS_REG_NEW = '\t\t\t}, GeneralSection));'
+  // rc.x 缩进漂移(rc.2=内部8tab / rc.5=7tab):整块用缩进无关正则捕获,重打为固定7tab形态
+  const ROWS_RE = /rows = ctx\.slots\.entries\("settings\.section"\)\.map\(\(e\) => \(\{\n\t+\/\* v8 ignore next[^\n]*?\*\/\n\t+id: e\.options\.id \?\? "",\n\t+order: e\.options\.order \?\? 0,\n\t+label: \(0, _deepseek_ai_dsh_client_ui_slots\.resolveSlotLabel\)\(e\.options\.label\) \?\? ""\n\t+\}\)\)\.sort\(\(a, b\) => a\.order - b\.order\);/
+  const ROWS_NEW = 'rows = (() => {\n\t\t\t\t\t\t\t// [K2a v4] 二级页面:三个顶层入口从导航隐藏(仅经 general 下子行可达);\n\t\t\t\t\t\t\t// 基础设置子行复用 general 条目(sub:basics + show 标记),无独立账本条目。\n\t\t\t\t\t\t\tconst HIDE_TOP = ["agency-agents", "config-manager", "vision-router"];\n\t\t\t\t\t\t\tconst CHILD_IDS = ["basics", "agency-agents", "config-manager", "vision-router"];\n\t\t\t\t\t\t\tconst all = ctx.slots.entries("settings.section");\n\t\t\t\t\t\t\tconst flat = all.filter((e) => !HIDE_TOP.includes(e.options.id)).map((e) => ({\n\t\t\t\t\t\t\t\tid: e.options.id ?? "",\n\t\t\t\t\t\t\t\torder: e.options.order ?? 0,\n\t\t\t\t\t\t\t\tlabel: (0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? ""\n\t\t\t\t\t\t\t})).sort((a, b) => a.order - b.order);\n\t\t\t\t\t\t\tconst childRows = CHILD_IDS.map((id) => {\n\t\t\t\t\t\t\t\tif (id === "basics") return { id: "sub:basics", order: 0, label: t("sub.basics"), child: true };\n\t\t\t\t\t\t\t\tconst e = all.find((cand) => cand.options.id === id);\n\t\t\t\t\t\t\t\treturn { id: "sub:" + id, order: 0, label: e ? ((0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? "") : id, child: true };\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tconst top = [];\n\t\t\t\t\t\t\tlet attached = false;\n\t\t\t\t\t\t\tfor (const row of flat) {\n\t\t\t\t\t\t\t\ttop.push(row);\n\t\t\t\t\t\t\t\tif (!attached && row.id === "general") {\n\t\t\t\t\t\t\t\t\tfor (const child of childRows) top.push(child);\n\t\t\t\t\t\t\t\t\tattached = true;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tif (!attached && childRows.length > 0) for (const child of childRows) top.push(child);\n\t\t\t\t\t\t\treturn top;\n\t\t\t\t\t\t})();'
+  const NAVCELL_OLD = 'className: clsx(SettingsRoot_module_css_default.navCell, row.id === active && SettingsRoot_module_css_default.active),'
+  const NAVCELL_NEW = 'className: clsx(SettingsRoot_module_css_default.navCell, row.id === active && SettingsRoot_module_css_default.active),\n\t\t\t\t\t\t\t\t"data-dsh-sub": row.child === true ? "true" : void 0,'
+  const SEL_OLD = 'renderSlot("settings.section", { close: onClose }, { only: active })'
+  const SEL_NEW = 'renderSlot("settings.section", { close: onClose, select: onSelect, show: active === "sub:basics" ? "basics" : void 0 }, { only: active === "sub:basics" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active })'
+
+  const roots = []
+  const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxCache)) {
+    for (const h of fs.readdirSync(npxCache)) {
+      roots.push(path.join(npxCache, h, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+    }
+  }
+  // devlink 层(本地仓 junction):local 轨 / 仓库构建产物走这里
+  roots.push(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+
+  for (const p of roots) {
+    if (!fs.existsSync(p)) continue
+    const pkgDir = path.dirname(path.dirname(p))
+    const ver = (() => { try { return JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')).version } catch { return '?' } })()
+    const label = 'general-nest/' + pkgDir.split(path.sep).slice(-2).join('/') + '/client.js'
+    const head = fs.readFileSync(p, 'utf8')
+    // 锚点不适配的版本(rc 更早/更晚变体):安全跳过,不建 bak 不判失败。
+    // [v5 2026-08-29] 旧修订升级通道:v4 之前的旧 [K](如 08-27 三卡横排版)同样占用
+    // sGenSubGrid 但缺 v4 指纹(sub:basics)——按旧逻辑判「已是补丁态」会永久卡死在旧
+    // 结构(复现根因:旧版占坑后 v4 只成功打在官方 npx 副本,切本地轨后本地副本永远
+    // already;无哨兵走漂移刷新也会因对旧补丁内容重打锚点失配而 FAIL 保盘)。
+    // 处置:有 bak → 恢复 pristine 落回正常重打;无 bak → 显式 FAIL 引导手动恢复。
+    if (!head.includes(ZH_OLD) || !head.includes(GS_OLD)) {
+      if (head.includes('sGenSubGrid') && head.includes('sub:basics')) {
+        results.push({ file: label, ok: true, already: true, version: ver })
+        continue
+      }
+      if (head.includes('sGenSubGrid')) {
+        const staleBak = p + '.bak-nest-skin'
+        if (fs.existsSync(staleBak)) {
+          fs.copyFileSync(staleBak, p)
+          results.push({ file: label, ok: true, refreshed: true, version: ver })
+          // head 仍持旧内容,但下方 rewriteFresh 会重读盘上的 pristine 再打
+        } else {
+          results.push({ file: label, ok: false, failures: [label + ': 旧修订补丁态且缺 bak,拒绝盲改,请手动恢复'] })
+          continue
+        }
+      } else {
+        results.push({ file: label, ok: true, skipped: true, version: ver })
+        continue
+      }
+    }
+    const { rep, rex, failures } = makeCtx(label)
+    const apply = (c) => {
+      c = rep(c, ZH_OLD, ZH_NEW, 1, 'zh-sub-keys')
+      c = rep(c, EN_OLD, EN_NEW, 1, 'en-sub-keys')
+      c = rep(c, GS_OLD, GS_NEW, 1, 'general-section')
+      c = rep(c, ROOTVAR_ANCHOR, CSSNEST_INJECT + ROOTVAR_ANCHOR, 1, 'nest-css')
+      c = rep(c, GENREG_OLD, GENREG_NEW, 1, 'general-inject-t')
+      c = rep(c, BASICS_REG_OLD, BASICS_REG_NEW, 1, 'basics-entry')
+      c = rex(c, ROWS_RE, ROWS_NEW, 1, 'rows-nest')
+      c = rep(c, NAVCELL_OLD, NAVCELL_NEW, 1, 'nav-sub-attr')
+      c = rep(c, SEL_OLD, SEL_NEW, 1, 'select-passthrough')
+      return c
+    }
+    results.push({ ...rewriteFresh(p, '.bak-nest-skin', apply, failures, PATCH_MARK), version: ver })
+  }
+  return results
+}
+
+// ---- [L] dsh-mobile-glass SW 导航策略 network-first(2026-08-27,问题111) ----
+//       症状: 插件/核心文件热改后,壳窗口与浏览器「重启 dsh/普通刷新」仍跑旧 UI——
+//       SW 对导航 stale-while-revalidate 立即回旧 HTML 壳,旧壳钉住旧 ?rev 模块,
+//       需要刷两次才见新内容;桌面壳 reloadIgnoringCache 也被 SW 接管绕不开。
+//       修复: 导航改 network-first(在线直连,失败回落缓存→离线页);sw.js 字节变化
+//       触发已注册 SW 自动更新(updateViaCache:'none' + skipWaiting + clients.claim
+//       均已具备),一次重载后所有窗口永久获得「一次刷新即见最新」。
+function patchMobileGlassSw() {
+  const p = path.join(PLUGINS, 'dsh-mobile-glass', 'lib', 'index.js')
+  if (!fs.existsSync(p)) return [{ file: 'mobile-glass/lib/index.js', missing: true }]
+  const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-mobile-glass', 'package.json'), 'utf8')).version
+  const { rep, failures } = makeCtx('mobile-glass/lib/index.js')
+  const OLD_NAV = [
+    '  "    event.respondWith(",',
+    '  "      caches.open(CACHE).then(function (cache) {",',
+    '  "        return cache.match(req).then(function (cached) {",',
+    '  "          var network = fetch(req).then(function (res) {",',
+    '  "            if (res && res.ok) cache.put(req, res.clone());",',
+    '  "            return res;",',
+    '  "          }).catch(function () { return null; });",',
+    '  "          if (cached) {",',
+    '  "            network.then(function () {});",',
+    '  "            return cached;",',
+    '  "          }",',
+    '  "          return network.then(function (res) {",',
+    '  "            return res || caches.match(\'/offline\');",',
+    '  "          });",',
+    '  "        });",',
+    '  "      })",',
+    '  "    );",',
+  ].join('\r\n')
+  const NEW_NAV = [
+    '  "    event.respondWith(",',
+    '  "      fetch(req).then(function (res) {",',
+    '  "        if (res && res.ok) caches.open(CACHE).then(function (cache) { cache.put(req, res.clone()); });",',
+    '  "        return res;",',
+    '  "      }).catch(function () {",',
+    '  "        return caches.open(CACHE).then(function (cache) { return cache.match(req); }).then(function (cached) { return cached || caches.match(\'/offline\'); });",',
+    '  "      })",',
+    '  "    );",',
+  ].join('\r\n')
+  const apply = (c) => rep(c, OLD_NAV, NEW_NAV, 1, 'sw-nav-netfirst')
+  return [{ ...rewrite(p, '.bak-sw-netfirst', apply, failures), version: ver }]
+}
+
+// ---- [M] dsh-agent-teams 活动面板坞进 better-sidebar(2026-08-28,用户需求;方案同上游 issue #43) ----
+//       浮窗(shell.overlay Panel)移除 → 聊天列不再被 docked 面板挤压(padding-right 420px);
+//       ActivityPanel 经 variant="sidebar" 形态注册为 ctx.betterSidebar tab(单实例、常驻展开、
+//       填充 tab 容器、无折叠徽章/关闭/dock 控件、不写 data-agent-teams-panel-open);
+//       会话卡保留,其「打开活动面板」事件(agent-teams:open-panel)路由到 openTab。
+//       依赖: better-sidebar 在场——M1 经 inject 硬声明该服务(问题51 守卫;声明同时保证
+//       服务晚加载时 fiber 等待,tab 注册时序安全)。若日后卸载 better-sidebar,
+//       本插件会因服务缺失而 pending——需删本段重放回滚。
+function patchAgentTeamsTab() {
+  const dir = path.join(PLUGINS, '@nanmicoder', 'dsh-agent-teams')
+  if (!fs.existsSync(dir)) return [{ file: 'agent-teams', missing: true }]
+  const ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version
+  const p = path.join(dir, 'lib', 'client.js')
+  if (!fs.existsSync(p)) return [{ file: 'agent-teams/client.js', missing: true }]
+  const { rep, failures } = makeCtx('agent-teams/client.js')
+  const apply = (c) => {
+    // M1 inject 声明 betterSidebar 服务
+    c = rep(c,
+      '\t\t\t"locale",\n\t\t\t"modelDirectories"\n\t\t];',
+      '\t\t\t"locale",\n\t\t\t"modelDirectories",\n\t\t\t"betterSidebar"\n\t\t];',
+      1, 'inject-bs')
+    // M2 Panel 透传 variant
+    c = rep(c,
+      '\t\t\tconst Panel = ({ t }) => (0, react_jsx_runtime.jsx)(ActivityPanel, {\n\t\t\t\tsessionsList: ctx.sessions.list,\n\t\t\t\tmodelDirectories: ctx.modelDirectories,\n\t\t\t\topenMember,\n\t\t\t\tt\n\t\t\t});',
+      '\t\t\tconst Panel = ({ t, variant }) => (0, react_jsx_runtime.jsx)(ActivityPanel, {\n\t\t\t\tsessionsList: ctx.sessions.list,\n\t\t\t\tmodelDirectories: ctx.modelDirectories,\n\t\t\t\topenMember,\n\t\t\t\tt,\n\t\t\t\tvariant\n\t\t\t});',
+      1, 'panel-variant-pass')
+    // M3 shell.overlay 浮窗 → better-sidebar tab 注册 + open-panel 事件路由
+    c = rep(c,
+      '\t\t\tctx.slots.inject("shell.overlay", () => ctx.slots.register({\n\t\t\t\tname: "shell.overlay",\n\t\t\t\tid: "agent-teams-activity",\n\t\t\t\torder: 80,\n\t\t\t\tlabel: "AgentTeams activity",\n\t\t\t\tlocale: AGENT_TEAMS_LOCALE_NAMESPACE\n\t\t\t}, Panel));',
+      '\t\t\t// [M] 浮窗移除,面板注册为 better-sidebar tab(方案同上游 issue #43)\n\t\t\tctx.effect(() => ctx.betterSidebar.registerTab({\n\t\t\t\tid: "agent-teams:activity",\n\t\t\t\ttitle: "AgentTeams",\n\t\t\t\torder: 60,\n\t\t\t\tsingle: true,\n\t\t\t\ticon: (size) => (0, react_jsx_runtime.jsx)("svg", { xmlns: "http://www.w3.org/2000/svg", width: size, height: size, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", "stroke-width": 1.4, "stroke-linecap": "round", "stroke-linejoin": "round", children: [(0, react_jsx_runtime.jsx)("circle", { cx: "5.2", cy: "4.6", r: "2.3" }), (0, react_jsx_runtime.jsx)("path", { d: "M1.7 13.3c.5-2.1 1.9-3.2 3.5-3.2s3 1.1 3.5 3.2" }), (0, react_jsx_runtime.jsx)("circle", { cx: "11.2", cy: "5.6", r: "1.9" }), (0, react_jsx_runtime.jsx)("path", { d: "M10.4 9.6c1.8.1 3.1 1.2 3.7 3.3" })] }),\n\t\t\t\tcomponent: () => Panel({ t: ctx.locale.bind(AGENT_TEAMS_LOCALE_NAMESPACE), variant: "sidebar" })\n\t\t\t}), "agent-teams: sidebar tab");\n\t\t\t// [M] 会话卡「打开活动面板」按钮 → 路由到侧边栏 tab(浮窗已移除)\n\t\t\tctx.effect(() => {\n\t\t\t\tconst onOpenPanel = () => {\n\t\t\t\t\ttry { ctx.betterSidebar.openTab({ type: "agent-teams:activity" }) } catch (e) {}\n\t\t\t\t};\n\t\t\t\twindow.addEventListener("agent-teams:open-panel", onOpenPanel);\n\t\t\t\treturn () => window.removeEventListener("agent-teams:open-panel", onOpenPanel);\n\t\t\t}, "agent-teams: open-panel router");',
+      1, 'overlay-to-tab')
+    // M4 ActivityPanel 签名接收 variant
+    c = rep(c,
+      'function ActivityPanel({ sessionsList, modelDirectories, openMember, t }) {',
+      'function ActivityPanel({ sessionsList, modelDirectories, openMember, t, variant }) {',
+      1, 'panel-sig')
+    // M5 sidebar 形态恒展开(无折叠徽章)
+    c = rep(c,
+      'const expanded = activityPanelExpandedForSession(open, openOwner, current);',
+      'const expanded = variant === "sidebar" ? true : activityPanelExpandedForSession(open, openOwner, current);',
+      1, 'panel-expanded')
+    // M6 sidebar 形态不写 data-agent-teams-panel-open(聊天列不让位)、不设 shift 变量
+    c = rep(c,
+      '\t\t\t(0, react.useLayoutEffect)(() => {\n\t\t\t\tconst root = document.documentElement;\n\t\t\t\tif (expanded && geometry.mode === "docked" && !compact) {',
+      '\t\t\t(0, react.useLayoutEffect)(() => {\n\t\t\t\tif (variant === "sidebar") return;\n\t\t\t\tconst root = document.documentElement;\n\t\t\t\tif (expanded && geometry.mode === "docked" && !compact) {',
+      1, 'panel-shift-skip')
+    // M7 sidebar 形态面板尺寸:填充 tab 容器,忽略浮窗几何(inline 无 transform)
+    c = rep(c,
+      '\t\t\tconst panelStyle = {\n\t\t\t\twidth: geometry.width,\n\t\t\t\theight: autoHeight ? "auto" : geometry.height,\n\t\t\t\tmaxHeight: panelMaximumHeight(geometry, bounds),\n\t\t\t\ttransform: `translate3d(${geometry.x}px, ${geometry.y}px, 0)`\n\t\t\t};',
+      '\t\t\tconst panelStyle = variant === "sidebar" ? { width: "100%", height: "100%" } : {\n\t\t\t\twidth: geometry.width,\n\t\t\t\theight: autoHeight ? "auto" : geometry.height,\n\t\t\t\tmaxHeight: panelMaximumHeight(geometry, bounds),\n\t\t\t\ttransform: `translate3d(${geometry.x}px, ${geometry.y}px, 0)`\n\t\t\t};',
+      1, 'panel-style')
+    // M8 aside 挂 data-variant(CSS 钩子;属性选择器,hash 类名免疫)
+    c = rep(c,
+      '\t\t\t\t"data-agent-teams-activity": true,',
+      '\t\t\t\t"data-agent-teams-activity": true,\n\t\t\t\t"data-variant": variant,',
+      1, 'panel-attr')
+    // M9 sidebar 形态 CSS:静态填充 + 关浮窗专属控件(属性选择器为主,Q6vcTq hash 漂移教训)
+    c = rep(c,
+      '\t\tvar ActivityPanel_module_css_default = {',
+      '\t\tconst cssSidebarVariant = "[data-agent-teams-activity][data-variant=sidebar]{position:relative!important;top:auto!important;left:auto!important;transform:none!important;width:100%!important;height:100%!important;max-height:none!important;border:none!important;border-radius:0!important;box-shadow:none!important;animation:none!important;backdrop-filter:none!important;background:var(--dsw-alias-bg-layer-1,#fff)!important}[data-agent-teams-activity][data-variant=sidebar] [data-control=collapse],[data-agent-teams-activity][data-variant=sidebar] [data-control=dock]{display:none!important}";\n\t\tconst tagIdSidebarVariant = "@nanmicoder/dsh-agent-teams/sidebar-variant.css";\n\t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagIdSidebarVariant) + "]") === null) {\n\t\t\tconst tagSidebar = document.createElement("style");\n\t\t\ttagSidebar.dataset.plugin = "@nanmicoder/dsh-agent-teams";\n\t\t\ttagSidebar.dataset.pluginCss = tagIdSidebarVariant;\n\t\t\ttagSidebar.textContent = cssSidebarVariant;\n\t\t\tdocument.head.appendChild(tagSidebar);\n\t\t}\n\t\tvar ActivityPanel_module_css_default = {',
+      1, 'sidebar-css')
+    return c
+  }
+  return [{ ...rewrite(p, '.bak-at-tab', apply, failures), version: ver }]
+}
+
 // ---- 入口 ----
 function replayAll(log = () => {}) {
   const out = { ok: true, items: [] }
-  for (const r of [...patchBetterSidebar(), ...patchNodeNav(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme()]) {
+  for (const r of [...patchBetterSidebar(), ...patchNodeNav(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchAgentTeamsTab()]) {
     if (r.missing) { log(`[patches] ${r.file}: 未安装,跳过`); continue }
     out.items.push(r)
-    if (r.ok) log(`[patches] ${r.file}@${r.version}: ${r.already ? '已是补丁态' : '已恢复本地定制'}`)
+    if (r.ok) log(`[patches] ${r.file}@${r.version}: ${r.skipped ? '锚点不适配,安全跳过' : r.already ? '已是补丁态' : '已恢复本地定制'}`)
     else { out.ok = false; for (const f of r.failures) log(`[patches] FAIL ${f}`) }
   }
   return out
