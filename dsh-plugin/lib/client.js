@@ -400,7 +400,18 @@ window.__ModuleLoader__.load({
 			// 本地名后缀寻址:构建哈希前缀(如 u9XLuq_)随构建漂移,`_sessionLogButton`
 			// 后缀源自源码类名、official 与 local 两轨同源稳定;前缀通配故双轨通用。
 			// 纯视觉移除,功能面(轨迹 tab/会话日志数据)不受影响。
-			"button[class*=\"_sessionLogButton\"]{display:none!important}"
+			"button[class*=\"_sessionLogButton\"]{display:none!important}",
+			// ---- [用户 2026-08-29] 大图预览关闭按钮让出窗口控制条热区 ----
+			// 壳窗口控制条 #dsh-desktop-win-controls 固定 top0/高40/z-index 2147483647,
+			// 而两类大图预览(vision-router 便桥浮层 + 官方 ImageLightbox)的关闭按钮
+			// 都 fixed 在 top16-20/right18-20,按钮中心恰好落在控制条热区内 → 点击
+			// 被上层拦截,甚至误触最小化/关闭窗口。壳以 --dsh-titlebar-safe(44px,
+			// 问题68令牌)发布安全区,这里把两类关闭按钮统一压到安全区之下;旧壳/
+			// 纯浏览器环境无变量时取 44px 兜底,视觉仍处右上角。!important 压过
+			// 便桥的内联样式与官方 CSS module 规则;选择器用 role/aria/后缀类名
+			// 寻址,构建哈希漂移不影响,双轨通用。
+			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"] > button[type=\"button\"]{top:calc(var(--dsh-titlebar-safe,44px) + 10px)!important;right:24px!important}",
+			"div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"] > button[class*=\"_close\"]{top:calc(var(--dsh-titlebar-safe,44px) + 10px)!important;right:24px!important}"
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
