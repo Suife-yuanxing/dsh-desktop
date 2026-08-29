@@ -112,7 +112,7 @@ function patchBetterSidebar() {
     const p = path.join(dir, 'lib', f)
     if (!fs.existsSync(p)) continue
     const isFull = FULL.includes(f)
-    const { rep, rex, rexOpt, rexAll, failures } = makeCtx(`bsr/${f}`)
+    const { rep, repAll, rex, rexOpt, rexAll, failures } = makeCtx(`bsr/${f}`)
 
     const apply = (c) => {
       // A1 JS 剔除(锚点经 0.12.1/0.12.3 双版本验证,esbuild 未压缩输出稳定)
@@ -199,7 +199,68 @@ function patchBetterSidebar() {
       } else if (isFull) {
         failures.push(`[bsr/${f}] layout.css anchor missing`)
       }
+
+      // A6 布局推送变量/属性收窄 #root(2026-08-29,侧边卡片大文件开合卡顿根治):
+      // writeGeometry 把 --dsh-sidebar-width/height 写在 documentElement、collapsed/dragging
+      // 属性挂在 body——自定义属性与属性变更的样式失效域都是全文档,卡片内大文件(数万节点
+      // 编辑器 DOM)在每次开合时被迫整树重算(Tracing 实测单次开合 UpdateLayoutTree 500ms、
+      // 长任务 700ms)。layout.css 全部消费者都在 #root 子树内,而面板宿主 [data-dsh-panel-host]
+      // 挂在 body(#root 之外)——写入收窄到 #root 后失效域不再含卡片内容(实测 500ms→30-100ms)。
+      // dshvt installPushClamp 读侧同步迁移(computed 继承使读 #root 对新旧写法双兼容)。
+      if (isFull) {
+        c = rep(c,
+          'const writeGeometry = (width, height) => {\n\t\t\t\tdocument.documentElement.style.setProperty("--dsh-sidebar-width", `${width}px`);\n\t\t\t\tdocument.documentElement.style.setProperty("--dsh-sidebar-height", `${height}px`);\n\t\t\t};',
+          'const writeGeometry = (width, height) => {\n\t\t\t\t/*dsh-bsr-root-scope*/ const geoEl = document.getElementById("root") || document.documentElement;\n\t\t\t\tgeoEl.style.setProperty("--dsh-sidebar-width", `${width}px`);\n\t\t\t\tgeoEl.style.setProperty("--dsh-sidebar-height", `${height}px`);\n\t\t\t};',
+          1, 'geo-root-scope')
+        c = repAll(c,
+          'document.documentElement.style.removeProperty("--dsh-sidebar-width")',
+          '(document.getElementById("root") || document.documentElement).style.removeProperty("--dsh-sidebar-width")',
+          'geo-remove-w')
+        c = repAll(c,
+          'document.documentElement.style.removeProperty("--dsh-sidebar-height")',
+          '(document.getElementById("root") || document.documentElement).style.removeProperty("--dsh-sidebar-height")',
+          'geo-remove-h')
+        c = repAll(c,
+          'document.body.setAttribute("data-dsh-sidebar-collapsed", "")',
+          '(document.getElementById("root") || document.body).setAttribute("data-dsh-sidebar-collapsed", "")',
+          'attr-collapsed-set')
+        c = repAll(c,
+          'document.body.removeAttribute("data-dsh-sidebar-collapsed")',
+          '(document.getElementById("root") || document.body).removeAttribute("data-dsh-sidebar-collapsed")',
+          'attr-collapsed-rm')
+        c = repAll(c,
+          'document.body.setAttribute("data-dsh-sidebar-dragging", "")',
+          '(document.getElementById("root") || document.body).setAttribute("data-dsh-sidebar-dragging", "")',
+          'attr-dragging-set')
+        c = repAll(c,
+          'document.body.removeAttribute("data-dsh-sidebar-dragging")',
+          '(document.getElementById("root") || document.body).removeAttribute("data-dsh-sidebar-dragging")',
+          'attr-dragging-rm')
+        // layout.css 选择器跟随属性迁移(body[...] → #root[...];拖拽规则的 #root 自引用去重,
+        // 使 `#root[data-dsh-sidebar-dragging] #root …` 回落为单 #root 前缀)
+        c = repAll(c, 'body[data-dsh-sidebar-collapsed]', '#root[data-dsh-sidebar-collapsed]', 'css-collapsed-sel')
+        c = repAll(c, 'body[data-dsh-sidebar-dragging]', '#root[data-dsh-sidebar-dragging]', 'css-dragging-sel')
+        c = repAll(c, '#root[data-dsh-sidebar-dragging] #root', '#root[data-dsh-sidebar-dragging]', 'css-dragging-self')
+      }
       return c
+    }
+
+    // [A6 升级通道] 旧补丁态(哨兵在、无 dsh-bsr-root-scope 标记)会被 rewrite 的哨兵快速通道
+    // 永久跳过;而放宽哨兵会让漂移路径把旧补丁态当「新上游」刷进 bak、毁掉 pristine 基底。
+    // 按 [K] v5 同款方案:检测旧补丁态 → 先从 .bak-repatch 恢复 pristine → 落回正常重放;
+    // 无 bak 时显式 FAIL 拒绝盲改(FAIL 不写盘铁律)。仅完整产物参与(terminal/editor
+    // 无这些锚点,其哨兵态与本步无关)。
+    if (isFull) {
+      const head = fs.readFileSync(p, 'utf8')
+      if (head.includes('dsh-local-patch') && !head.includes('dsh-bsr-root-scope')) {
+        const bak = p + '.bak-repatch'
+        if (fs.existsSync(bak)) {
+          fs.copyFileSync(bak, p)
+        } else {
+          results.push({ file: 'bsr/' + f, ok: false, failures: ['[A6] 旧补丁态且缺 .bak-repatch,拒绝盲改,请手动恢复 pristine'] })
+          continue
+        }
+      }
     }
 
     results.push(rewrite(p, '.bak-repatch', apply, failures))

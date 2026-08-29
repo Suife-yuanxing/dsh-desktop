@@ -383,7 +383,9 @@ window.__ModuleLoader__.load({
 			// 且被钳帧内子树零重排(长会话性能)。寻址沿 better-sidebar layout.css 同款双
 			// 选择器([data-pane="conversation"] 与 :has(> [data-slot="conversation"]),
 			// 当前宿主仅后者命中,双写防改名)。
-			"html.dsh-vt-push-clamp #root [data-dsh-frame] > [data-pane=\"conversation\"],html.dsh-vt-push-clamp #root :has(> [data-slot=\"conversation\"]){min-width:var(--dsh-vt-push-mw,none)!important;max-width:var(--dsh-vt-push-mx,none)!important}",
+			// [perf 2026-08-29] 选择器随 installPushClamp 写入面迁移:html 类 → #root 类
+			// (变量/类挂 html 的失效域是全文档,挂 #root 只重算应用壳子树)。
+			"#root.dsh-vt-push-clamp [data-dsh-frame] > [data-pane=\"conversation\"],#root.dsh-vt-push-clamp :has(> [data-slot=\"conversation\"]){min-width:var(--dsh-vt-push-mw,none)!important;max-width:var(--dsh-vt-push-mx,none)!important}",
 			// ---- [R62→聊天区同步] 滚动条邻近显现(侧栏 + 中栏聊天区) ----
 			// 默认滚动条隐形(thumb 透明),鼠标进入容器右缘感应带(installScrollbarProximity
 			// 挂 .dsh-sb-near)才显色,移开即隐。轨道恒 8px 占位与 dsh 全局一致——显隐
@@ -3559,32 +3561,41 @@ window.__ModuleLoader__.load({
 	// 由 arm() 重置计时+覆写双 var 自然接管。
 	function installPushClamp() {
 		var timer = null, delayTimer = null;
+		// [perf 2026-08-29] 写入面从 html 收窄到 #root(与 patches.cjs [A6] 同批):自定义属性/类
+		// 挂在 html 上失效域是全文档(含卡片内大文件数万节点,开合样式重算实测 500ms),挂 #root
+		// 上失效域仅应用壳子树(面板宿主 [data-dsh-panel-host] 在 body 下不被波及)。读侧走
+		// computed 继承——若上游漂移回写 html,#root 的 computed 值仍继承可见,双形态兼容。
+		var clampHost = function () {
+			return document.getElementById("root") || document.documentElement;
+		};
 		var arm = function (mw, mx) {
-			var html = document.documentElement;
-			html.style.setProperty("--dsh-vt-push-mw", mw);
-			html.style.setProperty("--dsh-vt-push-mx", mx);
-			html.classList.add("dsh-vt-push-clamp");
+			var host = clampHost();
+			host.style.setProperty("--dsh-vt-push-mw", mw);
+			host.style.setProperty("--dsh-vt-push-mx", mx);
+			host.classList.add("dsh-vt-push-clamp");
 			if (timer) window.clearTimeout(timer);
 			timer = window.setTimeout(function () {
 				timer = null;
-				html.classList.remove("dsh-vt-push-clamp");
+				host.classList.remove("dsh-vt-push-clamp");
 			}, 950);
 		};
 		var mo = new MutationObserver(function () {
 			if (delayTimer) { window.clearTimeout(delayTimer); delayTimer = null; }
-			if (document.body.hasAttribute("data-dsh-sidebar-collapsed")) {
+			if (clampHost().hasAttribute("data-dsh-sidebar-collapsed")) {
 				// 合:面板移除,最终主列宽 = 100vw - 左栏展开轨宽(280);只设天花板防过冲
 				arm("none", "calc(100vw - 280px)");
 			} else {
 				// 开:等 writeGeometry 先行写入面板宽,再定地板值(56 = 左栏收起轨宽)
 				delayTimer = window.setTimeout(function () {
 					delayTimer = null;
-					var n = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--dsh-sidebar-width")) || 0;
+					var n = parseFloat(getComputedStyle(clampHost()).getPropertyValue("--dsh-sidebar-width")) || 0;
 					if (n > 0) arm("calc(100vw - " + (n + 56) + "px)", "none");
 				}, 80);
 			}
 		});
-		mo.observe(document.body, { attributes: true, attributeFilter: ["data-dsh-sidebar-collapsed"] });
+		// [perf 2026-08-29] 属性挂点已迁到 #root(A6),观察面 subtree+attributeFilter 同时兼容
+		// 新(#root)旧(body)两种挂点;过滤器把非目标属性挡在捕获层,开销可忽略。
+		mo.observe(document.body, { attributes: true, attributeFilter: ["data-dsh-sidebar-collapsed"], subtree: true });
 	}
 
 	function installMarketQueue() {
