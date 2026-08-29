@@ -401,7 +401,7 @@ window.__ModuleLoader__.load({
 			// 后缀源自源码类名、official 与 local 两轨同源稳定;前缀通配故双轨通用。
 			// 纯视觉移除,功能面(轨迹 tab/会话日志数据)不受影响。
 			"button[class*=\"_sessionLogButton\"]{display:none!important}",
-			// ---- [用户 2026-08-29] 大图预览关闭按钮让出窗口控制条热区 ----
+			// ---- [用户 2026-08-29] 大图预览关闭按钮让出窗口控制条热区 + 壳拖拽区 + hover 交互 ----
 			// 壳窗口控制条 #dsh-desktop-win-controls 固定 top0/高40/z-index 2147483647,
 			// 而两类大图预览(vision-router 便桥浮层 + 官方 ImageLightbox)的关闭按钮
 			// 都 fixed 在 top16-20/right18-20,按钮中心恰好落在控制条热区内 → 点击
@@ -410,8 +410,18 @@ window.__ModuleLoader__.load({
 			// 纯浏览器环境无变量时取 44px 兜底,视觉仍处右上角。!important 压过
 			// 便桥的内联样式与官方 CSS module 规则;选择器用 role/aria/后缀类名
 			// 寻址,构建哈希漂移不影响,双轨通用。
-			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"] > button[type=\"button\"]{top:calc(var(--dsh-titlebar-safe,44px) + 10px)!important;right:24px!important}",
-			"div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"] > button[class*=\"_close\"]{top:calc(var(--dsh-titlebar-safe,44px) + 10px)!important;right:24px!important}"
+			// [R49 2026-08-29] 位置修复后仍点不动的真因:TITLEBAR_DRAG_CSS 把
+			// header[class*="_header"] 整条设为 app-region:drag,而 Electron 拖拽区
+			// 是几何并集——上层浮层不清除下层 drag 矩形,顶栏(~100px 高)盖住
+			// top:54 的 ×,物理点击全被窗口拖拽吞掉(AXPress 走辅助功能绕过命中
+			// 测试,故此前 IAB/AXPress 验证均为假阴性)。修复 = 两类浮层整体
+			// no-drag(从拖拽区减出,遮罩期拖拽失效属模态常规语义),× 显式 no-drag。
+			// 同批加 hover 交互:悬停红底白叉(#e81123/active #c50f1f,.15s 过渡)。
+			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"],div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"]{-webkit-app-region:no-drag}",
+			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"] > button[type=\"button\"]{top:calc(var(--dsh-titlebar-safe,44px) + 10px)!important;right:24px!important;-webkit-app-region:no-drag!important;transition:background-color .15s ease,border-color .15s ease,color .15s ease}",
+			"div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"] > button[class*=\"_close\"]{top:calc(var(--dsh-titlebar-safe,44px) + 10px)!important;right:24px!important;-webkit-app-region:no-drag!important;transition:background-color .15s ease,border-color .15s ease,color .15s ease}",
+			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"] > button[type=\"button\"]:hover,div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"] > button[class*=\"_close\"]:hover{background:#e81123!important;border-color:#e81123!important;color:#fff!important}",
+			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"] > button[type=\"button\"]:active,div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"] > button[class*=\"_close\"]:active{background:#c50f1f!important;border-color:#c50f1f!important}"
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
