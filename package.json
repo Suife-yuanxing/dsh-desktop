@@ -11,6 +11,7 @@
     "predist": "node scripts/check-dist-lock.mjs",
     "dist": "electron-builder --win --config builder.yml --publish never",
     "verify:runtime": "node scripts/check-dsh-runtime.mjs",
+    "audit:patches": "node scripts/audit-patch-coverage.cjs",
     "fix:vision-router-portal": "node scripts/patch-vision-router-portal.mjs",
     "fix:mnemon-settings-visibility": "node scripts/patch-mnemon-settings-visibility.mjs"
   },

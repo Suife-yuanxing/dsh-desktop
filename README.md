@@ -150,6 +150,21 @@ DSH 版本锁定机制：
 - **第三方插件 dsh-mnemon 设置卡静默死控件修复（0.5.2 后补丁，随仓脚本交付）**：记忆系统设置卡的不可用告警 guard 原要求 core+interaction 两个设置快照**同时** unavailable 才显示；单侧 RPC 失败（瞬时超时/Host 未就绪）时卡片照常渲染但 `coreDisabled=true`——展示形态（Sidebar/Buildin）等单选组静默禁用、零提示（「无法切换」体感）。修复 = guard 改 `||`（任一不可用即显式告警）+ 告警页附「重试 / Retry」按钮原地重载两个快照。落在安装产物 `lib/client.js`（备份 `.bak-visibility`），重放器 `npm run fix:mnemon-settings-visibility`；插件升级覆盖后重跑即可
 - **大图预览关闭按钮让出窗口控制条热区（866583d）+ 拖拽区勘正与 hover 交互（33d2084）**：壳窗口控制条 `#dsh-desktop-win-controls` 恒 fixed top0/高40/z-index 2147483647，而官方 `ImageLightbox`（top20/right20）与 vision-router 便桥浮层（top16/right18）的关闭按钮中心都落在控制条热区内。dshvt CSS 注入 `!important` 规则把两类关闭按钮统一压到安全区令牌之下：`top:calc(var(--dsh-titlebar-safe,44px) + 10px)`、`right:24px`（旧壳无令牌取 44 兜底）。**位置修复后仍点不动的真因**：`TITLEBAR_DRAG_CSS` 把 `header[class*="_header"]` 整条设为 `-webkit-app-region:drag`，而 Electron 拖拽区是几何并集、上层浮层不清除下层 drag 矩形，顶栏（~100px 高）盖住 top:54 的 ×，物理点击全被窗口拖拽吞掉（AXPress 绕过命中测试，会造成"辅助功能可点、鼠标点不动"的假阴性）——修复为两类浮层整体 `no-drag`（遮罩期窗口拖拽失效属模态常规语义）。同批关闭钮 hover 交互：悬停红底白叉 `#e81123`、按下 `#c50f1f`、0.15s 过渡；选择器锚 role/aria 与 CSS module 类名后缀，防构建哈希漂移，双轨通用，纯 dshvt 注入无需动壳或上游
 
+### 补丁层双轨自动同步（R50）
+
+官方轨（npx 缓存）与本地构建轨（monorepo）的补丁/修改同步由 patches.cjs 重放器自动完成，分三种机制：
+
+- **profile 层结构性同步**（14 个 family 中的 12 个）：市场插件与 devlink 核心包物理上只有 `~/.dsh/profiles` 一份文件，两轨共用，打一次两轨生效；
+- **双根重放**：[K] settings-nest 同时列 npx 缓存与 profile devlink 根；[J] presets 同时覆盖官方 npx 缓存、用户自定义（`~/.dsh/.agent-presets`）与本地 monorepo（`apps/cli/config/agent-presets`）三源（R50 补齐本地根）；
+- **全自动触发**：壳启动、每次拉起 dsh 前、45 秒 patch-guardian 周期重放；哨兵幂等 + `.bak` 链 + 上游漂移刷新保证自愈。
+
+R50 两项加固：
+
+- **makeCtx rep/repAll 换行符自适应**：Windows 重装/更新的 npm 包产物可能是 CRLF，而锚点按 `\n` 书写（node-nav 0.2.3 / turn-review 更新后 matched 0 的根因）；现按 `\n`/`\r\n` 双拼写分别计数与替换，单行锚点行为不变；
+- **审计命令 `npm run audit:patches`**：双副本（`~/.dsh/patches.cjs` 与仓库镜像）sha256 校验 + family×轨道覆盖矩阵（P=profile 两轨共享 / O=官方 npx / L=本地 monorepo）+ 幂等重放状态，失配或 FAIL 时 exit 1。
+
+**纪律**：任何新 family 必须双轨覆盖（profile 单文件，或 O+L 双根），或在该 family 注释中显式声明单轨意图；patches.cjs 两份副本始终同步修改；镜像副本虽被仓库跟踪，按约定**永不提交**（运行面 `~/.dsh/patches.cjs` 为准）。
+
 ## 项目结构
 
 ```
