@@ -1421,7 +1421,11 @@ window.__ModuleLoader__.load({
 			var MASKA = 'html.dsh-lg-mask [data-composer-card]::after,html.dsh-lg-mask [class*="_panel"]' + PN + '::after';
 			var sideL = dark ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.22)";
 			var sideR = dark ? "rgba(255,255,255,.04)" : "rgba(255,255,255,.10)";
-			var depthShadow = "inset 0 1px 0 " + edge + ",inset 1px 0 0 " + sideL + ",inset -1px 0 0 " + sideR + ",inset 0 -1px 0 " + innerShade + ",0 2px 8px rgba(0,0,0," + (dark ? ".22" : ".07") + "),0 16px 40px rgba(0,0,0," + shadowA + ")";
+			// [R66] 聚焦苏醒阴影(壁纸态同款,交互语言两分支同步)
+			var focusShadow = "inset 0 1px 0 " + (dark ? "rgba(255,255,255,.24)" : "rgba(255,255,255,.85)") + ",inset 1px 0 0 " + (dark ? "rgba(255,255,255,.09)" : "rgba(255,255,255,.30)") + ",inset -1px 0 0 " + (dark ? "rgba(255,255,255,.06)" : "rgba(255,255,255,.14)") + ",inset 0 -1px 0 " + innerShade + ",inset 0 0 14px rgba(255,255,255," + (dark ? ".08" : ".14") + "),0 4px 12px rgba(0,0,0," + (dark ? ".28" : ".10") + "),0 22px 52px rgba(0,0,0," + (dark ? ".50" : ".26") + ")";
+			// [R66] 内沿辉光(末位 inset):光在玻璃边缘内侧洇开一圈(nikdelvin 镜面抛光边
+			// 同观感),静息态也有一圈可感知的玻璃厚度,不再纯靠指针流光点亮边环。
+			var depthShadow = "inset 0 1px 0 " + edge + ",inset 1px 0 0 " + sideL + ",inset -1px 0 0 " + sideR + ",inset 0 -1px 0 " + innerShade + ",inset 0 0 14px rgba(255,255,255," + (dark ? ".05" : ".10") + "),0 2px 8px rgba(0,0,0," + (dark ? ".22" : ".07") + "),0 16px 40px rgba(0,0,0," + shadowA + ")";
 			return [
 				// [R65] 氛围渐变垫底(fixed)升级:边缘 vignette 暗化(非玻璃舞台沉下去)+蓝紫四光斑(玻璃后景色材丰富,折射肉眼可见;stormaref 守则一:玻璃需要衬底)。
 				"body{background-image:radial-gradient(150% 115% at 50% 42%, transparent " + (dark ? "52%" : "55%") + ", rgba(" + (dark ? "2,4,14" : "10,16,48") + "," + (dark ? ".22" : ".07") + ") 100%),radial-gradient(44% 38% at 82% 16%, rgba(155,118,255," + (dark ? ".12" : ".09") + "), transparent 64%),radial-gradient(55% 45% at 18% 10%, rgba(77,107,254," + (dark ? ".28" : ".20") + "), transparent 62%),radial-gradient(48% 42% at 86% 84%, rgba(103,153,254," + (dark ? ".24" : ".15") + "), transparent 58%),radial-gradient(30% 24% at 55% 40%, rgba(147,197,253," + (dark ? ".12" : ".09") + "), transparent 70%)!important;background-attachment:fixed!important}",
@@ -1439,6 +1443,9 @@ window.__ModuleLoader__.load({
 			// 流动;第二层恒定角光。pointer-events:none;边缘 mask 仅在支持时生效。
 			SURFA + "{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;background-image:radial-gradient(260px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255," + (dark ? ".18" : ".36") + "), transparent 65%),radial-gradient(55% 45% at 88% 94%, rgba(255,255,255," + (dark ? ".06" : ".08") + "), transparent 60%)}",
 				MASKA + "{-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;padding:2px}",
+				// [R66] 输入卡聚焦苏醒(与壁纸态同款):tint 提一档+边线提亮+悬浮影加深
+				'[data-composer-card]{transition:background-color .25s ease,box-shadow .25s ease}',
+				'[data-composer-card]:focus-within{background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (dark ? "44%" : "48%") + ', transparent)!important;border-color:' + (dark ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.55)") + '!important;box-shadow:' + focusShadow + '!important}',
 				// 侧栏根:不含 backdrop-filter;**不加 isolation/z-index**——任何栈上下文都会
 				// 把内部 z:1000 的设置 overlay 困在侧栏绘制顺序内(被中列盖住,问题62)。
 				'div[data-slot="sidebar"]>div[class*="_root"]{position:relative!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (dark ? "34%" : "40%") + ', transparent)!important;background-image:radial-gradient(320px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255,' + (dark ? ".08" : ".12") + "), transparent 65%),linear-gradient(180deg, rgba(255,255,255," + (dark ? ".05" : ".10") + "), rgba(255,255,255,0) 30%)!important;border:1px solid " + edgeDim + "!important;border-radius:20px!important;box-shadow:" + depthShadow + "!important}",
@@ -1723,7 +1730,7 @@ window.__ModuleLoader__.load({
 				// 一级表面(输入卡/设置面板):重折射+微亮度对比;二级(工作区/功能卡):轻折射
 				var f1 = refr + "blur(20px) saturate(1.72) brightness(" + (darkBg ? "0.9" : "1.07") + ") contrast(1.03)";
 				var f2 = refr + "blur(12px) saturate(1.5)";
-				var depthShadow = "inset 0 1px 0 " + (darkBg ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.72)") + ",inset 1px 0 0 " + (darkBg ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.22)") + ",inset -1px 0 0 " + (darkBg ? "rgba(255,255,255,.04)" : "rgba(255,255,255,.10)") + ",inset 0 -1px 0 " + innerShade + ",0 2px 8px rgba(0,0,0," + (darkBg ? ".22" : ".07") + "),0 16px 40px rgba(0,0,0," + (darkBg ? ".44" : ".20") + ")";
+				var depthShadow = "inset 0 1px 0 " + (darkBg ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.72)") + ",inset 1px 0 0 " + (darkBg ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.22)") + ",inset -1px 0 0 " + (darkBg ? "rgba(255,255,255,.04)" : "rgba(255,255,255,.10)") + ",inset 0 -1px 0 " + innerShade + ",inset 0 0 14px rgba(255,255,255," + (darkBg ? ".05" : ".10") + "),0 2px 8px rgba(0,0,0," + (darkBg ? ".22" : ".07") + "),0 16px 40px rgba(0,0,0," + (darkBg ? ".44" : ".20") + ")";
 				// 一级表面选择器(本版本面板无 role=dialog,按语义后缀 _panel 寻址,
 				// 排除 panelBody 内层防双层折射;排除 panelIcon/panelView/panelResize/
 				// panelHidden 工具元素——整套玻璃(圆角+边线+深度影)落在 17px 图标或
@@ -1767,6 +1774,8 @@ window.__ModuleLoader__.load({
 				var veilCardSoft = darkBg ? "rgba(28,30,36,.14)" : "rgba(255,255,255,.10)";
 				var veilSegOn = darkBg ? "rgba(28,30,36,.36)" : "rgba(255,255,255,.32)";
 				var edgeCard = darkBg ? "rgba(255,255,255,.13)" : "rgba(255,255,255,.42)";
+				// [R66] 输入卡聚焦苏醒阴影:内顶光提亮+辉光加深+悬浮影抬一档(离焦回落 depthShadow)
+				var focusShadow = "inset 0 1px 0 " + (darkBg ? "rgba(255,255,255,.24)" : "rgba(255,255,255,.85)") + ",inset 1px 0 0 " + (darkBg ? "rgba(255,255,255,.09)" : "rgba(255,255,255,.30)") + ",inset -1px 0 0 " + (darkBg ? "rgba(255,255,255,.06)" : "rgba(255,255,255,.14)") + ",inset 0 -1px 0 " + innerShade + ",inset 0 0 14px rgba(255,255,255," + (darkBg ? ".08" : ".14") + "),0 4px 12px rgba(0,0,0," + (darkBg ? ".28" : ".10") + "),0 22px 52px rgba(0,0,0," + (darkBg ? ".50" : ".26") + ")";
 				style.textContent = [
 					"#" + BG_LAYER_ID + "{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}",
 					"#" + BG_LAYER_ID + " img,#" + BG_LAYER_ID + " video{width:100%;height:100%;object-fit:cover;display:block}",
@@ -1870,13 +1879,13 @@ window.__ModuleLoader__.load({
 				'div[data-slot="sidebar.workspaces"],div[data-slot="sidebar"] button[class*="trigger"]{text-shadow:' + veilTextShadow + '}',
 				// 4) [R58] 中栏工作区空态功能卡:二级玻璃(轻折射+tint+内顶光+边线);
 				//    悬停 tint 与阴影同步加深一档。卡片无定位子树,轻模糊安全。
-				'button[class*="paneCard"]{backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "28%" : "34%") + ', transparent)!important;border:1px solid ' + edgeDim + '!important;box-shadow:inset 0 1px 0 ' + edgeDim + ',0 6px 18px rgba(0,0,0,' + (darkBg ? ".24" : ".08") + ')!important;transition:background-color .18s ease,box-shadow .18s ease,border-color .18s ease}',
-				'button[class*="paneCard"]:hover{background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "34%" : "40%") + ', transparent)!important;box-shadow:inset 0 1px 0 ' + edgeDim + ',0 10px 26px rgba(0,0,0,' + (darkBg ? ".30" : ".12") + ')!important}',
+				'button[class*="paneCard"]{backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "28%" : "34%") + ', transparent)!important;border:1px solid ' + edgeDim + '!important;box-shadow:inset 0 1px 0 ' + edgeDim + ',inset 0 0 12px rgba(255,255,255,' + (darkBg ? ".04" : ".08") + '),0 6px 18px rgba(0,0,0,' + (darkBg ? ".24" : ".08") + ')!important;transition:background-color .18s ease,box-shadow .18s ease,border-color .18s ease,transform .18s ease}',
+				'button[class*="paneCard"]:hover{background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "34%" : "40%") + ', transparent)!important;box-shadow:inset 0 1px 0 ' + edgeDim + ',inset 0 0 12px rgba(255,255,255,' + (darkBg ? ".05" : ".10") + '),0 10px 26px rgba(0,0,0,' + (darkBg ? ".30" : ".12") + ')!important;transform:translateY(-2px)}',
 				// ---- [R58] 液态玻璃·侧栏与工作区 ----
 				// 5) 工作区列表(二级表面):轻折射玻璃板;扫光图层与指针流光沉在内容
 				//    之下(元素背景层,不糊文字),background-position 随 dshLgFlow 流动。
 				//    列表无 fixed 后代,backdrop-filter 安全(无壁纸态同法已验证)。
-				'div[data-slot="sidebar.workspaces"]{position:relative!important;backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "22%" : "24%") + ', transparent)!important;border:1px solid ' + edgeDim + '!important;border-radius:16px!important;box-shadow:inset 0 1px 0 ' + edgeDim + '!important;background-image:radial-gradient(280px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255,' + (darkBg ? ".05" : ".08") + '), transparent 65%),linear-gradient(115deg, transparent 42%, rgba(255,255,255,' + (darkBg ? ".04" : ".06") + ') 50%, transparent 58%)!important;background-size:100% 100%,220% 220%;background-repeat:no-repeat;background-position:0 0,0% 100%;animation:dshLgFlow 14s ease-in-out infinite alternate}',
+				'div[data-slot="sidebar.workspaces"]{position:relative!important;backdrop-filter:' + f2 + '!important;-webkit-backdrop-filter:' + f2 + '!important;background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "22%" : "24%") + ', transparent)!important;border:1px solid ' + edgeDim + '!important;border-radius:16px!important;box-shadow:inset 0 1px 0 ' + edgeDim + ',inset 0 0 12px rgba(255,255,255,' + (darkBg ? ".04" : ".07") + ')!important;background-image:radial-gradient(280px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255,' + (darkBg ? ".05" : ".08") + '), transparent 65%),linear-gradient(115deg, transparent 42%, rgba(255,255,255,' + (darkBg ? ".04" : ".06") + ') 50%, transparent 58%)!important;background-size:100% 100%,220% 220%;background-repeat:no-repeat;background-position:0 0,0% 100%;animation:dshLgFlow 14s ease-in-out infinite alternate}',
 				// 6) 侧栏根定位锚:玻璃底/边线/圆角/深度影走 inline(sidebarGlass,见上),
 				//    此处只锚 position——#root 透明链不管 position,stylesheet 即可。
 				'div[data-slot="sidebar"]>div[class*="_root"]{position:relative!important}',
@@ -1911,6 +1920,42 @@ window.__ModuleLoader__.load({
 				'[class*="_overlay"] [class*="_a_card"],[class*="_overlay"] [class*="_setCard"]{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important}',
 				'[class*="_overlay"] [class*="_setSeg"]{background-color:' + veilCardSoft + '!important;border-radius:10px}',
 				'[class*="_overlay"] [class*="_setSegOn"]{background-color:' + veilSegOn + '!important}',
+				// ---- [R66] 液态玻璃五阶·四表面表现优化(参考 GitHub liquid-glass 实现:
+				//      nikdelvin/liquid-glass 抛光边分层→内沿辉光已并入 depthShadow;
+				//      dashersw/liquid-glass-js 菲涅尔随光边环→mask 边环+指针流光承接;
+				//      rdev/liquid-glass-react 交互形变→本批主补的交互态) ----
+				// C. 聊天输入框聚焦苏醒:玻璃「拿起来」——tint 提一档+边线提亮+悬浮影
+				//    加深,离焦平滑回落;只动背景/阴影不动布局(dshvt 高度管理器依赖
+				//    composer 几何稳定,问题111 教训)。
+				'[data-composer-card]{transition:background-color .25s ease,box-shadow .25s ease}',
+				'[data-composer-card]:focus-within{background-color:color-mix(in srgb, rgba(' + tint + ',1) ' + (darkBg ? "44%" : "48%") + ', transparent)!important;border-color:' + (darkBg ? "rgba(255,255,255,.16)" : "rgba(255,255,255,.55)") + '!important;box-shadow:' + focusShadow + '!important}',
+				// D. 设置页:导航悬停纱+激活纱(激活底色令牌已被透明链置空,激活项原本只剩
+				//    文字色差);通用四入口卡(sGenSubCard,[K] 稳定类)玻璃纱底+悬停抬升——
+				//    其底色 bg-layer-2 与悬停底 nav-item-hover 同被置空,原本只剩细框。
+				'[class*="_overlay"] [class*="_navCell"]:hover{background-color:' + veilSoft + '!important}',
+				'[class*="_overlay"] [class*="_navCell"][class*="_active"]{background-color:' + veilSegOn + '!important}',
+				'[class*="_overlay"] .sGenSubCard{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important;box-shadow:inset 0 1px 0 ' + edgeCard + '!important;transition:border-color .3s cubic-bezier(.32,.72,0,1),background-color .18s ease,transform .18s ease,box-shadow .18s ease}',
+				'[class*="_overlay"] .sGenSubCard:hover{background-color:' + veilCardHover + '!important;transform:translateY(-1px);box-shadow:inset 0 1px 0 ' + edgeCard + ',0 6px 16px rgba(0,0,0,' + (darkBg ? ".20" : ".08") + ')!important}',
+				// E. 侧边卡片(better-sidebar,宿主 [data-dsh-panel-host] 稳定锚):
+				//    入口胶囊玻璃化(其 bg-layer-2 底被透明链置空,皮肤下两枚按钮裸奔);
+				//    页签静息轻纱/激活加深(_tab 排除 tabBar/tabList/tabTitle/tabBarPlus);
+				//    文件搜索框与文件行悬停纱。
+				'[data-dsh-panel-host] [class*="toggleCluster"]{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important;box-shadow:0 4px 14px rgba(0,0,0,' + (darkBg ? ".22" : ".10") + ')!important}',
+				'[data-dsh-panel-host] [class*="toggleCluster"] button:hover{background-color:' + veilHover + '!important}',
+				'[data-dsh-panel-host] [class*="_tab"]:not([class*="_tabBar"]):not([class*="_tabList"]):not([class*="_tabTitle"]):not([class*="_tabBarPlus"]):not([class*="_tabActive"]){background-color:' + veilCardSoft + '!important;border-radius:8px}',
+				'[data-dsh-panel-host] [class*="_tabActive"]{background-color:' + veilSegOn + '!important;border-radius:8px}',
+				'[data-dsh-panel-host] [class*="_editorSearchInput"]{background-color:' + veilCardSoft + '!important;border:1px solid ' + edgeCard + '!important;border-radius:8px}',
+				'[data-dsh-panel-host] [class*="_editorSearchInput"]:focus{background-color:' + veilCardHover + '!important;border-color:' + (darkBg ? "rgba(217,119,87,.45)" : "rgba(217,119,87,.40)") + '!important}',
+				'[data-dsh-panel-host] [class*="_explorerRow"]{border-radius:8px}',
+				'[data-dsh-panel-host] [class*="_explorerRow"]:hover{background-color:' + veilHover + '!important}',
+				// F. 工作区:新会话按钮玻璃化(button-elevated 底被透明链置空)+头部图标钮
+				//    悬停纱;会话行选中补内顶光(选中态原本只有平铺纱底,缺玻璃厚度)。
+				'div[data-slot="sidebar"] button[class*="_newSession"]{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important;box-shadow:inset 0 1px 0 ' + edgeCard + '!important}',
+				'div[data-slot="sidebar"] button[class*="_newSession"]:hover{background-color:' + veilCardHover + '!important}',
+				'div[data-slot="sidebar.workspaces"] button[class*="_iconButton"]:hover{background-color:' + veilHover + '!important;border-radius:8px}',
+				'div[data-slot="sidebar.workspaces"] [class*="sessionRow"][class*="selected"]{box-shadow:inset 0 1px 0 rgba(255,255,255,' + (darkBg ? ".16" : ".45") + '),inset 0 0 10px rgba(255,255,255,' + (darkBg ? ".04" : ".10") + ')!important}',
+				// [R66] reduced-motion:悬停抬升类交互全部静止(与 dshLgFlow 关停同媒体查询)
+				'@media (prefers-reduced-motion:reduce){[data-composer-card],[class*="_overlay"] .sGenSubCard,button[class*="paneCard"]{transition:none!important}[class*="_overlay"] .sGenSubCard:hover,button[class*="paneCard"]:hover{transform:none!important}}',
 				].join("");
 			} else {
 				// [R48→问题71] 无壁纸时:仅当 glass 显式为 true 才应用毛玻璃;
