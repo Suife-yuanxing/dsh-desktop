@@ -58,7 +58,7 @@ const rows = fams.map((f, idx) => {
   const surfaces = []
   if (/PLUGINS|'\.dsh',\s*'profiles'/.test(body)) surfaces.push('P')
   if (/_npx|npm-cache/.test(body)) surfaces.push('O')
-  if (/DSH_LOCAL_PRESETS_ROOT/.test(body)) surfaces.push('L')
+  if (/DSH_LOCAL_PRESETS_ROOT|DSH_LOCAL_RUNTIME_ROOT|deepseek-harness[/\\]{1,2}packages/.test(body)) surfaces.push('L')
   return { name: f.name, surfaces }
 })
 
