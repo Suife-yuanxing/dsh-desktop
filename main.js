@@ -1,11 +1,17 @@
-// dsh-desktop 主进程 v0.5.2
+// dsh-desktop 主进程 v0.5.15
 // v0.1 Electron 壳 | v0.2 启动页+崩溃自愈 | v0.3 多窗口+dsh版本锁+dsh更新+壳自更新+全中文菜单
+// v0.5.14 [q195] 启动/重启提速:主题闸门硬超时兜底(探针延迟架空 deadline 实测揭窗 +5-6.5s→≤2s)/
+//        boot 复用路径先探测后重放(补丁重放移出复用关键路径)/重启分段计时日志/预热补 node.exe 本体
+// v0.5.15 [q196 2026-09-05] 启动白屏治理:揭窗闸门改「应用内容真实挂载」探测——旧 2s 硬兜底在
+//        服务就绪即揭窗,而页面还要走 401 信任页→白底加载页→应用挂载→主题落位(实测 10s+),
+//        用户直面长白屏。改为 #root 挂载+主题在位才揭窗,主题迟到宽限 4s,硬兜底 20s;
+//        等待期关渲染节流;splash 增「正在加载界面…」阶段,'ready' 移至揭窗节拍触发
 // v0.5.0 联合工作区里程碑:dsh 运行时双轨切换(official npx/缓存路径 ↔ local 本地构建 bin.js)
 // v0.5.1 双轨切换进设置(壳设置窗口 Ctrl+, + Web UI 更新区;切换失败自动回滚)+ 联合工作区灰度开关(仅本地轨可写)
 // v0.5.2 便携版 local 轨修复:默认探测补 PORTABLE_EXECUTABLE_DIR 锚点(0.5.1 打包态探测恒 null
 //        ⇒ local 恒回退官方、联邦开关置灰)+ DSH_LOCAL_DIR 环境变量覆盖
 // dsh 运行时经 npx 调用(PATH→注册表),版本锁与 dshRuntime 存于 ~/.dsh/desktop-config.json,插件化零破坏。
-const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain, net: electronNet } = require('electron')
+const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain, net: electronNet, session } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const net = require('node:net')
 const http = require('node:http')
@@ -24,6 +30,18 @@ try {
 } catch {
   replayLocalPatches = require('./patches.cjs').replayAll
 }
+// [q194 2026-09-04] 每次调用重读 ~/.dsh/patches.cjs:壳是长驻进程,require 缓存会把
+// 启动时的旧重放器留在内存,patches.cjs 的后续编辑(新补丁段/新适配)会被守护线程与
+// 重启流程按旧链覆盖回去(v2→v1 实证)。重读失败回退启动时缓存。
+function loadFreshReplayer() {
+  try {
+    const patchesPath = path.join(os.homedir(), '.dsh', 'patches.cjs')
+    delete require.cache[require.resolve(patchesPath)]
+    return require(patchesPath).replayAll
+  } catch {
+    return replayLocalPatches
+  }
+}
 
 // [问题99] 补丁守护:周期性幂等重放,覆盖「壳运行期间外部覆盖产物」的窗口
 // (市场安装/更新/卸载、CLI pnpm 对账、手工操作)。哨兵快速通道保证已补丁态零写盘;
@@ -32,7 +50,8 @@ function startPatchGuardian(intervalMs = 45_000) {
   let lastOk = null
   const timer = setInterval(() => {
     try {
-      const r = replayLocalPatches(() => {})
+      // [q194 2026-09-04] 守护每次重读最新重放器(否则 require 缓存旧链会把新补丁覆盖回去)
+      const r = loadFreshReplayer()(() => {})
       if (r.ok !== lastOk) {
         log(`[patch-guardian] 状态翻转 ok=${r.ok}(外部覆盖后自动重放恢复或存在失配)`)
         lastOk = r.ok
@@ -46,6 +65,12 @@ function startPatchGuardian(intervalMs = 45_000) {
 
 const DSH_PORT = 3080
 const DSH_URL = `http://127.0.0.1:${DSH_PORT}`
+// [问题126] 0.1.2-alpha.5 起 Web 面板启用浏览器信任栅栏:无 token 的 GET / 返回 401
+// (带 ?token= 返回 303 并种信任 cookie,token 跨启动稳定)。启动行 printUrl 携带
+// 带 token 的规范 URL,在此捕获,所有窗口加载经 dshUrl() 走它;rc.7- 无此行,回退裸 URL。
+let dshWebUrl = null
+let dshUrlReloadTimer = null
+function dshUrl() { return dshWebUrl || DSH_URL }
 const START_TIMEOUT_MS = 120_000 // 首次 npx 需下载包,给足时间
 const SWITCH_TIMEOUT_MS = 60_000 // 版本切换的就绪预算,超时自动回滚
 const DSH_HOME = path.join(os.homedir(), '.dsh')
@@ -55,12 +80,18 @@ const CONFIG_FILE = path.join(DSH_HOME, 'desktop-config.json')
 const SUMMARY_FILE = path.join(DSH_HOME, 'session-summaries.json')
 const DEFAULT_DSH_VERSION = '0.1.0-rc.6' // 锁定到当前验证过的版本
 const MIN_PUBLIC_DSH_VERSION = '0.1.0-rc.6' // 此前版本发布时 @deepseek-ai/* 依赖族未公开,今日 npx 已装不完整,一律不展示
-// [问题78] dsh 更新链固定官方发布源:@deepseek-ai/dsh 由 DeepSeek 社区 Harness 官方
+// [问题78] dsh 下载/安装固定官方发布源:@deepseek-ai/dsh 由 DeepSeek 社区 Harness 官方
 // 发布到 npm 公共注册表(官方 README 安装方式即 npx @deepseek-ai/dsh web)。用户级
 // npm 配置常指向第三方镜像——镜像曾致 npm idealTree 解析预发布范围卡死、元数据
-// 逐包再验证奇慢,属不可靠拉取源。查询/下载/安装各环节显式 --registry 固定官方源,
-// 不随用户 npm 配置漂移;官方源不可达时明确报错,不静默换源。
+// 逐包再验证奇慢,属不可靠拉取源。下载/安装各环节显式 --registry 固定官方源,
+// 不随用户 npm 配置漂移。
+// [问题125] 版本清单「查询」改走 HTTP 三级降级(官方 → 镜像 → 镜像直连),不再依赖
+// npm.cmd 子进程:npm 不认 Windows 系统代理(只认 HTTP(S)_PROXY/.npmrc proxy),
+// 代理环境下直连官方源时通时断,曾致设置页「npm 查询失败」。electronNet.fetch 走
+// Chromium 网络栈、遵循系统代理,与壳 GitHub 检查同源。镜像仅用于读取版本元数据,
+// 下载/安装仍固定官方源。
 const DSH_REGISTRY = 'https://registry.npmjs.org'
+const DSH_REGISTRY_MIRROR = 'https://registry.npmmirror.com'
 const REGISTRY_ARGS = ['--registry', DSH_REGISTRY]
 const RECOVERY_DELAYS = [1_000, 5_000, 15_000] // 崩溃自愈退避,3 次后停
 const RECOVERY_STABILIZE_MS = 5_000 // 恢复稳定期:dsh 先 listen 再加载插件树,boot 崩溃发生在 listen 之后;
@@ -85,6 +116,11 @@ let recoveryTimer = null
 let availableVersions = [] // npm 上可选的 dsh 版本(异步拉取,供壳 HTTP API /state、/switch 使用;设置 UI 仅保留更新)
 let switching = false // 版本切换互斥,防止并发触发
 let restarting = false // 服务重启互斥(托盘/API 共用)
+// [问题121] 重启冷却:restartDsh 落定时刻由包装层维护。08-30 实测连跑双重启——
+// 第 1 次就绪后 0.46s 第 2 次触发把刚拉起的服务又杀掉重跑,进度表现为
+// 92%→100%→回退重爬→100%。服务刚重启过的窗口期内重复触发没有增量价值,直接吸收。
+let lastRestartSettledAt = 0
+const RESTART_COOLDOWN_MS = 3000
 
 // ---------- 配置(dsh 版本锁) ----------
 
@@ -155,7 +191,7 @@ async function waitForPort(timeoutMs) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await isPortUp()) return true
-    await sleep(150) // 热重启 dsh 约 2s 起listen,细粒度轮询把检测延迟压到 150ms 内
+    await sleep(100) // [R74] dsh 编译缓存后 spawn→listen ~2s;细粒度轮询把检测延迟压进 100ms
   }
   return false
 }
@@ -165,7 +201,7 @@ async function waitForPortFree(timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (!(await isPortUp())) return true
-    await sleep(100)
+    await sleep(60)
   }
   return false
 }
@@ -175,7 +211,9 @@ function isHttpOk() {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port: DSH_PORT, path: '/', timeout: 2000 }, (res) => {
       res.resume()
-      resolve(res.statusCode === 200)
+      // [问题126] alpha.5 信任栅栏:无 token GET / 返回 401(带 token 303)。
+      // 收到任何 HTTP 响应即证明 Web 服务在位,不再强求 200。
+      resolve(res.statusCode === 200 || res.statusCode === 401 || (res.statusCode >= 300 && res.statusCode < 400))
     })
     req.on('error', () => resolve(false))
     req.on('timeout', () => { req.destroy(); resolve(false) })
@@ -193,11 +231,16 @@ async function waitForHttp(timeoutMs = 5000) {
 
 // ---------- dsh 进程管理 ----------
 
-// 解析 npx 位置:PATH where → 注册表 Node.js InstallPath(HKLM/HKCU)
+// [R74] npx/node 解析记忆化:spawnSync('where')/reg query 单次 50-150ms,而启动链
+// (startDsh→resolveDshRuntime→resolveNodeExe→resolveNpxCommand、快速路径二连、
+// npmView/probe)每次都重复解析;解析结果在进程生命周期内不变,模块级缓存即可。
+let npxCmdMemo // undefined=未解析,否则为 string|null
 function resolveNpxCommand() {
+  if (npxCmdMemo !== undefined) return npxCmdMemo
   const where = spawnSync('where', ['npx.cmd'], { encoding: 'utf8', windowsHide: true })
   if (where.status === 0 && where.stdout && where.stdout.trim()) {
-    return where.stdout.trim().split(/\r?\n/)[0]
+    npxCmdMemo = where.stdout.trim().split(/\r?\n/)[0]
+    return npxCmdMemo
   }
   for (const hive of ['HKLM', 'HKCU']) {
     const reg = spawnSync('reg', ['query', `${hive}\\SOFTWARE\\Node.js`, '/v', 'InstallPath'],
@@ -207,19 +250,22 @@ function resolveNpxCommand() {
       if (line) {
         const installPath = line.split('REG_SZ')[1].trim()
         const npx = path.join(installPath, 'npx.cmd')
-        if (fs.existsSync(npx)) return npx
+        if (fs.existsSync(npx)) { npxCmdMemo = npx; return npx }
       }
     }
   }
-  return null
+  npxCmdMemo = null
+  return npxCmdMemo
 }
 
 // [问题55] 解析 node.exe:优先 npx 同目录,否则注册表 InstallPath。供绕过 npx 直启用。
+let nodeExeMemo // undefined=未解析,否则为 string|null
 function resolveNodeExe() {
+  if (nodeExeMemo !== undefined) return nodeExeMemo
   const npx = resolveNpxCommand()
   if (npx) {
     const cand = path.join(path.dirname(npx), 'node.exe')
-    if (fs.existsSync(cand)) return cand
+    if (fs.existsSync(cand)) { nodeExeMemo = cand; return cand }
   }
   for (const hive of ['HKLM', 'HKCU']) {
     const reg = spawnSync('reg', ['query', `${hive}\\SOFTWARE\\Node.js`, '/v', 'InstallPath'],
@@ -228,11 +274,12 @@ function resolveNodeExe() {
       const line = reg.stdout.split(/\r?\n/).find((l) => l.includes('InstallPath') && l.includes('REG_SZ'))
       if (line) {
         const cand = path.join(line.split('REG_SZ')[1].trim(), 'node.exe')
-        if (fs.existsSync(cand)) return cand
+        if (fs.existsSync(cand)) { nodeExeMemo = cand; return cand }
       }
     }
   }
-  return null
+  nodeExeMemo = null
+  return nodeExeMemo
 }
 
 // [问题55] 快速启动:在 npx 缓存内找与锁定版本一致的 dsh,返回其 bin.js 绝对路径。
@@ -322,16 +369,92 @@ function resolveDshRuntime(config = cfg, opts = {}) {
   return { mode: 'local', node, bin }
 }
 
+// [R74] dsh 子进程 Node 编译缓存:node≥22.1 磁盘级 V8 compile cache。实测对本机
+// dsh 的 ESM 模块树覆盖有限(整个 boot 只落 1 个引导文件),属机会性收益(node
+// 升级扩大 ESM 覆盖后自动受益);真正的启动波动治理见下方文件预热。
+// 三种拉起形态(快速路径 node 直跑/local 轨/npx 经 cmd)统一经 env 注入。
+const NODE_COMPILE_CACHE_DIR = path.join(DSH_HOME, 'cache', 'node-compile')
+function dshSpawnEnv() {
+  try { fs.mkdirSync(NODE_COMPILE_CACHE_DIR, { recursive: true }) } catch { /* 目录建不出时 node 侧静默禁用 */ }
+  return { ...process.env, NODE_COMPILE_CACHE: NODE_COMPILE_CACHE_DIR }
+}
+
+// ---------- [R74] 文件缓存预热:治 dsh 启动波动的根 ----------
+// dsh boot(spawn→listen 稳态 ~1.8s)的波动(实测可到 3.8s+)来自 250+ 包 js
+// 文件的磁盘冷读与 Defender 实时扫描;托盘重启常发生在壳空闲数小时后,文件
+// 已被系统缓存逐出。就绪后后台把运行时树顺序读一遍(限量),内容顶进系统
+// 文件缓存,下次 spawn 的模块加载全程热读。纯 IO 异步低优先,不阻塞主流程。
+let preheating = false
+const PREHEAT_MAX_BYTES = 96 * 1024 * 1024
+function preheatDshFiles() {
+  if (preheating || quitting) return
+  const roots = new Set()
+  const binJs = resolveCachedDshBin() // official 快速路径:<npx哈希>/node_modules/@deepseek-ai/dsh/lib/bin.js
+  if (binJs) {
+    const pkgRoot = path.dirname(path.dirname(binJs)) // .../@deepseek-ai/dsh
+    roots.add(path.dirname(path.dirname(pkgRoot))) // .../node_modules 的宿主哈希目录
+  }
+  const runtime = resolveDshRuntime(cfg, { quiet: true }) // local 轨:构建产物 lib/
+  if (runtime.mode === 'local' && runtime.bin) roots.add(path.dirname(runtime.bin))
+  if (!roots.size) return
+  preheating = true
+  ;(async () => {
+    const t0 = Date.now()
+    let files = 0, bytes = 0
+    let budget = PREHEAT_MAX_BYTES
+    const walk = async (dir) => {
+      if (budget <= 0 || quitting) return
+      let items
+      try { items = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
+      for (const it of items) {
+        if (budget <= 0 || quitting) return
+        const p = path.join(dir, it.name)
+        if (it.isDirectory()) {
+          if (it.name === '.bin' || it.name === '.git' || it.name === 'test' || it.name === 'tests' || it.name === 'docs' || it.name === 'examples') continue
+          await walk(p)
+        } else if (it.isFile() && /\.(js|mjs|cjs|json|node)$/i.test(it.name) && !/\.d\.ts$/i.test(it.name)) {
+          try {
+            const st = await fs.promises.stat(p)
+            if (st.size > 8 * 1024 * 1024 || st.size > budget) continue
+            budget -= st.size
+            await fs.promises.readFile(p) // 内容进系统缓存;fs 线程池执行,不占主线程
+            files += 1
+            bytes += st.size
+          } catch { /* 文件消失/占用,跳过 */ }
+        }
+      }
+    }
+    for (const root of roots) await walk(root)
+    // [q195 2026-09-05] node.exe 本体也预热:walk 白名单只收 js/mjs/cjs/json/node,
+    // 而 spawn 冷读 ~80MB 的 node.exe 二进制是壳空闲数小时后重启变慢的隐形项
+    // (缓存逐出后 node 启动+Defender 扫描都卡在冷读上)。单独读取,不计文件预算。
+    try {
+      const nodeExe = resolveNodeExe()
+      if (nodeExe) {
+        const st = await fs.promises.stat(nodeExe)
+        await fs.promises.readFile(nodeExe)
+        files += 1
+        bytes += st.size
+      }
+    } catch { /* 读取失败不影响预热主流程 */ }
+    preheating = false
+    log(`[预热] dsh 运行时文件已读入系统缓存: ${files} 个文件 ${(bytes / 1048576).toFixed(1)}MB,耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+  })().catch(() => { preheating = false })
+}
+// 触发点:启动/重启/自动恢复就绪后 5s 起跑;之后每 10 分钟补一次(文件已被
+// 缓存时只是 RAM 读,开销可忽略),对冲长时间空闲后的缓存逐出。
+function schedulePreheat() { setTimeout(preheatDshFiles, 5_000) }
+function startPreheatLoop() { schedulePreheat(); const t = setInterval(preheatDshFiles, 600_000); if (t.unref) t.unref() }
+
 function startDsh() {
   // [问题88] 每次启动 dsh 前重放本地补丁守护:市场更新/外部整写可能在壳运行期改掉
   // profile patch 禁用行(如 web-ui-better-sidebar 去重守护,问题53/70),服务级重启
   // (托盘重启、自动恢复)不经过 boot() 的重放,会带着坏 patch 直接 crash loop。
   // 此处重放幂等(.bak 链自愈),自动恢复迭代时还能当场修复被改写的守护行。
   try {
-    const r = replayLocalPatches((l) => log(l))
+    const r = loadFreshReplayer()((l) => log(l))
     if (!r.ok) log('补丁重放存在 FAIL(不阻断启动,详见上方日志)')
-  } catch (e) { log(`补丁重放异常: ${e.message}`) }
-  // [v0.5.0] 双轨解析:'local' 直跑本地构建 bin.js;'official'(含能力探测失败折返)
+  } catch (e) { log(`补丁重放异常: ${e.message}`) }  // [v0.5.0] 双轨解析:'local' 直跑本地构建 bin.js;'official'(含能力探测失败折返)
   // 保持 npx 快速路径既有语义原样——环境注入/版本锁旁路/补丁重放均不变。
   const runtime = resolveDshRuntime(cfg)
   if (runtime.fallback) log('[dshRuntime] 本次按 official 启动(上方 breadcrumb 已留痕)')
@@ -384,10 +507,26 @@ function startDsh() {
     windowsHide: true, // 隐藏 npx 控制台窗口,日志走文件
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
+    env: dshSpawnEnv(), // [R74] 编译缓存:模块编译提速(托盘重启+冷启动共同大头)
   })
   const childRef = dshChild
+  let stdoutTail = ''
   log(`dsh 子进程 pid=${dshChild.pid}`)
-  dshChild.stdout.on('data', (d) => log(`[dsh] ${String(d).trim()}`))
+  dshChild.stdout.on('data', (d) => {
+    // [问题126] 捕获启动行里的带 token URL(跨 data 分块,用尾部缓冲保证行完整)
+    stdoutTail = ((stdoutTail || '') + String(d)).slice(-2000)
+    const m = stdoutTail.match(/dsh web: (http:\/\/[^\s"'`]+[?&]token=[^\s"'`]+)/)
+    if (m && dshWebUrl !== m[1]) {
+      dshWebUrl = m[1]
+      log('已捕获 dsh Web 信任 URL(浏览器信任栅栏)')
+      // printUrl 行在 bind 后 ~0.5s 才打印,而就绪判定(401 即算就绪)先于它成立,
+      // 就绪路径的窗口加载可能装到无 token 的 401 页 → 捕获到(新)token 后统一重载,
+      // 首载种下信任 cookie。800ms 防抖合并同屏多次触发。
+      clearTimeout(dshUrlReloadTimer)
+      dshUrlReloadTimer = setTimeout(() => loadUrlAll(dshWebUrl), 800)
+    }
+    log(`[dsh] ${String(d).trim()}`)
+  })
   dshChild.stderr.on('data', (d) => log(`[dsh-err] ${String(d).trim()}`))
   dshChild.on('exit', (code) => {
     // [问题75] 身份守卫:被 killDshTree 杀掉的旧实例 exit 事件会延迟到达,
@@ -402,17 +541,25 @@ function startDsh() {
 }
 
 // 崩溃自愈:意外退出→退避重启;连续 3 次失败→通知并停机等手动处理
+// [问题121] 全程挂进度遮罩:此前恢复零反馈,用户盯着旧页/白屏不知道发生了什么。
 async function scheduleRecovery() {
   if (recoveryTimer) return
+  restartProgress(15, '服务异常,正在自动恢复…')
   await sleep(1_500) // 等端口真正下线,避免误判
-  if (quitting || dshChild) return
+  if (quitting || dshChild) {
+    // 手动重启/启动流程已接管(自带遮罩)时勿动;无主遮罩(boot 期竞态)才撤
+    if (!restarting && !switching) restartOverlayRemove()
+    return
+  }
   if (await isPortUp()) {
     log('服务仍可用(外部实例接管),跳过自动恢复')
+    restartOverlayRemove()
     return
   }
   if (restartAttempts >= RECOVERY_DELAYS.length) {
     log(`连续 ${RECOVERY_DELAYS.length} 次自动恢复失败,停止重试`)
     notify('DeepSeek Harness', 'dsh 服务多次崩溃,已停止自动恢复。请从托盘菜单手动重启。')
+    restartOverlayRemove() // error.html 换页本身会带走遮罩,这里兜底
     loadErrorPageAll('crash')
     return
   }
@@ -423,7 +570,11 @@ async function scheduleRecovery() {
   recoveryTimer = setTimeout(async () => {
     recoveryTimer = null
     if (quitting) return
-    if (!startDsh()) return
+    restartProgress(40, '正在启动 dsh 服务…')
+    if (!startDsh()) {
+      restartOverlayRemove()
+      return
+    }
     const child = dshChild // 锁定本次恢复拉起的进程,防止后续恢复周期替换后误清零计数
     const ok = await waitForPort(START_TIMEOUT_MS)
     if (ok) {
@@ -431,7 +582,10 @@ async function scheduleRecovery() {
       // 先刷页面保住 UX,退避计数留待稳定期确认后再清零——否则每次崩溃循环都把
       // 计数重置为 0,3 次熔断永远不触发,表现为无限重启。
       stage('ready')
-      loadUrlAll(DSH_URL)
+      restartProgress(100, '服务已就绪,正在加载界面…')
+      loadUrlAll(dshUrl())
+      schedulePreheat() // [R74] 恢复就绪同样补热
+      scheduleOverlayRemoveAfterNav() // [问题124] 导航感知撤遮罩
       await sleep(RECOVERY_STABILIZE_MS)
       if (!quitting && dshChild === child && (await isPortUp())) {
         restartAttempts = 0
@@ -439,6 +593,10 @@ async function scheduleRecovery() {
       } else {
         log('恢复后未通过稳定期(进程退出或端口丢失),保留退避计数')
       }
+    } else {
+      // [问题121] 预算内未就绪:进程没退就还在挣扎。遮罩转入等待态不撤——进程退出
+      // 会再次进入 scheduleRecovery 重画进度;原先此处静默,用户只能看死页。
+      restartProgress(96, '恢复超时,等待服务进程退出…')
     }
     // 失败则等子进程 exit 事件再次进入 scheduleRecovery
   }, delay)
@@ -522,40 +680,116 @@ function restartOverlayRemove() {
   execJsAll(`(function(){var el=document.getElementById('__dsh_restart_overlay__');if(el)el.remove();})()`)
 }
 
+// [问题124] 导航感知撤遮罩:固定 600ms 定时在冷系统(重启后首跑)下可能早于导航提交,
+// 旧文档还活着时遮罩被移除 → 旧会话画面裸露一瞬(用户所见「跳到另一个页面再跳回」,
+// rep5 f398 与重启前会话画面逐格一致的铁证)。改为每窗口等 did-navigate(旧文档已走)
+// 后再撤自己的遮罩;8s 兜底防导航卡死时遮罩永留。
+function scheduleOverlayRemoveAfterNav(extraMs = 400) {
+  for (const win of mainWindows) {
+    if (win.isDestroyed()) continue
+    let done = false
+    const remove = () => {
+      if (done || win.isDestroyed()) return
+      done = true
+      setTimeout(() => {
+        if (win.isDestroyed() || win.webContents.isDestroyed()) return
+        win.webContents.executeJavaScript(`(function(){var el=document.getElementById('__dsh_restart_overlay__');if(el)el.remove();})()`, true).catch(() => {})
+      }, extraMs)
+    }
+    win.webContents.once('did-navigate', remove)
+    setTimeout(remove, 8000)
+  }
+}
+
+// [问题121] 统一重启入口(托盘/API):互斥只保护「进行中」,保护不了「刚完成」——
+// 冷却期内的重复触发在这里吸收;切换编排(applyDshVersion/runTrackSwitch)自带
+// switching 互斥,仍直接调 restartDsh,不经此入口。
+function requestRestart(source) {
+  if (restarting || switching) return { ok: false, reason: 'busy' }
+  const since = lastRestartSettledAt ? Date.now() - lastRestartSettledAt : Infinity
+  if (since < RESTART_COOLDOWN_MS) {
+    log(`重启请求吸收(${source}):距上次重启落定 ${(since / 1000).toFixed(1)}s,冷却期 ${RESTART_COOLDOWN_MS / 1000}s 内不重复重启`)
+    return { ok: false, reason: 'cooldown' }
+  }
+  restarting = true
+  restartDsh().finally(() => { restarting = false })
+  return { ok: true }
+}
+
+// [问题121] 落定时刻记录:无论哪条调用链(托盘/API/切换/回滚),restartDsh 一落定
+// 就武装冷却期,防止紧随其后的重复触发把刚拉起的服务再杀一遍。
 async function restartDsh(timeoutMs = START_TIMEOUT_MS) {
+  try {
+    await restartDshInner(timeoutMs)
+  } finally {
+    lastRestartSettledAt = Date.now()
+  }
+}
+
+async function restartDshInner(timeoutMs) {
   restartAttempts = 0
   if (recoveryTimer) { clearTimeout(recoveryTimer); recoveryTimer = null }
+  // [q195 2026-09-05] 分段计时:重启总时长 = 停止旧服务 + 端口释放 + spawn→HTTP 就绪,
+  // 此前三段混在「重启用时」一个数里,归因无从下手(实测热重启 8.6s 中 dsh 自身
+  // spawn→就绪占 ~7s、停止+端口释放占 ~2s)。逐段落日志,后续调优有数可依。
+  const killT0 = Date.now()
   restartProgress(6, '正在停止旧服务…')
   await killDshTree()
+  log(`重启分段:停止旧服务 ${((Date.now() - killT0) / 1000).toFixed(1)}s`)
   restartProgress(24, '等待端口释放…')
-  await waitForPortFree(8000) // 旧 socket 残留会让新实例 EADDRINUSE 直接崩;Windows 释放可慢,给足 8s
+  // [问题121] 释放失败不再无视:端口仍被占就 spawn,新实例必然 EADDRINUSE 崩溃循环。
+  // 旧服务仍健康(taskkill 失败但服务活着)→ 保持原服务,刷新页面恢复 SSE 连接;
+  // 端口被僵尸监听占死 → 提示后放弃,交由用户排查,不往枪口上撞。
+  const freeT0 = Date.now()
+  if (!(await waitForPortFree(8000))) { // 旧 socket 残留会让新实例 EADDRINUSE 直接崩;Windows 释放可慢,给足 8s
+    if (await isHttpOk()) {
+      log('重启中止:旧服务未停止但端口仍健康,保持原服务运行并刷新页面')
+      restartProgress(100, '旧服务未停止,已保持运行')
+      loadUrlAll(dshUrl())
+      scheduleOverlayRemoveAfterNav() // [问题124] 导航感知撤遮罩
+    } else {
+      log(`重启中止:端口 ${DSH_PORT} 未释放且不可用,放弃本次重启(避免 EADDRINUSE 崩溃循环)`)
+      notify('DeepSeek Harness', `重启中止:端口 ${DSH_PORT} 未释放。请稍后从托盘重试,或排查占用端口的进程。`)
+      restartProgress(96, '端口未释放,重启中止')
+      setTimeout(restartOverlayRemove, 2500)
+    }
+    return
+  }
+  log(`重启分段:端口释放 ${((Date.now() - freeT0) / 1000).toFixed(1)}s`)
   restartProgress(46, '正在启动 dsh 服务…')
   if (startDsh()) {
     // 等待期进度自走(46→92 缓爬),真就绪由轮询确认;单次 HTTP 探测 = 端口+服务双确认,省去串行等待
     const t0 = Date.now()
     const creep = setInterval(() => {
-      restartProgress(Math.min(92, 50 + (Date.now() - t0) / 1000 * 6), '正在启动 dsh 服务…')
+      // [问题121] 渐近爬升替代「线性 6%/s + 92 封顶」:旧公式 7s 即顶格僵死,慢启动
+      // (实测 10-31s)会在 92% 停 3-24s 像卡死。渐近曲线全程蠕动,上限 97 把 100
+      // 留给真实就绪,也消除「恰好停在 92」的确定性观感。
+      restartProgress(Math.min(97, 50 + 47 * (1 - Math.exp(-(Date.now() - t0) / 12000))), '正在启动 dsh 服务…')
     }, 350)
     let ok = false
     try {
       const deadline = Date.now() + timeoutMs
       while (Date.now() < deadline) {
         if (await isHttpOk()) { ok = true; break } // 连接拒绝即时返回,不拖 2s 超时
-        await sleep(120)
+        await sleep(80)
       }
     } finally { clearInterval(creep) }
     if (ok) {
-      restartProgress(100, '已就绪')
-      loadUrlAll(DSH_URL)
-      setTimeout(restartOverlayRemove, 600) // 导航后兜底清除
+      log(`dsh 服务就绪(重启用时 ${((Date.now() - t0) / 1000).toFixed(1)}s)`)
+      restartProgress(100, '服务已就绪,正在加载界面…')
+      await sleep(120) // 100% 进度帧上屏后再截屏盖幕,盖板定格 100% 而非爬升中的旧百分比
+      loadUrlAll(dshUrl())
+      schedulePreheat() // [R74] 就绪后补热运行时文件,稳住下次重启
+      scheduleOverlayRemoveAfterNav() // [问题124] 导航感知撤遮罩(旧 600ms 定时在冷系统早于导航提交,旧文档遮罩被移除→会话画面裸露一瞬)
     } else {
       // 超时兜底:子进程可能因 EADDRINUSE 竞态退出,但外部实例已接管服务(实测场景)。
       // 此时页面 SSE 已断,必须重载才能恢复对话内容——不能让用户盯着空白页。
       if (await isHttpOk()) {
         log('重启超时但服务可用(外部实例接管),重载页面恢复连接')
-        restartProgress(100, '已就绪')
-        loadUrlAll(DSH_URL)
-        setTimeout(restartOverlayRemove, 600)
+        restartProgress(100, '服务已就绪,正在加载界面…')
+        await sleep(120) // 同上:先让 100% 帧上屏,再截屏盖幕
+        loadUrlAll(dshUrl())
+        scheduleOverlayRemoveAfterNav() // [问题124] 导航感知撤遮罩
       } else {
         restartProgress(96, '重启超时,请查看日志')
         setTimeout(restartOverlayRemove, 2500)
@@ -569,8 +803,8 @@ async function restartDsh(timeoutMs = START_TIMEOUT_MS) {
 // ---------- npm 查询(dsh 版本/更新) ----------
 
 // 经与 npx 同源的 npm.cmd 执行查询;返回 stdout 字符串,失败返回 null。
-// [问题78] --registry 固定官方 npm 源(版本列表/最新版判定的唯一权威来源),
-// 不受用户 npm 配置里的镜像影响。
+// [问题78] --registry 固定官方 npm 源,不受用户 npm 配置里的镜像影响。
+// [问题125] 已降级为兜底路径(正常走 fetchDshVersionsViaHttp);失败带 stderr 记日志。
 function npmView(args) {
   return new Promise((resolve) => {
     const npx = resolveNpxCommand()
@@ -578,15 +812,79 @@ function npmView(args) {
     const npmCmd = npx.replace(/npx\.cmd$/i, 'npm.cmd')
     if (!fs.existsSync(npmCmd)) return resolve(null)
     const child = spawn('cmd.exe', ['/c', npmCmd, ...REGISTRY_ARGS, 'view', '@deepseek-ai/dsh', ...args],
-      { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
+    let errText = ''
     let done = false
     const finish = (v) => { if (!done) { done = true; resolve(v) } }
     const timer = setTimeout(() => { child.kill(); finish(null) }, 20_000)
     child.stdout.on('data', (d) => { out += d })
-    child.on('exit', () => { clearTimeout(timer); finish(out.trim() || null) })
-    child.on('error', () => { clearTimeout(timer); finish(null) })
+    child.stderr.on('data', (d) => { errText += d })
+    child.on('exit', () => {
+      clearTimeout(timer)
+      // [问题125] 失败不再静默:此前 stderr 被丢弃、返回 null 无日志,排查无从下手
+      if (!out.trim()) log(`npm view 查询失败: ${errText.trim().slice(0, 200) || '(无输出)'}`)
+      finish(out.trim() || null)
+    })
+    child.on('error', (e) => { clearTimeout(timer); log(`npm view 启动失败: ${e.message}`); finish(null) })
   })
+}
+
+// [问题125] HTTP 直读 packument 版本清单,三级降级:
+// ① 官方源(electronNet,走系统代理)② 镜像(走系统代理)③ 镜像(直连会话,绕过
+// 系统代理)——npm.cmd 子进程不认 Windows 系统代理(只认 HTTP(S)_PROXY/.npmrc
+// proxy),代理环境下直连官方源时通时断,曾致设置页「npm 查询失败」;而代理客户端
+// 未运行时(注册表 ProxyEnable=1 但端口已死)前两级也会失败,③ 保证镜像直连兜底。
+// 镜像仅用于读取版本元数据,下载/安装仍固定官方源。三级均失败后由 listDshVersions
+// 再回退 npm view 子进程(直连官方源)。
+let directSessionPromise = null
+function resolveDirectSession() {
+  if (!directSessionPromise) {
+    const s = session.fromPartition('dsh-direct-fetch') // 内存会话,不落盘
+    directSessionPromise = s.setProxy({ mode: 'direct' }).then(() => s)
+  }
+  return directSessionPromise
+}
+
+async function fetchDshVersionsViaHttp() {
+  const sources = [
+    { name: '官方源', url: `${DSH_REGISTRY}/@deepseek-ai%2Fdsh` },
+    { name: '镜像', url: `${DSH_REGISTRY_MIRROR}/@deepseek-ai%2Fdsh` },
+    { name: '镜像(直连)', url: `${DSH_REGISTRY_MIRROR}/@deepseek-ai%2Fdsh`, direct: true },
+  ]
+  for (const s of sources) {
+    try {
+      const init = { signal: AbortSignal.timeout(15_000) }
+      if (s.direct) {
+        try { init.session = await resolveDirectSession() } catch { continue }
+      }
+      const res = await electronNet.fetch(s.url, init)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      const list = data && data.versions ? Object.keys(data.versions) : []
+      if (!list.length) throw new Error('versions 清单为空')
+      if (s.name !== '官方源') log(`dsh 版本查询:官方源不可达,已改从${s.name}获取(请检查官方源连通性/系统代理)`)
+      return list
+    } catch (e) {
+      log(`dsh 版本查询失败(${s.name}): ${e.message}`)
+    }
+  }
+  return null
+}
+
+// 版本清单统一入口:HTTP 双源优先,npm view 子进程兜底(前两级都不可达时仍可查)。
+async function listDshVersions() {
+  const viaHttp = await fetchDshVersionsViaHttp()
+  if (viaHttp) return viaHttp
+  log('dsh 版本查询:HTTP 双源均失败,回退 npm view 子进程')
+  const raw = await npmView(['versions', '--json'])
+  if (raw) {
+    try {
+      const list = JSON.parse(raw)
+      if (Array.isArray(list) && list.length) return list
+    } catch { /* 解析失败视为查询失败 */ }
+  }
+  return null
 }
 
 // 解析 'x.y.z-rc.N' 为可比较数组;无 rc 后缀视为正式版(高于一切 rc)
@@ -603,21 +901,41 @@ function cmpDshVersion(a, b) {
   return 0
 }
 
+// [问题125] 展示列表排序的全序比较:parseDshVersion 只认 x.y.z[-rc.N](alpha 等
+// 不参与「最新版」判定),但托盘切换列表此前包含 alpha 版;npm view 的 versions
+// 自带升序,packument 键序不保证(镜像实测乱序),需显式全序。规则:同 x.y.z 内
+// 正式版 > rc(N 越大越新) > 其他 prerelease(按 tag 字典序、N 越大越新)。
+function dshVersionRank(v) {
+  const p = parseDshVersion(v)
+  if (p) return [p[0], p[1], p[2], 1, p[3], '']
+  const m = /^(\d+)\.(\d+)\.(\d+)-([a-zA-Z]+)\.(\d+)$/.exec(String(v || ''))
+  if (m) return [+m[1], +m[2], +m[3], 0, +m[5], m[4]]
+  return null
+}
+
+function cmpDshRank(a, b) {
+  const ra = dshVersionRank(a)
+  const rb = dshVersionRank(b)
+  if (!ra || !rb) return 0
+  for (let i = 0; i < ra.length; i++) {
+    if (ra[i] === rb[i]) continue
+    return ra[i] < rb[i] ? -1 : 1
+  }
+  return 0
+}
+
 async function fetchAvailableVersions() {
-  const raw = await npmView(['versions', '--json'])
-  if (!raw) return
-  try {
-    const list = JSON.parse(raw)
-    if (Array.isArray(list) && list.length) {
-      // 只保留 npm 公开发布起的可安装版本,旧 rc 装不完整,展示无意义
-      availableVersions = list
-        .filter((v) => cmpDshVersion(v, MIN_PUBLIC_DSH_VERSION) >= 0)
-        .slice(-8)
-        .reverse() // 最近 8 个,新→旧
-      rebuildTray()
-      log(`已拉取 dsh 版本列表(仅公开可用): ${availableVersions.join(', ')}`)
-    }
-  } catch { /* 解析失败保持原列表 */ }
+  const list = await listDshVersions()
+  if (!list) return
+  // 只保留 npm 公开发布起的可安装版本,旧 rc 装不完整,展示无意义;
+  // 来源键序不保证(packument 镜像实测乱序),显式全序排序后再截取
+  availableVersions = list
+    .filter((v) => dshVersionRank(v) && cmpDshVersion(v, MIN_PUBLIC_DSH_VERSION) >= 0)
+    .sort(cmpDshRank)
+    .slice(-8)
+    .reverse() // 最近 8 个,新→旧
+  rebuildTray()
+  log(`已拉取 dsh 版本列表(仅公开可用): ${availableVersions.join(', ')}`)
 }
 
 // 版本预检:验证目标版本可运行(旧 rc 可能包损坏/不兼容)。
@@ -764,18 +1082,14 @@ function pnpmSeedDsh(version) {
 // [问题75] 解析 dsh 最新可用版本:npm latest dist-tag 不收录预发布版(rc.x),
 // 仅查 latest 会把 rc.8 等新版本永远判为"已是最新"。改为全量 versions 清单内
 // 取 ≥ MIN_PUBLIC_DSH_VERSION 的最高版本;清单获取失败时回退 latest 标签。
+// [问题125] 清单来源升级为 listDshVersions(HTTP 双源优先,npm view 兜底)。
 async function resolveNewestPublicDsh() {
-  const raw = await npmView(['versions', '--json'])
-  if (raw) {
-    try {
-      const list = JSON.parse(raw)
-      if (Array.isArray(list) && list.length) {
-        const eligible = list.filter((v) => parseDshVersion(v) && cmpDshVersion(v, MIN_PUBLIC_DSH_VERSION) >= 0)
-        if (eligible.length) {
-          return eligible.reduce((a, b) => (cmpDshVersion(b, a) > 0 ? b : a))
-        }
-      }
-    } catch { /* 解析失败走回退 */ }
+  const list = await listDshVersions()
+  if (list) {
+    const eligible = list.filter((v) => parseDshVersion(v) && cmpDshVersion(v, MIN_PUBLIC_DSH_VERSION) >= 0)
+    if (eligible.length) {
+      return eligible.reduce((a, b) => (cmpDshVersion(b, a) > 0 ? b : a))
+    }
   }
   return npmView(['version'])
 }
@@ -798,7 +1112,7 @@ async function applyDshVersion(newVersion) {
   // 用切换专属预算重启:60s 内未就绪视为坏版本,避免死等 120s
   await restartDsh(SWITCH_TIMEOUT_MS)
   if (await isHttpOk()) {
-    loadUrlAll(DSH_URL) // 显式刷新所有主窗口(兜底,不依赖 restartDsh 副作用)
+    loadUrlAll(dshUrl()) // 显式刷新所有主窗口(兜底,不依赖 restartDsh 副作用)
     return true
   }
   log(`版本 ${newVersion} ${SWITCH_TIMEOUT_MS / 1000}s 未就绪,自动回滚到 ${prevVersion}`)
@@ -820,11 +1134,18 @@ async function checkDshUpdate(manual) {
   // [问题78] resolveNewestPublicDsh 内部 npmView 已固定官方源;失败时提示指向官方源
   const latest = await resolveNewestPublicDsh()
   if (!latest) {
-    if (manual) notify('dsh 更新', `查询官方源 ${DSH_REGISTRY} 失败,请检查网络。`)
+    if (manual) notify('dsh 更新', 'npm 版本查询失败(官方源与镜像均不可达),请检查网络。')
     return
   }
   if (latest === cfg.dshVersion) {
     if (manual) notify('dsh 更新', `已是最新版 ${latest}。`)
+    return
+  }
+  // [问题126] 公开版清单不含 alpha:当前为 alpha 预发布时最高公开版可能反而更低
+  // (0.1.2-alpha.5 > 0.1.1-rc.2)。按全序比较,当前 ≥ 公开版最新即视为已最新,
+  // 防止「更新到更低版本」的降级确认框(每次启动都会出现,默认按钮回车即降级)。
+  if (cmpDshRank(cfg.dshVersion, latest) >= 0) {
+    if (manual) notify('dsh 更新', `已是最新版 ${cfg.dshVersion}。`)
     return
   }
   const { response } = await dialog.showMessageBox(dialogParent() ?? new BrowserWindow({ show: false }), {
@@ -988,7 +1309,7 @@ async function updatesCheckPayload() {
       out.dshLatest = latest
       out.dshUpdateAvailable = semverGt(latest, cfg.dshVersion)
     } else {
-      out.dshError = '查询 npm 失败,请检查网络'
+      out.dshError = 'npm 版本查询失败(官方源与镜像均不可达),请检查网络'
     }
   }
   return out
@@ -999,8 +1320,10 @@ async function applyDshLatest() {
   if (switching || restarting) return { ok: false, error: '已有切换或重启在进行' }
   // [问题75] 目标版本取全量清单最高公开版(latest 标签不含 rc 新版)
   const latest = await resolveNewestPublicDsh()
-  if (!latest) return { ok: false, error: '查询 npm 失败,请检查网络' }
+  if (!latest) return { ok: false, error: 'npm 版本查询失败(官方源与镜像均不可达),请检查网络' }
   if (latest === cfg.dshVersion) return { ok: true, note: '已是最新版' }
+  // [问题126] 全序防降级:当前为 alpha 预发布时,公开版最新可能反而更低
+  if (cmpDshRank(cfg.dshVersion, latest) >= 0) return { ok: true, note: '已是最新版' }
   switchDshVersion(latest) // 内部自带预检+回滚+switching 互斥
   return { ok: true, accepted: true }
 }
@@ -1122,7 +1445,7 @@ async function runTrackSwitch(mode) {
   log(`[dshRuntime] 轨道切换 ${prev} → ${mode}`)
   await restartDsh(SWITCH_TIMEOUT_MS)
   if (await isHttpOk()) {
-    loadUrlAll(DSH_URL)
+    loadUrlAll(dshUrl())
     const resolved = resolveDshRuntime(cfg, { quiet: true })
     if (resolved.fallback) {
       // 服务活着,但实际是折叠回 official 在跑——诚实告知,不谎报"切换成功"
@@ -1146,6 +1469,11 @@ async function runTrackSwitch(mode) {
 }
 
 // ---------- 窗口(共享服务多开) ----------
+
+// [主题闪变治理] 最近一次揭窗时记录的主题底色。窗口可见期间的重载/重启导航会
+// 重新经历「原生白底 → 主题令牌迟到落色」的闪变,幕帘用此色覆盖过渡期,
+// 幕→主题内容零色差。透明(壁纸态)不挂幕。
+let lastThemeBg = null
 
 function closeSplash() {
   if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close()
@@ -1207,8 +1535,8 @@ const TITLEBAR_DRAG_CSS = `
   }
 `
 
-// [问题77] macOS(Codex Mac 版)风格窗口控件:圆形红黄绿小点,静息态中性灰
-// 融入亮/暗主题与壁纸,悬停点亮交通灯色并显形符号;无边框无分隔线,
+// [问题77] macOS(Codex Mac 版)风格窗口控件:圆形红黄绿小点,交通灯色常驻
+// 显示,悬停不显形符号(仅圆点微亮反馈,按下加深);无边框无分隔线,
 // 与内容区自然融合。点击热区 24px(::before 画 12px 圆点)。
 // [问题68永久修复] 顶部安全区单一事实来源:控件几何(高度/右侧占位)只有
 // 壳自己知道,在此以 CSS 变量发布(随 insertCSS 每次导航重放,永与控件同版)。
@@ -1234,20 +1562,17 @@ const TITLEBAR_CONTROLS_CSS = `
   }
   #dsh-desktop-win-controls .wcBtn::before {
     content: ''; width: 12px; height: 12px; border-radius: 50%;
-    background: rgba(127,127,127,.38);
     transition: background .12s ease;
   }
-  #dsh-desktop-win-controls .wcBtn svg {
-    position: absolute; width: 8px; height: 8px;
-    opacity: 0; transition: opacity .12s ease;
-    color: rgba(20,22,26,.72);
-  }
-  #dsh-desktop-win-controls:hover .wcBtn svg { opacity: 1; }
-  #dsh-desktop-win-controls .wcBtn[data-act="min"]:hover::before { background: #febc2e; }
+  #dsh-desktop-win-controls .wcBtn svg { display: none; }
+  #dsh-desktop-win-controls .wcBtn[data-act="min"]::before { background: #febc2e; }
+  #dsh-desktop-win-controls .wcBtn[data-act="min"]:hover::before { background: #ffd25e; }
   #dsh-desktop-win-controls .wcBtn[data-act="min"]:active::before { background: #d9a017; }
-  #dsh-desktop-win-controls .wcBtn[data-act="max"]:hover::before { background: #28c840; }
+  #dsh-desktop-win-controls .wcBtn[data-act="max"]::before { background: #28c840; }
+  #dsh-desktop-win-controls .wcBtn[data-act="max"]:hover::before { background: #4edb62; }
   #dsh-desktop-win-controls .wcBtn[data-act="max"]:active::before { background: #1f9a3b; }
-  #dsh-desktop-win-controls .wcBtn.wcClose:hover::before { background: #ff5f57; }
+  #dsh-desktop-win-controls .wcBtn.wcClose::before { background: #ff5f57; }
+  #dsh-desktop-win-controls .wcBtn.wcClose:hover::before { background: #ff8078; }
   #dsh-desktop-win-controls .wcBtn.wcClose:active::before { background: #d94a41; }
 `
 
@@ -1314,7 +1639,7 @@ function createMainWindow({ show = false } = {}) {
     title: 'DeepSeek Harness',
     show,
     // Claude 式融合:去原生标题栏;窗口控制按钮弃用原生 overlay(悬停反馈过弱且
-    // 不可定制),改为注入 HTML 浮层(见 TITLEBAR_CONTROLS_JS),悬停高亮明确。
+    // 不可定制),改为注入 HTML 浮层(见 TITLEBAR_CONTROLS_JS),交通灯色常驻。
     titleBarStyle: 'hidden',
     autoHideMenuBar: true,
     webPreferences: {
@@ -1338,6 +1663,8 @@ function createMainWindow({ show = false } = {}) {
   }
   win.webContents.on('did-navigate', injectTitleChrome)
   win.webContents.on('did-navigate-in-page', injectTitleChrome)
+  // [主题闪变治理] 主帧导航先挂主题幕帘(仅 dsh Web UI 地址;错误页/外部页不挂)
+  hookThemeVeil(win)
   // 最大化状态推送:按钮图标在最大化/还原间切换
   const pushMax = () => {
     if (!win.isDestroyed()) win.webContents.send('dsh-win:maximized', win.isMaximized())
@@ -1351,7 +1678,242 @@ function createMainWindow({ show = false } = {}) {
   return win
 }
 
-// 首窗就绪:显示并关闭启动页
+// [q196 2026-09-05 启动揭窗闸门] 主窗隐藏加载 Web UI 期间,页面依次经历「无 token 401 信任页 →
+// 白底 Loading plugins 加载页 → 应用挂载 → 主题令牌落位」。旧 themeGate 固定 2s 硬兜底
+// 揭窗,而实测(2026-09-05 desktop.log)dsh 冷启动服务就绪后客户端仍要 10s+ 才挂载,日志
+// 中主题闸门恒为「超时兜底」揭窗——揭窗后用户直面长白屏。改为以「应用内容真实挂载」为
+// 主条件(复用幕帘/盖板的 #root 判定):应用就绪且主题层在位 → 立即揭窗;应用就绪但主题
+// 迟到 → 宽限后揭窗(无主题插件的用户不被阻塞);总硬超时兜底(页面挂不出来时放弃等待,
+// 行为退回旧版白屏)。探针回包依赖渲染主线程空闲(q195 实测可延迟 5s+),揭窗只由独立
+// setTimeout 保证,探针仅负责提前;等待期关闭渲染节流防隐藏窗口拖慢客户端挂载
+// (同 snapshotCover 盖板期处理),揭窗时恢复。
+const BOOT_READY_JS = "(function(){var t=!!(document.getElementById('joi-theme')||(document.body&&document.body.getAttribute('style')));var r=document.querySelector('#root');var a=!!(r&&r.childElementCount>0&&r.innerHTML.length>5000&&!/Loading plugins|加载插件/i.test(r.innerText||''));return {a:a,t:t}})()"
+const BOOT_GATE_HARD_MS = 20_000       // 总兜底:页面一直挂不出来时揭窗(退回旧版行为)
+const BOOT_GATE_THEME_GRACE_MS = 4_000 // 应用已挂载但主题未落位的额外宽限
+const BOOT_GATE_REVEAL_BEAT_MS = 700   // 揭窗前留 100% 进度/鲸鱼谢幕上屏的节拍
+
+function bootGate(win, reveal, opts = {}) {
+  const hardMs = opts.hardMs ?? BOOT_GATE_HARD_MS
+  const graceMs = opts.graceMs ?? BOOT_GATE_THEME_GRACE_MS
+  const beatMs = opts.beatMs ?? BOOT_GATE_REVEAL_BEAT_MS
+  const t0 = Date.now()
+  let revealed = false
+  let appReadyAt = 0
+  let hardTimer, graceTimer, probeTimer
+  const clearTimers = () => { clearTimeout(hardTimer); clearTimeout(graceTimer); clearTimeout(probeTimer) }
+  const doReveal = (why) => {
+    if (revealed) return
+    revealed = true
+    clearTimers()
+    try { win.webContents.setBackgroundThrottling(true) } catch {}
+    stage('ready') // 100% 进度 + 鲸鱼谢幕先上屏,节拍后再揭主窗
+    setTimeout(() => {
+      if (win.isDestroyed()) return
+      log(`揭窗于 showMain 后 +${Date.now() - t0}ms(${why})`)
+      reveal()
+      // [问题121] 揭窗后实采底色供后续导航幕帘用。主题令牌可能晚于揭窗落位,
+      // 重试采样(400ms×12≈5s)防采到透明底整场 disarm。
+      const sample = (n) => {
+        if (win.isDestroyed() || lastThemeBg) return
+        win.webContents.executeJavaScript(SAMPLE_BG_JS, false)
+          .then((bg) => {
+            if (typeof bg === 'string' && bg && bg.indexOf('rgba(0, 0, 0, 0)') < 0) { lastThemeBg = bg; return }
+            if (n > 0) setTimeout(() => sample(n - 1), 400)
+          })
+          .catch(() => {})
+      }
+      sample(12)
+    }, beatMs)
+  }
+  try { win.webContents.setBackgroundThrottling(false) } catch {}
+  // 硬超时独立于探针回包(q195 教训):探针延迟不能架空 deadline 语义
+  hardTimer = setTimeout(() => doReveal('超时兜底'), hardMs)
+  const probe = () => {
+    if (revealed || win.isDestroyed()) return
+    win.webContents.executeJavaScript(BOOT_READY_JS, false).then((st) => {
+      if (revealed || win.isDestroyed() || !st) return
+      if (st.a && !appReadyAt) appReadyAt = Date.now()
+      if (st.a && st.t) doReveal('应用与主题就绪')
+      else if (st.a && !graceTimer) graceTimer = setTimeout(() => doReveal('应用就绪,主题宽限超时'), graceMs)
+    }).catch(() => { /* 页面导航中/执行失败,继续轮询 */ }).finally(() => {
+      if (!revealed && !win.isDestroyed()) probeTimer = setTimeout(probe, 250)
+    })
+  }
+  setTimeout(probe, 120)
+}
+
+// [主题闪变治理] 窗口可见期间的主帧导航(重载界面/重启 dsh/轨道切换)重走一遍页面加载,
+// 主题令牌迟到期间先挂一块与主题同色的幕帘,主题层落位后淡出移除——
+// 幕色取自上次揭窗的实采底色,幕→内容零色差;探针超时兜底强撤防卡幕。
+const THEME_VEIL_JS = `(function(){
+  // [问题121] 重启遮罩在场时跳过:旧文档上的幕帘会在半透明遮罩背后把页面内容
+  // 突变为纯色块(实测观感=100% 时闪一下),且旧文档随导航即毁,幕帘无意义。
+  if (document.getElementById('__dsh_restart_overlay__')) return;
+  var BG = ${JSON.stringify('__VEIL_BG__')};
+  var waitBody = function(fn){
+    if (document.body) return fn();
+    document.addEventListener('DOMContentLoaded', fn, { once: true });
+  };
+  waitBody(function(){
+    if (document.getElementById('__dsh_theme_veil__')) return;
+    var v = document.createElement('div');
+    v.id = '__dsh_theme_veil__';
+    v.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:' + BG + ';transition:opacity .18s ease;pointer-events:none';
+    document.body.appendChild(v);
+    // [问题121] 撤幕判定=真实应用内容(#root 挂载且非加载页):加载页本身是纯白底
+    // (实测 rgb(255,255,255)),只按主题信号或 #root 挂载撤幕会过早露出白屏。
+    // 15s 兜底防页面挂不掉时永久卡幕。
+    var deadline = Date.now() + 15000;
+    var gone = false;
+    var dismiss = function(){
+      if (gone) return; gone = true;
+      v.style.opacity = '0';
+      setTimeout(function(){ if (v.isConnected) v.remove(); }, 240);
+    };
+    var ready = function(){
+      var r = document.querySelector('#root');
+      return !!(r && r.childElementCount > 0 && r.innerHTML.length > 5000 && !/Loading plugins|加载插件/i.test(r.innerText || ''));
+    };
+    var poll = function(){
+      if (gone || !v.isConnected) return;
+      if (ready() || Date.now() >= deadline) dismiss();
+      else setTimeout(poll, 80);
+    };
+    setTimeout(poll, 120);
+  });
+})()`
+
+// [问题121] 主题底色实采:body → documentElement 兜底,透明/不存在返回 null。
+// 启动期揭窗时主题令牌可能尚未落位(body=透明),一次采样即弃会让盖板/幕帘
+// 整场 disarm;调用方应带重试或在导航前现场实采。
+const SAMPLE_BG_JS = "(function(){var els=[document.body,document.documentElement];for(var i=0;i<els.length;i++){var el=els[i];if(!el)continue;var v=getComputedStyle(el).backgroundColor;if(v&&v!=='transparent'&&v.indexOf('rgba(0, 0, 0, 0)')<0)return v;}return null})()"
+
+// [问题121] 真实应用内容判定:#root 挂载且非加载页。加载页(Loading plugins…)
+// 本身是纯白底且同样挂在 #root 下,只判 childElementCount 会在加载页就撤盖,
+// 露出后续恢复阶段的白底。len>5000 = 应用外壳已渲染(加载页仅 ~300)。
+const APP_READY_JS = "(function(){var r=document.querySelector('#root');return !!(r && r.childElementCount > 0 && r.innerHTML.length > 5000 && !/Loading plugins|加载插件/i.test(r.innerText || ''))})()"
+
+function paintThemeVeil(win) {
+  if (!lastThemeBg) return
+  if (win.isDestroyed() || !win.isVisible()) return
+  win.webContents.executeJavaScript(THEME_VEIL_JS.replace('__VEIL_BG__', lastThemeBg), false).catch(() => {})
+}
+
+// 主帧导航挂幕:did-navigate(提交后)为主道;did-start-navigation 抢在旧文档卸载前挂,
+// loadURL/reload 后再追一次——三道覆盖「提交瞬间的空档白帧」(活体实测 reload 首 2 帧白)。
+function hookThemeVeil(win) {
+  win.webContents.on('did-navigate', (e, url) => {
+    if (typeof url === 'string' && url.indexOf(':' + DSH_PORT) >= 0) paintThemeVeil(win)
+  })
+  win.webContents.on('did-start-navigation', (e, url) => {
+    if (typeof url === 'string' && url.indexOf(':' + DSH_PORT) >= 0) paintThemeVeil(win)
+  })
+}
+
+// [主题闪变治理] 窗口级快照遮罩:旧文档一卸载页面级幕随文档同灭,提交→首帧之间仍有白底空档。
+// 导航前把当前画面截成 OS 级置顶无边框小窗盖住主窗,主题层落位后淡出销毁——
+// 用户看到的是「原画面定格 → 同色新内容」,全程零色差零白帧。截图失败则静默放弃(不阻塞导航)。
+function snapshotCover(win, andThen) {
+  const go = (() => { let started = false; return () => { if (started) return; started = true; andThen() } })()
+  // 全局兜底:遮罩链路任何异常都不得卡住导航本体(遮罩可缺席,导航不可缺席)
+  // [问题124] 3s > ready-to-show(≤1.5s 外层兜底)+img 解码(≤900ms),防冷系统下抢跑放行
+  setTimeout(go, 3000)
+  // [问题124] 最小化窗口跳过盖板:capturePage 在最小化窗口上可能挂起(批次72 前科),
+  // 且盖板本为可见窗过渡设计,最小化下无意义。
+  if (win.isDestroyed() || !win.isVisible() || win.isMinimized()) { go(); return }
+  // [问题124] 盖板期间临时关 backgroundThrottling:盖板(置顶 OS 窗)会完全遮挡主窗,
+  // Chromium 判主窗 occluded → 渲染挂起,盖板下新页 boot 被节流拖慢;关闭节流双保险。
+  let throttleRestored = false
+  const restoreThrottle = () => { if (throttleRestored) return; throttleRestored = true; try { win.webContents.setBackgroundThrottling(true) } catch {} }
+  try { win.webContents.setBackgroundThrottling(false) } catch {}
+  // [问题121] 盖板武装改为现场实采:启动期 lastThemeBg 可能采到透明底而整场
+  // disarm,重启导航裸奔(白闪+白屏)。重启时旧页面已稳定,必采到真实底色。
+  const arm = lastThemeBg
+    ? Promise.resolve(lastThemeBg)
+    : win.webContents.executeJavaScript(SAMPLE_BG_JS, false).then((bg) => {
+      if (typeof bg === 'string' && bg && bg.indexOf('rgba(0, 0, 0, 0)') < 0) { lastThemeBg = bg; return bg }
+      return null
+    }).catch(() => null)
+  arm.then((bg) => {
+    if (!bg || win.isDestroyed() || !win.isVisible()) { restoreThrottle(); go(); return }
+    win.webContents.capturePage().then((img) => {
+    if (win.isDestroyed()) { restoreThrottle(); return }
+    const b = win.getBounds()
+    // [问题124] 盖板右缘缩进 3px:全尺寸盖板会让 Chromium 窗口遮挡追踪把主窗判为
+    // 完全遮挡(occluded)→ 主窗渲染管线挂起,最后一帧定格旧页(100% 遮罩),撤盖后
+    // 遮挡判定最长滞后 ~1s 才恢复 → 淡出被架空、画面单帧硬切(用户所见"闪一下")。
+    // 留 3px 让窗使主窗永不被完全遮挡,渲染持续,淡出落到实时新页上。boundsSync 同步保持缩进。
+    const COVER_INSET = 3
+    const cover = new BrowserWindow({
+      x: b.x, y: b.y, width: Math.max(100, b.width - COVER_INSET), height: b.height,
+      frame: false, show: false, alwaysOnTop: true, skipTaskbar: true,
+      resizable: false, movable: false, minimizable: false, maximizable: false,
+      closable: true, hasShadow: false, focusable: false,
+      transparent: true, backgroundColor: '#00000000',
+      webPreferences: { contextIsolation: true, nodeIntegration: false },
+    })
+    const url = 'data:text/html;charset=utf-8,' + encodeURIComponent(
+      '<html><head><style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}</style></head><body>'
+      + '<img src="' + img.toDataURL() + '" style="width:100vw;height:100vh;display:block;transition:opacity .22s ease" id="cv"></body></html>')
+    cover.loadURL(url).catch(() => {})
+    let settled = false
+    let disposed = false
+    const boundsSync = () => {
+      if (disposed || win.isDestroyed()) return
+      const nb = win.getBounds()
+      // [问题124] 同步保持右缘缩进,防 resize 后又变回完全遮挡
+      cover.setBounds({ x: nb.x, y: nb.y, width: Math.max(100, nb.width - COVER_INSET), height: nb.height })
+    }
+    const dismiss = () => {
+      if (disposed) return
+      settled = true
+      try {
+        cover.webContents.executeJavaScript('(function(){var el=document.getElementById("cv");if(el)el.style.opacity="0";})()', false).catch(() => {})
+      } catch {}
+      setTimeout(() => {
+        if (disposed) return
+        disposed = true
+        try { win.removeListener('resize', boundsSync); win.removeListener('move', boundsSync) } catch {}
+        try { if (!cover.isDestroyed()) cover.destroy() } catch {}
+        restoreThrottle() // [问题124] 盖板退场,恢复节流
+      }, 280)
+    }
+    cover.once('ready-to-show', () => {
+      if (win.isDestroyed()) { try { cover.destroy() } catch {}; restoreThrottle(); return }
+      if (!win.isVisible() || win.isMinimized()) { try { cover.destroy() } catch {}; restoreThrottle(); go(); return }
+      try { cover.showInactive(); cover.setAlwaysOnTop(true, 'screen-saver') } catch {}
+      // 等遮罩窗截图真正解码上屏再放行导航:冷系统下大图(2100x1350 PNG dataURL)解码
+      // 可落后窗口首绘数百 ms,只等双 rAF 会在「窗口可见但图片未绘制」的透明空窗期
+      // 放行导航,主窗裸奔(问题124 rep5 实证:盖板 show 后 ~400ms 图片才逐块绘上)。
+      // complete+naturalWidth 判解码完成,双 rAF 保证落屏;900ms 兜底不卡导航。
+      cover.webContents.executeJavaScript('new Promise(function(r){var img=document.getElementById("cv");var done=function(){requestAnimationFrame(function(){requestAnimationFrame(function(){r(true)})})};if(!img||img.complete&&img.naturalWidth>0){done();return}img.onload=done;img.onerror=done;setTimeout(done,900)})', false)
+        .then(() => { if (!disposed) go() }).catch(() => { if (!disposed) go() })
+      setTimeout(() => { if (!disposed) go() }, 1500) // [问题124] 外层兜底须晚于内层 img 解码兜底(900ms),防抢跑放行
+      win.on('resize', boundsSync)
+      win.on('move', boundsSync)
+      // [问题121] 撤盖判定=真实会话 UI 就绪(APP_READY_JS):盖板期间定格的是 100%
+      // 「正在加载界面」画面,一直盖到恢复阶段完成,不再中途露出加载页白底。
+      // 20s 兜底防页面挂不掉时永久遮挡。
+      const deadline = Date.now() + 20000
+      const poll = () => {
+        if (disposed || win.isDestroyed()) { dismiss(); return }
+        win.webContents.executeJavaScript(APP_READY_JS, false)
+          .then((ok) => {
+            if (disposed) return
+            if (ok || Date.now() >= deadline) dismiss()
+            else setTimeout(poll, 100)
+          }).catch(() => { if (!disposed && Date.now() >= deadline) dismiss(); else setTimeout(poll, 120) })
+      }
+      setTimeout(poll, 120)
+    })
+    cover.once('closed', () => { disposed = true; restoreThrottle() }) // [问题124] 任何销毁路径都恢复节流
+    // 遮罩窗自身加载失败/超时:不能卡住主流程,强制放行并收尾
+    setTimeout(() => { if (!settled && !disposed) { try { if (!cover.isDestroyed()) cover.destroy() } catch {} } }, 4000)
+  }).catch(() => { restoreThrottle(); go() })
+  })
+}
+
+// 首窗就绪:显示并关闭启动页(先过揭窗闸门,见 bootGate)
 function showMain(url) {
   const win = [...mainWindows][0]
   if (!win) return
@@ -1360,14 +1922,25 @@ function showMain(url) {
     win.focus()
     closeSplash()
   }
-  if (win.webContents.isLoadingMainFrame()) win.once('ready-to-show', reveal)
-  else reveal()
+  const gated = () => bootGate(win, reveal)
+  if (win.webContents.isLoadingMainFrame()) win.once('ready-to-show', gated)
+  else gated()
+  // 首窗隐藏加载不挂幕;但可见窗重走 showMain(如恢复路径)时旧文档已卸载,
+  // 先挂页面级幕盖住空档(页内幕随新文档重建,作双保险)
+  if (win.isVisible()) paintThemeVeil(win)
   win.loadURL(url)
 }
 
-// 所有存活主窗口统一跳转
+// 所有存活主窗口统一跳转(快照遮罩盖住导航空档,页内幕双保险,见 snapshotCover/hookThemeVeil)
 function loadUrlAll(url) {
-  for (const win of mainWindows) if (!win.isDestroyed()) win.loadURL(url)
+  for (const win of mainWindows) {
+    if (win.isDestroyed()) continue
+    if (typeof url === 'string' && url.indexOf(':' + DSH_PORT) >= 0) {
+      snapshotCover(win, () => win.loadURL(url))
+    } else {
+      win.loadURL(url)
+    }
+  }
 }
 
 function loadErrorPageAll(reason) {
@@ -1385,8 +1958,9 @@ async function newWindow() {
     return
   }
   const win = createMainWindow({ show: false })
-  win.once('ready-to-show', () => win.show())
-  win.loadURL(DSH_URL)
+  // 同首窗:过揭窗闸门再揭,防新窗口白底闪一拍/长白屏(见 bootGate)
+  win.once('ready-to-show', () => bootGate(win, () => win.show()))
+  win.loadURL(dshUrl())
 }
 
 // ---------- 壳 HTTP API(Web UI 版本 tab / 插件管理 tab 经此与壳通信,仅本机) ----------
@@ -1700,6 +2274,180 @@ function deleteSkillEntry(source, name) {
   return { ok: true }
 }
 
+// ---- 其他来源技能(工作区根 + 插件包根;R71,2026-08-30) ----
+// 其他来源技能此前仅靠「采样最近会话调 skill.list」枚举,而 skill.list 只对当前
+// 附加(attached)的会话应答,未附加会话一律 session-not-found——采样命中全未附加
+// 时「其他来源」就整体消失,这正是设置页技能列表偶发识别不到的根因。且 skill.list
+// 的条目不含路径与来源,只能做只读展示。
+// 现改为壳侧确定性枚举 + 两条真实启停杠杆:
+//   1) 工作区根 <ws>/.dsh/skills、<ws>/.agents/skills:skill-filesystem 按 cwd 向上
+//      找 .git 得 projectRoot 后扫描的同名根,且被 chokidar 监听——条目移入
+//      <root>-disabled 姊妹目录即热失效,与用户级技能同一机制;
+//   2) 插件包技能(如 @dhicoc/dsh-reverse-skill 的 skills/ 与
+//      CTF-Sandbox-Orchestrator/ 树):provider 自递归收集且有模块级缓存(永不
+//      失效)——启停 = 移入包内 skills-disabled/ 检疫目录(保持包根相对路径),
+//      重启宿主后生效;插件包更新会还原。walker 只走声明的树,检疫目录不可见。
+
+const SKILL_PROFILES_NM = path.join(DSH_HOME, 'profiles', 'web', 'node_modules')
+
+/** 扫描一个工作区/成员路径的 4 个技能根(启用/禁用 × .dsh/.agents),条目带 dir。 */
+function scanWorkspaceSkillRoots(wsPath) {
+  const out = []
+  let root = wsPath
+  try { root = fs.realpathSync(wsPath) } catch { /* 路径不存在时按原样,扫描自然为空 */ }
+  for (const [sub, label, source] of [
+    ['.dsh', '工作区 .dsh/skills', 'project-dsh'],
+    ['.agents', '工作区 .agents/skills', 'project-agents'],
+  ]) {
+    for (const [leaf, disabled] of [['skills', false], ['skills-disabled', true]]) {
+      const dir = path.join(root, sub, leaf)
+      for (const e of scanSkillDir(dir, source, label, disabled)) {
+        e.dir = path.join(dir, e.entryName)
+        e.dirDisabled = disabled
+        out.push(e)
+      }
+    }
+  }
+  return out
+}
+
+/** 递归收集 profiles 下插件包内全部 SKILL.md,按 frontmatter name 索引位置。 */
+function indexPackSkills() {
+  const index = new Map()
+  const visit = (dir, depth, packRoot) => {
+    if (depth < 0) return
+    let entries
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    let root = packRoot
+    if (!root && path.dirname(dir) !== dir && fs.existsSync(path.join(dir, 'package.json'))) root = dir
+    for (const ent of entries) {
+      if (ent.name === 'node_modules' || ent.name === '.git') continue
+      const p = path.join(dir, ent.name)
+      if (ent.isDirectory()) visit(p, depth - 1, root)
+      else if (ent.name === 'SKILL.md' && root) {
+        const fm = parseSkillFrontmatter(p)
+        if (!fm || !index.has(fm.name)) {
+          const dirOf = path.dirname(p)
+          const loc = { dir: dirOf, packRoot: root, rel: path.relative(root, dirOf) }
+          if (fm) index.set(fm.name, loc)
+          else index.set(path.basename(dirOf), loc)
+        }
+      }
+    }
+  }
+  visit(SKILL_PROFILES_NM, 8, null)
+  return index
+}
+
+/** 读取包根的 package.json name(失败回落目录名)。 */
+function packDisplayName(packRoot) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(packRoot, 'package.json'), 'utf8'))
+    if (pkg && typeof pkg.name === 'string' && pkg.name) return pkg.name
+  } catch { /* 回落 */ }
+  return path.basename(packRoot)
+}
+
+/** 把「其他来源」技能名解析到磁盘位置:工作区扫描结果优先,其次插件包索引。 */
+function resolveOtherSkillDirs(names, wsEntries) {
+  const byName = new Map()
+  for (const e of wsEntries) {
+    if (!byName.has(e.name)) byName.set(e.name, { dir: e.dir, zone: 'workspace', disabled: e.dirDisabled, label: e.sourceLabel })
+  }
+  const packIndex = indexPackSkills()
+  for (const [name, loc] of packIndex) {
+    if (byName.has(name)) continue
+    byName.set(name, {
+      dir: loc.dir, zone: 'pack',
+      disabled: /^[\\/]skills-disabled/.test(loc.rel) || loc.rel.split(/[\\/]/)[0] === 'skills-disabled',
+      label: '插件包 ' + packDisplayName(loc.packRoot),
+      packRoot: loc.packRoot, rel: loc.rel,
+    })
+  }
+  const out = {}
+  for (const n of names) {
+    const hit = byName.get(n)
+    if (hit) out[n] = hit
+  }
+  return out
+}
+
+/** 分类技能条目绝对路径:watchable(受监听根,热生效)或 pack(包内检疫,重启生效)。 */
+function classifySkillEntryDir(dir) {
+  if (typeof dir !== 'string' || dir.length === 0 || dir.length > 500 || !path.isAbsolute(dir)) return null
+  let abs
+  try { abs = fs.realpathSync(dir) } catch { return null }
+  const entryName = path.basename(abs)
+  if (!isSafeSkillEntryName(entryName)) return null
+  const parent = path.dirname(abs)
+  const parentName = path.basename(parent)
+  const gpName = path.basename(path.dirname(parent))
+  if ((parentName === 'skills' || parentName === 'skills-disabled') && (gpName === '.dsh' || gpName === '.agents')) {
+    return { abs, entryName, zone: 'watchable', parent, parentName, disabled: parentName === 'skills-disabled' }
+  }
+  const rel = path.relative(SKILL_PROFILES_NM, abs)
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+    // 只认真实技能条目:含 SKILL.md 的目录或平铺 .md 文件(包内其他路径一律拒绝)
+    const stat = fs.statSync(abs)
+    const looksSkill = stat.isDirectory()
+      ? fs.existsSync(path.join(abs, 'SKILL.md'))
+      : /\.(md|MD)$/.test(entryName)
+    if (!looksSkill) return null
+    let packRoot = null
+    let cur = abs
+    for (let i = 0; i < 12 && cur !== SKILL_PROFILES_NM; i++) {
+      cur = path.dirname(cur)
+      if (cur === path.dirname(cur)) break
+      if (fs.existsSync(path.join(cur, 'package.json'))) { packRoot = cur; break }
+    }
+    if (!packRoot) return null
+    const relToPack = path.relative(packRoot, abs)
+    return {
+      abs, entryName, zone: 'pack', packRoot, rel: relToPack,
+      disabled: relToPack.split(/[\\/]/)[0] === 'skills-disabled',
+    }
+  }
+  return null
+}
+
+/** dir 模式启停:watchable 根姊妹目录互移;pack 根内 skills-disabled/ 检疫互移。 */
+function toggleSkillEntryDir(dir, disable) {
+  const c = classifySkillEntryDir(dir)
+  if (!c) return { ok: false, error: '无效的技能条目位置' }
+  if (c.disabled === disable) return { ok: false, error: disable ? '技能已处于禁用状态(请刷新)' : '技能已处于启用状态(请刷新)' }
+  let to
+  if (c.zone === 'watchable') {
+    const sibling = c.disabled ? c.parent.slice(0, -SKILL_DISABLED_SUFFIX.length) : c.parent + SKILL_DISABLED_SUFFIX
+    to = path.join(sibling, c.entryName)
+  } else {
+    const stripped = c.rel.slice('skills-disabled'.length).replace(/^[\\/]/, '')
+    to = disable ? path.join(c.packRoot, 'skills-disabled', c.rel) : path.join(c.packRoot, stripped)
+  }
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true })
+    fs.renameSync(c.abs, to)
+  } catch (e) { return { ok: false, error: `移动失败: ${e.message}` } }
+  if (c.zone === 'pack' && !disable) {
+    // 尽力清掉检疫路径上腾空的目录(从条目原位置向上到 skills-disabled 根)
+    const quarantineRoot = path.join(c.packRoot, 'skills-disabled')
+    let d = path.dirname(c.abs)
+    while (d.length > quarantineRoot.length && d.startsWith(quarantineRoot)) {
+      try { fs.rmdirSync(d) } catch { break }
+      d = path.dirname(d)
+    }
+    try { fs.rmdirSync(quarantineRoot) } catch { /* 非空则保留 */ }
+  }
+  return { ok: true, zone: c.zone }
+}
+
+/** dir 模式删除:递归删除条目(启用/禁用/检疫位置均可)。 */
+function deleteSkillEntryDir(dir) {
+  const c = classifySkillEntryDir(dir)
+  if (!c) return { ok: false, error: '无效的技能条目位置' }
+  try { fs.rmSync(c.abs, { recursive: true, force: true }) } catch (e) { return { ok: false, error: `删除失败: ${e.message}` } }
+  return { ok: true, zone: c.zone }
+}
+
 // ---------- MCP 管理:home patch 中壳写入的 insert 块(带 marker 注释) ----------
 // 启停复用插件 toggle 机制(insert 子条目 id 即组合顶层行 id,patch 管理行可覆盖
 // disabled 字段);删除仅对壳管理的 marker 块生效,preset 内置/手写行只提供启停。
@@ -1762,8 +2510,9 @@ function deleteManagedMcp(id) {
 }
 
 // ---------- 皮肤资产 + Wallpaper Engine 接入 ----------
-// 自定义皮肤:用户导入的图片/视频/音频存 ~/.dsh/desktop-assets/,
+// 自定义皮肤:用户导入的图片/视频存 ~/.dsh/desktop-assets/,
 // 经壳静态服务(30801)供 WebUI 引用(跨源 CORS 已放行 3080)。
+// (氛围音频已随 2026-09-04 移除:音频类型不再接收/列出,遗留 audio/volume 状态字段不再透出)
 // Wallpaper Engine:扫描 Steam 创意工坊内容目录(app 431960)的 project.json,
 // video 类型壁纸(mp4 + preview)可直接应用;scene 类型是打包格式,仅展示不可用。
 
@@ -1773,15 +2522,12 @@ const WE_APP_ID = '431960'
 const SKIN_MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
-  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.flac': 'audio/flac', '.m4a': 'audio/mp4',
 }
 
 function skinKindOf(name) {
   const ext = path.extname(name || '').toLowerCase()
   if (!SKIN_MIME[ext]) return null
-  if (SKIN_MIME[ext].startsWith('image/')) return 'image'
-  if (SKIN_MIME[ext].startsWith('video/')) return 'video'
-  return 'audio'
+  return SKIN_MIME[ext].startsWith('image/') ? 'image' : 'video'
 }
 
 /** 资产文件名安全校验(防路径穿越)。 */
@@ -1936,18 +2682,18 @@ function wallpaperFileOf(id, kind) {
 
 /** 读/写皮肤应用状态(持久化在 desktop-config.json 的 skin 字段)。 */
 function getSkinState() {
-  const s = cfg.skin || { bg: null, audio: null, dim: 0.45, volume: 0.35 }
+  const s = cfg.skin || { bg: null, dim: 0.45 }
   // [R48→问题71] glass 默认关:仅用户显式开启才生效,避免启动/设置页切模块时玻璃自启
-  return { glass: false, ...s }
+  // [2026-09-04] 氛围音频移除:遗留 audio/volume 字段不再透出(首次写回配置即消失)
+  const { audio, volume, ...rest } = s
+  return { glass: false, ...rest }
 }
 
 function setSkinState(patch) {
   const cur = getSkinState()
   const next = {
     bg: 'bg' in patch ? patch.bg : cur.bg,
-    audio: 'audio' in patch ? patch.audio : cur.audio,
     dim: typeof patch.dim === 'number' ? Math.min(0.9, Math.max(0, patch.dim)) : cur.dim,
-    volume: typeof patch.volume === 'number' ? Math.min(1, Math.max(0, patch.volume)) : cur.volume,
     glass: typeof patch.glass === 'boolean' ? patch.glass : cur.glass,
   }
   cfg.skin = next
@@ -2068,7 +2814,18 @@ function resolveEnhanceCandidates(preferredModel) {
       const prefIdHit = prefNameHit ? null : (pref ? b.ids.find((x) => x.toLowerCase() === pref) : null)
       const model = prefNameHit ? prefNameHit.id : (prefIdHit || ((defModel && b.ids.includes(defModel)) ? defModel : b.ids[0]))
       if (!model) continue
-      const baseURL = (b.baseURL || 'https://api.deepseek.com/v1').replace(/\/$/, '') // DeepSeek 官方缺省
+      // [R69] pi-ai 内置目录 provider 的 OpenAI 兼容端点镜像。目录 provider(如 zai)在
+      // settings.yaml 里不写 baseURL——端点在 pi-ai 包目录中,壳的 YAML 解析看不见;
+      // 旧逻辑直接回落 DeepSeek 官方缺省 → zai 的 key/model 打到 DeepSeek 端点,
+      // 401「api key invalid」,8-24 起会话摘要与 /enhance 全部停摆。minimax-cn 在
+      // settings 里写的是 anthropic 端点(/anthropic),壳只发 OpenAI 风格
+      // /chat/completions,故一并镜像其 OpenAI 兼容端点。
+      const PI_AI_OPENAI_BASE = {
+        zai: 'https://api.z.ai/api/coding/paas/v4',
+        'zai-coding-cn': 'https://open.bigmodel.cn/api/coding/paas/v4',
+        'minimax-cn': 'https://api.minimaxi.com/v1',
+      }
+      const baseURL = (PI_AI_OPENAI_BASE[b.name] || b.baseURL || 'https://api.deepseek.com/v1').replace(/\/$/, '') // DeepSeek 官方缺省
       let score = 0
       if (prefNameHit) score += 16 // 显示名精确命中(最高优先,用户意图压过一切默认)
       else if (prefIdHit) score += 12 // 仅 id 命中(撞名时归属存疑,低于 name 精确)
@@ -2103,6 +2860,161 @@ function sanitizeEnhanceOutput(out) {
 function isModelMissingError(status, text) {
   if (status !== 404 && status !== 400) return false
   return /model[_ ]?not[_ ]?(found|exist)|does not exist|invalid model|unknown model|模型不存在|无效模型/i.test(text)
+}
+
+// ---------- 会话删除:归档后的物理清除(会话菜单「删除会话」,2026-09-04) ----------
+// wire 层没有任何 session 删除能力,归档仅把 id 挪进 workspace.json 的
+// archivedSessionIds(客户端过滤隐藏),日志数据全留。这里做真正清除:会话日志目录 +
+// 各注册表/缓存中的悬挂引用。host 运行中其内存态可能回写 workspace.json 恢复悬挂
+// id —— 展示无害(列表以 session.list 扫盘为准、归档过滤对未知 id 兼容);彻底一致
+// 需上游提供 session.delete,超出壳范围。
+
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,80}$/
+
+/** JSON 原子写(tmp+rename,防读半截)。 */
+function atomicWriteJson(file, value, indent = 2) {
+  const tmp = `${file}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(value, null, indent))
+  fs.renameSync(tmp, file)
+}
+
+/**
+ * POST /sessions/delete 执行体:清会话日志目录 + 剔除持久化引用。
+ * 日志目录在 ~/.dsh/sessions/<projectKey>/<id>/,两代命名(裸 id 与 session-<id>)都清;
+ * 引用清理全部尽力而为(单处失败记入 warnings 不中断),调用方先归档成功才会走到这里。
+ * @returns {{ ok: boolean, removedDirs: string[], warnings: string[] }}
+ */
+function deleteSessionData(sessionId) {
+  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) {
+    return { ok: false, error: '参数必须是 { sessionId: string }' }
+  }
+  const warnings = []
+  const removedDirs = []
+  const bare = sessionId.replace(/^session-/, '')
+  const names = new Set([sessionId, bare])
+  // 1. 会话日志目录
+  const sessionsRoot = path.join(DSH_HOME, 'sessions')
+  try {
+    for (const pk of fs.readdirSync(sessionsRoot)) {
+      const pkPath = path.join(sessionsRoot, pk)
+      let pkStat = null
+      try { pkStat = fs.statSync(pkPath) } catch { continue }
+      if (!pkStat.isDirectory()) continue
+      for (const name of fs.readdirSync(pkPath)) {
+        if (!names.has(name)) continue
+        try {
+          fs.rmSync(path.join(pkPath, name), { recursive: true, force: true })
+          removedDirs.push(`${pk}/${name}`)
+        } catch (e) { warnings.push(`日志目录删除失败 ${pk}/${name}: ${e.message}`) }
+      }
+    }
+  } catch (e) { warnings.push(`sessions 根扫描失败: ${e.message}`) }
+  // 2. workspace 注册表:归档集 + 各工作区 sessionIds 记账槽
+  const wsFile = path.join(DSH_HOME, 'storages', 'workspace.json')
+  try {
+    const ws = JSON.parse(fs.readFileSync(wsFile, 'utf8'))
+    let touched = false
+    if (ws && ws.global && Array.isArray(ws.global.archivedSessionIds)) {
+      const next = ws.global.archivedSessionIds.filter((id) => id !== sessionId && id !== bare)
+      if (next.length !== ws.global.archivedSessionIds.length) { ws.global.archivedSessionIds = next; touched = true }
+    }
+    const rows = ws && ws.tables && ws.tables.workspaces
+    if (rows && typeof rows === 'object') {
+      for (const key of Object.keys(rows)) {
+        const row = rows[key]
+        if (row && Array.isArray(row.sessionIds)) {
+          const next = row.sessionIds.filter((id) => id !== sessionId && id !== bare)
+          if (next.length !== row.sessionIds.length) { row.sessionIds = next; touched = true }
+        }
+      }
+    }
+    if (touched) atomicWriteJson(wsFile, ws)
+  } catch (e) { warnings.push(`workspace.json 清理失败: ${e.message}`) }
+  // 3. 会话投影缓存(list 元数据:title/blank/lastPromptAt,残留会成幽灵条目)
+  const projFile = path.join(DSH_HOME, 'storages', 'session_projcache.json')
+  try {
+    const proj = JSON.parse(fs.readFileSync(projFile, 'utf8'))
+    const rows = proj && proj.tables && proj.tables.sessions
+    if (rows && typeof rows === 'object' && (rows[sessionId] || rows[bare])) {
+      delete rows[sessionId]
+      delete rows[bare]
+      atomicWriteJson(projFile, proj)
+    }
+  } catch (e) { warnings.push(`session_projcache.json 清理失败: ${e.message}`) }
+  for (const n of names) {
+    try { fs.rmSync(path.join(DSH_HOME, 'storages', 'session_projcache', 'sessions', `${n}.json`), { force: true }) } catch { /* 无则跳过 */ }
+  }
+  // 4. 壳摘要缓存(R37/R40,保持其 1 空格缩进写法)
+  try {
+    const cache = JSON.parse(fs.readFileSync(SUMMARY_FILE, 'utf8'))
+    if (cache && typeof cache === 'object' && (cache[sessionId] !== undefined || cache[bare] !== undefined)) {
+      delete cache[sessionId]
+      delete cache[bare]
+      atomicWriteJson(SUMMARY_FILE, cache, 1)
+    }
+  } catch { /* 首次无缓存 */ }
+  return { ok: true, removedDirs, warnings }
+}
+
+// ---------- [R80] 归档清单:归档集 + 投影元数据 + 磁盘占用/幽灵识别 ----------
+// 归档= workspace.json archivedSessionIds(全界面隐藏、数据全留)。这里只读聚合:
+// 顺序保持归档序;标题/最后活动取自投影缓存;磁盘占用扫 sessions/<projectKey>/<id>
+// (两代命名都认);ghost= 磁盘已无会话目录(「删除会话」清理后的悬挂引用)。
+function listArchivedSessions() {
+  let ids = []
+  try {
+    const ws = JSON.parse(fs.readFileSync(path.join(DSH_HOME, 'storages', 'workspace.json'), 'utf8'))
+    if (ws && ws.global && Array.isArray(ws.global.archivedSessionIds)) ids = ws.global.archivedSessionIds
+  } catch { /* 注册表缺失/损坏:按空集处理 */ }
+  let proj = {}
+  try {
+    const p = JSON.parse(fs.readFileSync(path.join(DSH_HOME, 'storages', 'session_projcache.json'), 'utf8'))
+    proj = (p && p.tables && p.tables.sessions) || {}
+  } catch { /* 无投影缓存:标题回退 id */ }
+  const sessionsRoot = path.join(DSH_HOME, 'sessions')
+  const sessions = []
+  let totalBytes = 0
+  for (const id of ids) {
+    if (typeof id !== 'string' || !SESSION_ID_RE.test(id)) continue
+    const bare = id.replace(/^session-/, '')
+    const row = proj[id] || proj[bare] || {}
+    let bytes = 0
+    let projectKey = ''
+    try {
+      for (const pk of fs.readdirSync(sessionsRoot)) {
+        const pkPath = path.join(sessionsRoot, pk)
+        let st = null
+        try { st = fs.statSync(pkPath) } catch { continue }
+        if (!st.isDirectory()) continue
+        for (const name of [id, bare]) {
+          const dir = path.join(pkPath, name)
+          try {
+            if (!fs.statSync(dir).isDirectory()) continue
+          } catch { continue }
+          let size = 0
+          for (const f of fs.readdirSync(dir)) {
+            try { size += fs.statSync(path.join(dir, f)).size } catch { /* 单文件探测失败忽略 */ }
+          }
+          if (projectKey === '' || size > bytes) { projectKey = pk; bytes = size }
+        }
+      }
+    } catch { /* sessions 根不可读:按幽灵处理 */ }
+    totalBytes += bytes
+    // 投影行结构: rows.title.val(标题) / rows.sessionListMetadata.val.lastPromptAt(epoch ms)
+    // / identity.cwd(会话工作目录,比 sessions 目录名的转义路径更可读)。
+    const rows = row.rows || {}
+    const listMeta = (rows.sessionListMetadata && rows.sessionListMetadata.val) || {}
+    sessions.push({
+      id,
+      title: rows.title && typeof rows.title.val === 'string' ? rows.title.val : '',
+      lastActivityAt: typeof listMeta.lastPromptAt === 'number' ? new Date(listMeta.lastPromptAt).toISOString() : '',
+      cwd: row.identity && typeof row.identity.cwd === 'string' ? row.identity.cwd : '',
+      projectKey,
+      bytes,
+      ghost: projectKey === '',
+    })
+  }
+  return { ok: true, sessions, totalBytes }
 }
 
 function startShellApi() {
@@ -2286,12 +3198,29 @@ function startShellApi() {
             return send(502, { ok: false, error: `provider HTTP ${r.status}` })
           }
           const data = await r.json()
-          const out = data?.choices?.[0]?.message?.content
-          if (typeof out !== 'string' || !out.trim()) {
+          const rawOut = data?.choices?.[0]?.message?.content
+          if (typeof rawOut !== 'string' || !rawOut.trim()) {
             log('[summary] provider 返回空内容')
             return send(502, { ok: false, error: 'provider 返回空内容' })
           }
-          const summary = out.trim().replace(/^["'“”\s]+/, '').replace(/["'“”。.!！\s]+$/, '').slice(0, 30)
+          // [批次104] 思考泄漏防线:模型偶发把思考正文泄进 content(08-30 实测
+          // 「<think>The user is asking to r」被下方 30 字截断切掉闭合标签,成为永久脏缓存,
+          // 展示层剥不掉、回填泵见"有摘要"不重生成)。闭合段剥掉;未闭合 <think> 开头
+          // (整段皆思考)剥完必空 → 按空内容拒收,不写缓存。
+          const out = rawOut.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '')
+          if (!out.trim()) {
+            log('[summary] provider 输出为思考泄漏,拒收')
+            return send(502, { ok: false, error: 'provider 输出为思考泄漏' })
+          }
+          // [R69] 推理模型偶尔无视"只输出摘要正文"而输出多行解释/代码块:只取第一行,
+          // 再去标签前缀(摘要:/主题:)与首尾引号、行尾标点,最后 30 字封顶。
+          const summary = out.trim()
+            .replace(/^["'“”\s]+/, '')
+            .split(/\r?\n/)[0]
+            .replace(/^(?:摘要|标题|主题)\s*[::]\s*/, '')
+            .replace(/["'“”。.!！\s]+$/, '')
+            .slice(0, 30)
+            .trim()
           cache[sessionId] = summary
           try { fs.writeFileSync(SUMMARY_FILE, JSON.stringify(cache, null, 1)) } catch (e) { log(`[summary] 缓存写入失败: ${e.message}`) }
           log(`[summary] ${sessionId.slice(0, 8)}… → ${summary}`)
@@ -2342,7 +3271,7 @@ function startShellApi() {
         const rawName = req.headers['x-filename'] ? decodeURIComponent(String(req.headers['x-filename'])) : ''
         if (!isSafeAssetName(rawName)) return send(400, { ok: false, error: '非法文件名(仅支持字母数字、空格、点、括号、连字符)' })
         const kind = skinKindOf(rawName)
-        if (!kind) return send(400, { ok: false, error: '不支持的类型(支持 jpg/png/gif/webp/bmp、mp4/webm/mov/mkv、mp3/wav/ogg/flac/m4a)' })
+        if (!kind) return send(400, { ok: false, error: '不支持的类型(支持 jpg/png/gif/webp/bmp、mp4/webm/mov/mkv)' })
         const chunks = []
         for await (const chunk of req) chunks.push(chunk)
         const buf = Buffer.concat(chunks)
@@ -2396,9 +3325,11 @@ function startShellApi() {
         return send(200, { availableVersions })
       }
       if (req.method === 'POST' && url.pathname === '/restart') {
-        if (switching || restarting) return send(409, { accepted: false, error: '已有切换或重启在进行' })
-        restarting = true
-        restartDsh().finally(() => { restarting = false })
+        // [问题121] 统一入口:冷却期内的重复触发按「已完成」处理(服务刚重启过),
+        // 外部调用方(市场 helper)拿到 accepted 即可,其 /state 轮询立即成立。
+        const r = requestRestart('api')
+        if (!r.ok && r.reason === 'busy') return send(409, { accepted: false, error: '已有切换或重启在进行' })
+        if (!r.ok) return send(202, { accepted: true, note: '冷却期内吸收:服务刚重启过,本次请求视为已完成' })
         return send(202, { accepted: true })
       }
       if (req.method === 'GET' && url.pathname === '/persona') {
@@ -2497,10 +3428,26 @@ function startShellApi() {
       if (req.method === 'GET' && url.pathname === '/skills') {
         return send(200, { entries: listSkills() })
       }
+      if (req.method === 'POST' && url.pathname === '/skills/others') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { paths, names } = JSON.parse(body || '{}')
+        const wsPaths = Array.isArray(paths) ? paths.filter((p) => typeof p === 'string' && p.length > 1 && p.length < 500).slice(0, 64) : []
+        const wanted = Array.isArray(names) ? names.filter((n) => typeof n === 'string' && n.length > 0 && n.length < 200).slice(0, 400) : []
+        const entries = []
+        for (const p of wsPaths) entries.push(...scanWorkspaceSkillRoots(p))
+        return send(200, { ok: true, entries, resolved: resolveOtherSkillDirs(wanted, entries) })
+      }
       if (req.method === 'POST' && url.pathname === '/skills/toggle') {
         let body = ''
         for await (const chunk of req) body += chunk
-        const { source, name, disabled } = JSON.parse(body || '{}')
+        const { source, name, disabled, dir } = JSON.parse(body || '{}')
+        if (dir !== undefined) {
+          if (typeof disabled !== 'boolean') return send(400, { ok: false, error: '参数必须是 { dir: string, disabled: boolean }' })
+          const result = toggleSkillEntryDir(dir, disabled)
+          if (!result.ok) return send(400, result)
+          return send(200, { ok: true, zone: result.zone, entries: listSkills() })
+        }
         if (typeof source !== 'string' || typeof name !== 'string' || typeof disabled !== 'boolean') {
           return send(400, { ok: false, error: '参数必须是 { source: string, name: string, disabled: boolean }' })
         }
@@ -2511,13 +3458,33 @@ function startShellApi() {
       if (req.method === 'POST' && url.pathname === '/skills/delete') {
         let body = ''
         for await (const chunk of req) body += chunk
-        const { source, name } = JSON.parse(body || '{}')
+        const { source, name, dir } = JSON.parse(body || '{}')
+        if (dir !== undefined) {
+          if (typeof dir !== 'string') return send(400, { ok: false, error: '参数必须是 { dir: string }' })
+          const result = deleteSkillEntryDir(dir)
+          if (!result.ok) return send(400, result)
+          return send(200, { ok: true, zone: result.zone, entries: listSkills() })
+        }
         if (typeof source !== 'string' || typeof name !== 'string') {
           return send(400, { ok: false, error: '参数必须是 { source: string, name: string }' })
         }
         const result = deleteSkillEntry(source, name)
         if (!result.ok) return send(400, result)
         return send(200, { ok: true, entries: listSkills() })
+      }
+      // ---------- [R80] 归档会话清单(归档管理页数据源) ----------
+      if (req.method === 'GET' && url.pathname === '/sessions/archived') {
+        return send(200, listArchivedSessions())
+      }
+      // ---------- 会话删除:归档后的物理清除(会话菜单「删除会话」) ----------
+      if (req.method === 'POST' && url.pathname === '/sessions/delete') {
+        let body = ''
+        for await (const chunk of req) body += chunk
+        const { sessionId } = JSON.parse(body || '{}')
+        const result = deleteSessionData(sessionId)
+        if (!result.ok) return send(400, result)
+        log(`[sessions] 已删除会话 ${sessionId}: 日志目录 ${result.removedDirs.length} 处${result.warnings.length ? `, 警告: ${result.warnings.join('; ')}` : ''}`)
+        return send(200, result)
       }
       if (req.method === 'GET' && url.pathname === '/mcp') {
         return send(200, { managed: listManagedMcp() })
@@ -2647,12 +3614,8 @@ function buildTrayMenu() {
     { label: '显示主界面', click: () => { const w = [...mainWindows][0]; if (w) { w.show(); w.focus() } } },
     { label: '新建窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => newWindow() },
     { type: 'separator' },
-    { label: '重载界面', click: () => { for (const w of mainWindows) if (!w.isDestroyed()) w.webContents.reloadIgnoringCache() } }, // [问题108] 强刷绕缓存:插件文件热改后普通重载可能吃旧 ?rev 缓存跑旧码
-    { label: '重启 dsh 服务', click: () => {
-      if (restarting || switching) return
-      restarting = true
-      restartDsh().finally(() => { restarting = false })
-    } },
+    { label: '重载界面', click: () => { for (const w of mainWindows) if (!w.isDestroyed()) snapshotCover(w, () => w.webContents.reloadIgnoringCache()) } }, // [问题108] 强刷绕缓存:插件文件热改后普通重载可能吃旧 ?rev 缓存跑旧码;[主题闪变] 快照遮罩盖住重载空档
+    { label: '重启 dsh 服务', click: () => { requestRestart('tray') } },
     { label: '打开日志目录', click: () => shell.openPath(LOG_DIR) },
     { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit() } },
@@ -2741,23 +3704,37 @@ function setupAppMenu() {
 // ---------- 启动编排 ----------
 
 async function boot() {
+  const bootT0 = Date.now() // [R74] 冷启动/复用全链路耗时观测
+  // [q195 2026-09-05] 先探测后重放:补丁重放是同步 fs 扫描,原实现放在端口探测之前,
+  // 复用路径(服务已在跑)也要白吃这段主进程阻塞,启动页跟着冻结。重排后复用路径
+  // 立即揭窗,重放推迟 5s 后台执行(dsh cordis watcher 对补丁热应用,晚几秒无害);
+  // spawn 路径维持「重放必须在 spawn 前」的原语义(防坏 patch 崩溃循环)。
+  stage('probe')
+  if (await isPortUp()) {
+    setTimeout(() => {
+      try {
+        const r = loadFreshReplayer()((l) => log(l))
+        if (!r.ok) notify('DeepSeek Harness', '本地插件补丁重放失败,详见日志(桌面日志目录)。')
+      } catch (e) { log(`补丁重放异常: ${e.message}`) }
+    }, 5_000)
+    // [问题99] 常驻守护:市场/CLI/pnpm 对账可能在壳运行中覆盖 node_modules 里的补丁产物
+    // (历史上市场批量更新、卸载流程都发生过),boot/startDsh 时点重放覆盖不到这些窗口。
+    // 每 45s 幂等重放一次——已是补丁态时哨兵快速通道零写盘零开销;状态翻转才记日志。
+    startPatchGuardian()
+    log(`检测到 dsh 服务已在运行,直接复用(壳启动 ${((Date.now() - bootT0) / 1000).toFixed(1)}s)`)
+    // [q196] 'ready'(100%/鲸鱼谢幕)由 bootGate 在揭窗节拍时触发;此阶段先报界面加载中
+    stage('ui')
+    showMain(dshUrl())
+    startPreheatLoop()
+    return
+  }
   // 本地补丁自动重放:插件经 pnpm 更新覆盖 node_modules 后,壳启动即恢复全部本地定制
   // (better-sidebar 浮动卡片/底部面板剔除 + node-nav 左侧圆点导航),失败仅告警不阻断启动。
   try {
-    const r = replayLocalPatches((l) => log(l))
+    const r = loadFreshReplayer()((l) => log(l))
     if (!r.ok) notify('DeepSeek Harness', '本地插件补丁重放失败,详见日志(桌面日志目录)。')
   } catch (e) { log(`补丁重放异常: ${e.message}`) }
-  // [问题99] 常驻守护:市场/CLI/pnpm 对账可能在壳运行中覆盖 node_modules 里的补丁产物
-  // (历史上市场批量更新、卸载流程都发生过),boot/startDsh 时点重放覆盖不到这些窗口。
-  // 每 45s 幂等重放一次——已是补丁态时哨兵快速通道零写盘零开销;状态翻转才记日志。
   startPatchGuardian()
-  stage('probe')
-  if (await isPortUp()) {
-    log('检测到 dsh 服务已在运行,直接复用')
-    stage('ready')
-    showMain(DSH_URL)
-    return
-  }
   stage('spawn')
   if (!startDsh()) {
     closeSplash()
@@ -2769,10 +3746,12 @@ async function boot() {
   log('等待 dsh 服务就绪...')
   const ok = await waitForPort(START_TIMEOUT_MS)
   if (ok) {
-    log('dsh 服务就绪,加载 Web UI')
+    log(`dsh 服务就绪,加载 Web UI(壳启动至就绪 ${((Date.now() - bootT0) / 1000).toFixed(1)}s)`)
     restartAttempts = 0
-    stage('ready')
-    showMain(DSH_URL)
+    // [q196] 'ready'(100%/鲸鱼谢幕)由 bootGate 在揭窗节拍时触发;此阶段先报界面加载中
+    stage('ui')
+    showMain(dshUrl())
+    startPreheatLoop()
   } else {
     log(`等待超时(${START_TIMEOUT_MS / 1000}s),显示错误页`)
     closeSplash()
@@ -2809,9 +3788,10 @@ if (!app.requestSingleInstanceLock()) {
     setupSettingsIpc()
     startShellApi()
     boot().then(() => {
-      // 就绪后异步拉版本列表 + 启动时静默检查双更新
+      // 就绪后异步拉版本列表(设置页更新区展示,无弹窗)。
+      // 取消启动时自动检查 dsh 更新:版本锁落后于 npm 最新版时每次启动都会弹
+      // 「dsh 有新版本」确认框;改为仅设置页手动检查(dsh-settings:check-dsh-update)。
       fetchAvailableVersions()
-      setTimeout(() => checkDshUpdate(false), 5_000)
       if (autoUpdater) autoUpdater.checkForUpdates().catch((e) => log(`壳更新检查失败: ${e.message}`))
     })
   })
@@ -2834,8 +3814,9 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 // [v0.5.0] plain-node 校验钩子:scripts/check-dsh-runtime.mjs 以 Module._load
-// stub 替换 electron 后加载本文件,抓取 resolveDshRuntime 断言双轨四分支。
+// stub 替换 electron 后加载本文件,抓取 resolveDshRuntime 断言双轨四分支;
+// scripts/check-boot-gate.mjs 同法抓取 bootGate 断言揭窗闸门各分支。
 // Electron 主进程里 process.versions.electron 存在 → 不导出,运行态零影响。
 if (!process.versions.electron && typeof module !== 'undefined' && module.exports) {
-  module.exports = { resolveDshRuntime, resolveDefaultLocalDir }
+  module.exports = { resolveDshRuntime, resolveDefaultLocalDir, bootGate }
 }

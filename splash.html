@@ -57,6 +57,21 @@
   }
   .wordmark { width: clamp(200px, 30vw, 280px); color: var(--fg); opacity: .92; }
   .hero .ds-hero-enter:nth-child(2) { animation-delay: .12s; }
+  /* [T11] 字标交互:逐字上浮+辉光(JS 弹簧驱动)+划过流光(覆盖层以同一份 SVG 作 mask) */
+  #wordmark { position: relative; }
+  #wordmark svg { display: block; }
+  .sheen { position: absolute; inset: 0; pointer-events: none; }
+  .sheen-band {
+    position: absolute; top: -8%; bottom: -8%; left: -45%; width: 36%;
+    background: linear-gradient(90deg, rgba(77,107,254,0) 0%, rgba(77,107,254,.40) 28%,
+                rgba(150,175,255,.92) 50%, rgba(77,107,254,.40) 72%, rgba(77,107,254,0) 100%);
+    transform: skewX(-16deg) translateX(0);
+  }
+  .sheen.run .sheen-band { animation: wm-sheen-move 1.05s cubic-bezier(.45, 0, .25, 1) both; }
+  @keyframes wm-sheen-move {
+    from { transform: skewX(-16deg) translateX(0); }
+    to   { transform: skewX(-16deg) translateX(480%); }
+  }
 
   /* 底部阶段图注 + 进度条 */
   .cap {
@@ -99,32 +114,137 @@
   // ---------- 官网 wordmark 注入 ----------
   document.getElementById('wordmark').innerHTML = window.DSH_LOGO_SVG || ''
 
-  // ---------- [T10] 粒子鲸鱼:SVG 点云采样 + 弹簧聚合 + 鼠标散开 ----------
-  // 官网鲸鱼 logo 离屏栅格化 → alpha 采样成 ~2400 个粒子(≤3000 上限);
-  // 每粒子受 home 弹簧力(聚合)、鼠标斥力(散开)、微弱噪声漂移(呼吸);
-  // 入场时从随机散布态收敛成鲸形。2D canvas 渲染,启动期 CPU/GPU 占用可控。
+  // ---------- [T10·R80] 粒子鲸鱼引擎 v2 ----------
+  // 采样:官方鲸鱼 SVG 离屏栅格化 → 轮廓粒子(邻透明)2px 全保留 / 内部 50% 降密 → ≤1600
+  // 渲染:色彩分桶(6 色阶×2 亮度档,双 palette=品牌蓝/crash 琥珀)→ 每帧仅 12 次 fillStyle + 批量 fillRect
+  // 交互:力场鼠标(轨迹写入 25×15 矢量场,惯性衰减)+ hover 斥力(半径按画布比例)
+  //       + 快划拖尾 spark + 点击爆发(环形 spark+冲量场+受惊尾摆)+ 静置引力聚拢(idle>2.5s)
+  // 动效:体波行波(头稳尾摆)+ 呼吸缩放 + y 向深海渐变着色 + 轮廓粒子 twinkle
+  // 生命周期:入场错峰聚形(鲸头先成形)→ ready 谢幕前游(鲸面朝左,向左前方游走)→ crash 琥珀联动
+  // 无障碍:prefers-reduced-motion → 静态鲸形一次成形,全动效关闭(按需重绘)
+  // 性能:固定 16.7ms 步长物理 + 帧耗时自适应降级(>8ms 隐 30% → 再超 30fps)+ hidden 暂停
   ;(function () {
     var canvas = document.getElementById('whaleParticles')
     var ctx = canvas.getContext('2d')
     var dpr = Math.min(window.devicePixelRatio || 1, 1.5)
     var W = 0, H = 0
     var particles = []
-    var mouse = { x: -1e4, y: -1e4 }
-    var MAX_PARTICLES = 2600
-    var readyT = 0 // 入场收敛进度(0→1)
-
-    function resize() {
-      var r = canvas.getBoundingClientRect()
-      W = r.width; H = r.height
-      canvas.width = Math.round(W * dpr)
-      canvas.height = Math.round(H * dpr)
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    var sparks = []
+    var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    var mood = 'blue'  // blue | amber
+    var readyT = 0, exitT = 0, exiting = false
+    var ampBoost = 0   // 点击受惊尾摆(0→1 衰减)
+    var mouse = { x: -1e4, y: -1e4, vx: 0, vy: 0, inside: false, lastMove: 0 }
+    var idleActive = false
+    var rect = { left: 0, top: 0 }
+    var sMinX = 0, sSpanX = 1 // 缩放后鲸身左右界(体波/错峰用)
+    var stats = window.__whale = {
+      count: 0, edgeCount: 0, frameMs: 0, p95: 0, degrade: 0,
+      mood: 'blue', reduced: reducedMotion, idle: false, exiting: false,
+      sparks: 0, sparkPeak: 0, bursts: 0
     }
 
-    // 离屏渲染鲸鱼 SVG → 按 alpha 采样 home 点
+    // ---- 色桶:6 色阶 × 2 亮度档,双 palette(品牌蓝 / crash 琥珀) ----
+    // ny=0 海面(浅 #6799fe)→ ny=1 深海(深 #2b46e8);亮度档 1 给轮廓/高速粒子
+    var C_LIGHT = [103, 153, 254], C_DARK = [43, 70, 232]
+    var A_LIGHT = [240, 205, 120], A_DARK = [150, 100, 24]
+    var PAL = { blue: [], amber: [] }
+    ;(function buildPalette() {
+      function mix(a, b, t) {
+        return [Math.round(a[0] + (b[0] - a[0]) * t), Math.round(a[1] + (b[1] - a[1]) * t), Math.round(a[2] + (b[2] - a[2]) * t)]
+      }
+      for (var b = 0; b < 6; b++) {
+        var ny = b / 5
+        var base = mix(C_LIGHT, C_DARK, ny)
+        var amb = mix(A_LIGHT, A_DARK, ny)
+        for (var l = 0; l < 2; l++) {
+          var bo = l * 42
+          PAL.blue.push('rgba(' + Math.min(255, base[0] + bo) + ',' + Math.min(255, base[1] + bo) + ',' + Math.min(255, base[2] + bo + 10) + ',' + (0.52 + ny * 0.22 + l * 0.12).toFixed(3) + ')')
+          PAL.amber.push('rgba(' + Math.min(255, amb[0] + bo) + ',' + Math.min(255, amb[1] + bo) + ',' + Math.min(255, amb[2] + bo) + ',' + (0.55 + ny * 0.2 + l * 0.12).toFixed(3) + ')')
+        }
+      }
+    })()
+    var bins = []
+    for (var bi = 0; bi < 12; bi++) bins.push([])
+
+    // ---- 力场:25×15 矢量格,鼠标轨迹按速度写入,指数衰减(有惯性/有记忆) ----
+    var GW = 25, GH = 15, cw = 12, ch = 12
+    var ffx = new Float32Array(GW * GH), ffy = new Float32Array(GW * GH)
+    function stampField(x, y, vx, vy) {
+      var cx = Math.floor(x / cw), cy = Math.floor(y / ch)
+      var R = 2, r2 = (cw * 2.6) * (cw * 2.6)
+      for (var j = Math.max(0, cy - R); j <= Math.min(GH - 1, cy + R); j++) {
+        for (var i = Math.max(0, cx - R); i <= Math.min(GW - 1, cx + R); i++) {
+          var dx = (i + .5) * cw - x, dy = (j + .5) * ch - y
+          var d2 = dx * dx + dy * dy
+          if (d2 > r2) continue
+          var w = 1 - Math.sqrt(d2) / (cw * 2.6)
+          w = w * w
+          var idx = j * GW + i
+          ffx[idx] = Math.max(-6, Math.min(6, ffx[idx] + vx * w * .10))
+          ffy[idx] = Math.max(-6, Math.min(6, ffy[idx] + vy * w * .10))
+        }
+      }
+    }
+    function decayField() {
+      for (var i = 0, n = GW * GH; i < n; i++) { ffx[i] *= .90; ffy[i] *= .90 }
+    }
+
+    // ---- spark(拖尾/爆发)池,上限 150 ----
+    function pushSpark(s) {
+      if (sparks.length >= 150) sparks.shift()
+      sparks.push(s)
+      if (sparks.length > stats.sparkPeak) stats.sparkPeak = sparks.length
+    }
+    function spawnTrail(x, y, vx, vy) {
+      for (var i = 0; i < 2; i++) {
+        pushSpark({
+          x: x + (Math.random() - .5) * 7, y: y + (Math.random() - .5) * 7,
+          vx: vx * .16 + (Math.random() - .5) * .8, vy: vy * .16 + (Math.random() - .5) * .8,
+          life: 1, decay: .012 + Math.random() * .014,
+          s: 1.1 + Math.random() * 1.7, kind: 0
+        })
+      }
+    }
+
+    // ---- 鼠标:pointermove 喂力场,pointerdown 爆发 ----
+    function cacheRect() { rect = canvas.getBoundingClientRect() }
+    window.addEventListener('pointermove', function (ev) {
+      var x = ev.clientX - rect.left, y = ev.clientY - rect.top
+      mouse.vx = x - mouse.x; mouse.vy = y - mouse.y
+      mouse.x = x; mouse.y = y
+      mouse.inside = x >= 0 && y >= 0 && x <= W && y <= H
+      if (mouse.inside && !reducedMotion) {
+        mouse.lastMove = performance.now()
+        stampField(x, y, mouse.vx, mouse.vy)
+        if (Math.abs(mouse.vx) + Math.abs(mouse.vy) > 14) spawnTrail(x, y, mouse.vx, mouse.vy)
+      }
+    })
+    window.addEventListener('pointerdown', function (ev) {
+      if (reducedMotion) return
+      var x = ev.clientX - rect.left, y = ev.clientY - rect.top
+      if (x < 0 || y < 0 || x > W || y > H) return
+      stats.bursts++
+      ampBoost = 1
+      for (var i = 0; i < 46; i++) {
+        var a = Math.random() * 6.2832, v = 1.6 + Math.random() * 3.4
+        pushSpark({ x: x, y: y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, decay: .02 + Math.random() * .018, s: 1.3 + Math.random() * 1.9, kind: 1 })
+      }
+      for (var j = 0; j < particles.length; j++) {
+        var p = particles[j]
+        var dx = p.x - x, dy = p.y - y, d2 = dx * dx + dy * dy
+        if (d2 < 12100 && d2 > .01) { // 110px 冲量场
+          var d = Math.sqrt(d2), f = (110 - d) / 110 * 5.2
+          p.vx += dx / d * f; p.vy += dy / d * f
+        }
+      }
+    })
+    document.addEventListener('mouseout', function (ev) { if (!ev.relatedTarget) mouse.inside = false })
+
+    // ---- 采样:轮廓 2px 全保留 / 内部 50% 降密 → ≤1600 ----
     function sampleWhale(cb) {
       var svg = window.DSH_WHALE_SVG
-      if (!svg) return cb([])
+      if (!svg) return cb(null)
       var img = new Image()
       img.onload = function () {
         var sw = 400, sh = Math.round(sw * img.height / img.width) || 220
@@ -133,127 +253,313 @@
         var octx = off.getContext('2d')
         octx.drawImage(img, 0, 0, sw, sh)
         var data
-        try { data = octx.getImageData(0, 0, sw, sh).data } catch (e) { return cb([]) }
-        // 收集候选像素(alpha 足够深),再均匀抽到目标数量
+        try { data = octx.getImageData(0, 0, sw, sh).data } catch (e) { return cb(null) }
+        var solid = new Uint8Array(sw * sh)
+        var y, x
+        for (y = 0; y < sh; y++) for (x = 0; x < sw; x++) solid[y * sw + x] = data[(y * sw + x) * 4 + 3] > 96 ? 1 : 0
         var cand = []
-        for (var y = 0; y < sh; y += 2) {
-          for (var x = 0; x < sw; x += 2) {
-            var a = data[(y * sw + x) * 4 + 3]
-            if (a > 96) cand.push([x, y])
+        for (y = 0; y < sh; y += 2) {
+          for (x = 0; x < sw; x += 2) {
+            if (!solid[y * sw + x]) continue
+            var xL = Math.max(0, x - 2), xR = Math.min(sw - 1, x + 2)
+            var yU = Math.max(0, y - 2), yD = Math.min(sh - 1, y + 2)
+            var edge = !solid[y * sw + xL] || !solid[y * sw + xR] || !solid[yU * sw + x] || !solid[yD * sw + x]
+            if (!edge && ((x + y) % 6) >= 3) continue // 内部降密 ~50%
+            cand.push([x, y, edge ? 1 : 0])
           }
         }
-        var n = Math.min(cand.length, MAX_PARTICLES)
-        var pts = []
-        var step = cand.length / Math.max(1, n)
-        for (var i = 0; i < n; i++) {
-          var p = cand[Math.floor(i * step)]
-          pts.push(p)
-        }
+        var n = Math.min(cand.length, 1600)
+        var pts = [], stp = cand.length / Math.max(1, n)
+        for (var i = 0; i < n; i++) pts.push(cand[Math.floor(i * stp)])
         cb(pts)
       }
-      img.onerror = function () { cb([]) }
+      img.onerror = function () { cb(null) }
       img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)))
+    }
+
+    function resize() {
+      var r = canvas.getBoundingClientRect()
+      W = r.width; H = r.height
+      canvas.width = Math.round(W * dpr)
+      canvas.height = Math.round(H * dpr)
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      cw = Math.max(4, W / GW); ch = Math.max(4, H / GH)
+      cacheRect()
     }
 
     function initParticles(pts) {
       resize()
-      var r = canvas.getBoundingClientRect()
-      // home 点云缩放到画布(留 8% 边距)
-      var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9
-      for (var i = 0; i < pts.length; i++) {
-        minX = Math.min(minX, pts[i][0]); maxX = Math.max(maxX, pts[i][0])
-        minY = Math.min(minY, pts[i][1]); maxY = Math.max(maxY, pts[i][1])
-      }
-      var pad = .08
-      var kx = W * (1 - pad * 2) / Math.max(1, (maxX - minX))
-      var ky = H * (1 - pad * 2) / Math.max(1, (maxY - minY))
-      var k = Math.min(kx, ky)
-      var ox = (W - (maxX - minX) * k) / 2
-      var oy = (H - (maxY - minY) * k) / 2
-      particles = []
-      for (var j = 0; j < pts.length; j++) {
-        var hx = ox + (pts[j][0] - minX) * k
-        var hy = oy + (pts[j][1] - minY) * k
-        particles.push({
-          hx: hx, hy: hy,
-          // 入场:从画布外围随机散布态开始收敛
-          x: Math.random() * W, y: Math.random() * H,
-          vx: 0, vy: 0,
-          s: .8 + Math.random() * 1.3,               // 粒径
-          ph: Math.random() * 6.2832,                 // 噪声相位
-          c: Math.random()                             // 色相插值系数
-        })
-      }
-    }
-
-    var t0 = performance.now()
-    function frame(t) {
-      var s = (t - t0) * .001
-      readyT = Math.min(1, readyT + .016)
-      ctx.clearRect(0, 0, W, H)
-      // 整体呼吸浮动(替代原 SVG float 动画)
-      var bobY = Math.sin(s * .9) * 4
-      var bobR = Math.sin(s * .7) * .012
-      ctx.globalCompositeOperation = 'lighter'
-      var conv = readyT * readyT * (3 - 2 * readyT) // smoothstep 收敛强度
-      for (var i = 0; i < particles.length; i++) {
-        var p = particles[i]
-        // home 点加整体浮动
-        var rx = p.hx - W / 2, ry = p.hy - H / 2
-        var hx = W / 2 + rx * Math.cos(bobR) - ry * Math.sin(bobR)
-        var hy = H / 2 + rx * Math.sin(bobR) + ry * Math.cos(bobR) + bobY
-        // 弹簧回位(聚合)
-        var ax = (hx - p.x) * (.028 + .10 * conv)
-        var ay = (hy - p.y) * (.028 + .10 * conv)
-        // 鼠标斥力(散开)
-        var dx = p.x - mouse.x, dy = p.y - mouse.y
-        var d2 = dx * dx + dy * dy
-        if (d2 < 8100 && d2 > .01) { // 90px 半径
-          var d = Math.sqrt(d2)
-          var f = (90 - d) / 90 * 2.6
-          ax += dx / d * f
-          ay += dy / d * f
-        }
-        // 微弱噪声漂移(呼吸感)
-        ax += Math.sin(s * 1.3 + p.ph) * .012
-        ay += Math.cos(s * 1.1 + p.ph * 1.7) * .012
-        p.vx = (p.vx + ax) * .88
-        p.vy = (p.vy + ay) * .88
-        p.x += p.vx
-        p.y += p.vy
-        // 着色:品牌蓝渐变(#2b46e8 → #6799fe),速度越快越亮
-        var sp = Math.min(1, (Math.abs(p.vx) + Math.abs(p.vy)) * .25)
-        var cr = Math.round(43 + p.c * 60 + sp * 40)
-        var cg = Math.round(70 + p.c * 83 + sp * 30)
-        var cb = Math.round(232 + p.c * 22)
-        ctx.fillStyle = 'rgba(' + cr + ',' + cg + ',' + cb + ',' + (.42 + p.c * .38 + sp * .2).toFixed(3) + ')'
-        ctx.fillRect(p.x, p.y, p.s, p.s)
-      }
-      requestAnimationFrame(frame)
-    }
-
-    window.addEventListener('mousemove', function (ev) {
-      var r = canvas.getBoundingClientRect()
-      mouse.x = ev.clientX - r.left
-      mouse.y = ev.clientY - r.top
-    })
-    window.addEventListener('resize', function () {
-      // 重采样布局(窗口尺寸变化时按新画布尺寸重放 home 点)
-      sampleWhale(function (pts) { if (pts.length) initParticles(pts) })
-    })
-
-    resize()
-    sampleWhale(function (pts) {
-      if (!pts.length) {
+      if (!pts || !pts.length) {
         // SVG 不可用兜底:环形粒子团
         pts = []
         for (var i = 0; i < 900; i++) {
           var a = Math.random() * 6.2832, rr = 60 + Math.random() * 60
-          pts.push([200 + Math.cos(a) * rr * 1.8, 110 + Math.sin(a) * rr])
+          pts.push([200 + Math.cos(a) * rr * 1.8, 110 + Math.sin(a) * rr, 0])
         }
       }
+      var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9, j
+      for (j = 0; j < pts.length; j++) {
+        if (pts[j][0] < minX) minX = pts[j][0]; if (pts[j][0] > maxX) maxX = pts[j][0]
+        if (pts[j][1] < minY) minY = pts[j][1]; if (pts[j][1] > maxY) maxY = pts[j][1]
+      }
+      var pad = .08
+      var k = Math.min(W * (1 - pad * 2) / Math.max(1, maxX - minX), H * (1 - pad * 2) / Math.max(1, maxY - minY))
+      var ox = (W - (maxX - minX) * k) / 2, oy = (H - (maxY - minY) * k) / 2
+      // 缩放后界(体波相位/错峰延迟/色阶均以此为准)
+      var sMinY = 1e9, sMaxY = -1e9
+      sMinX = 1e9; var sMaxX = -1e9
+      var sc = []
+      for (j = 0; j < pts.length; j++) {
+        var hx = ox + (pts[j][0] - minX) * k, hy = oy + (pts[j][1] - minY) * k
+        sc.push([hx, hy, pts[j][2]])
+        if (hx < sMinX) sMinX = hx; if (hx > sMaxX) sMaxX = hx
+        if (hy < sMinY) sMinY = hy; if (hy > sMaxY) sMaxY = hy
+      }
+      sSpanX = Math.max(1, sMaxX - sMinX)
+      var sSpanY = Math.max(1, sMaxY - sMinY)
+      particles = []
+      for (j = 0; j < sc.length; j++) {
+        var nx = (sc[j][0] - sMinX) / sSpanX        // 0 头(鲸面朝左) → 1 尾
+        var nyv = (sc[j][1] - sMinY) / sSpanY
+        var edge = sc[j][2] === 1
+        particles.push({
+          hx: sc[j][0], hy: sc[j][1],
+          x: Math.random() * W, y: Math.random() * H,
+          vx: 0, vy: 0,
+          s: edge ? 1.3 + Math.random() * 1.5 : .8 + Math.random() * 1.2,
+          edge: edge,
+          bb: Math.min(5, Math.floor(nyv * 6)),     // 静态色阶桶(y 向深海渐变)
+          ph: Math.random() * 6.2832,
+          delay01: nx * .3,                          // 入场错峰:鲸头先成形
+          amp: .18 + .82 * nx * nx,                  // 体波:尾摆幅大、头稳
+          tw: edge && Math.random() < .055,          // twinkle 高光(约全体 2-3%)
+          twF: 1.6 + Math.random() * 1.8, twP: Math.random() * 6.2832,
+          off: false
+        })
+      }
+      var edgeN = 0
+      for (j = 0; j < particles.length; j++) {
+        if (particles[j].edge) edgeN++
+        if (reducedMotion) { particles[j].x = particles[j].hx; particles[j].y = particles[j].hy }
+      }
+      stats.count = particles.length
+      stats.edgeCount = edgeN
+    }
+
+    // ---- 物理步(固定 16.7ms) ----
+    var simT = 0
+    function step() {
+      simT += .0167
+      var s = simT, i, p
+      decayField()
+      idleActive = !reducedMotion && !exiting && mouse.inside && (performance.now() - mouse.lastMove > 2500)
+      stats.idle = idleActive
+      stats.exiting = exiting
+      readyT = Math.min(1, readyT + .00835) // 2.0s 收敛窗
+      if (ampBoost > 0) ampBoost = Math.max(0, ampBoost - .02)
+      if (exiting) exitT += .0167
+      var bobY = reducedMotion ? 0 : Math.sin(s * .9) * 3.2
+      var bobR = reducedMotion ? 0 : Math.sin(s * .7) * .006
+      var breathe = reducedMotion ? 1 : 1 + Math.sin(s * .55) * .008
+      var cs = Math.cos(bobR) * breathe, sn = Math.sin(bobR) * breathe
+      var waveA = reducedMotion ? 0 : (mood === 'amber' ? .35 : 1) * (1 + ampBoost * 1.6)
+      var R = W * .22, R2 = R * R
+      for (i = 0; i < particles.length; i++) {
+        p = particles[i]
+        if (p.off) continue
+        // home:整体浮动/旋转/呼吸 + 体波行波(头稳尾摆,波向尾部传播)
+        var rx = p.hx - W / 2, ry = p.hy - H / 2
+        var hx = W / 2 + rx * cs - ry * sn
+        var hy = H / 2 + rx * sn + ry * cs + bobY
+        if (waveA > 0) hx += Math.sin((p.hx - sMinX) * .055 - s * 2.3) * p.amp * 2.3 * waveA
+        // 入场错峰收敛(头先成形)
+        var local = Math.min(1, Math.max(0, (readyT - p.delay01) / .55))
+        var conv = local * local * (3 - 2 * local)
+        var kSpring = .045 + .075 * conv
+        var ax = (hx - p.x) * kSpring
+        var ay = (hy - p.y) * kSpring
+        // 力场(鼠标轨迹场)
+        var ci = (p.x / cw) | 0, cj = (p.y / ch) | 0
+        if (ci >= 0 && cj >= 0 && ci < GW && cj < GH) {
+          var fi = cj * GW + ci
+          ax += ffx[fi] * .55; ay += ffy[fi] * .55
+        }
+        // hover 斥力(半径按画布比例,二次衰减)
+        var dx = p.x - mouse.x, dy = p.y - mouse.y
+        var d2 = dx * dx + dy * dy
+        if (d2 < R2 && d2 > .01) {
+          var d = Math.sqrt(d2), q = (R - d) / R
+          var f = q * q * 3.2
+          ax += dx / d * f; ay += dy / d * f
+        }
+        // idle 引力聚拢:松弹簧 + 向光标偏聚 + 加阻尼
+        var damp = .88
+        if (idleActive) {
+          var gx = mouse.x - p.x, gy = mouse.y - p.y
+          var gd = Math.sqrt(gx * gx + gy * gy)
+          if (gd < 150 && gd > 3) {
+            var prox = 1 - gd / 150
+            ax += (gx / gd) * prox * 1.4 + gx * .010 - (hx - p.x) * (kSpring * .82)
+            ay += (gy / gd) * prox * 1.4 + gy * .010 - (hy - p.y) * (kSpring * .82)
+            damp = .82
+          }
+        }
+        // 微噪声漂移(呼吸感)
+        if (!reducedMotion) {
+          ax += Math.sin(s * 1.3 + p.ph) * .012
+          ay += Math.cos(s * 1.1 + p.ph * 1.7) * .012
+        }
+        // 谢幕:向左前方(鲸面朝向)加速游走
+        if (exiting) {
+          ax -= .8 + exitT * 2.6
+          ay -= .3
+        }
+        p.vx = (p.vx + ax) * damp
+        p.vy = (p.vy + ay) * damp
+        p.x += p.vx; p.y += p.vy
+      }
+      // spark 步进
+      for (i = sparks.length - 1; i >= 0; i--) {
+        var sk = sparks[i]
+        sk.life -= sk.decay
+        if (sk.life <= 0) { sparks[i] = sparks[sparks.length - 1]; sparks.pop(); continue }
+        sk.x += sk.vx; sk.y += sk.vy
+        sk.vx *= .965; sk.vy *= .965
+      }
+      stats.sparks = sparks.length
+      // 谢幕尾迹:尾部粒子向后拖 spark
+      if (exiting && Math.random() < .55) {
+        var tp = particles[(Math.random() * particles.length) | 0]
+        if (tp && !tp.off) pushSpark({ x: tp.x, y: tp.y, vx: 1 + Math.random() * 1.5, vy: (Math.random() - .5), life: 1, decay: .03, s: 1.2 + Math.random() * 1.4, kind: 0 })
+      }
+    }
+
+    // ---- 绘制:分桶批量 fillRect(每帧 ≤12 次 fillStyle) ----
+    function draw(s) {
+      ctx.clearRect(0, 0, W, H)
+      ctx.globalCompositeOperation = 'lighter'
+      var pal = PAL[mood], i, p, b, q
+      for (b = 0; b < 12; b++) bins[b].length = 0
+      for (i = 0; i < particles.length; i++) {
+        p = particles[i]
+        if (p.off || p.tw) continue
+        var sp = Math.abs(p.vx) + Math.abs(p.vy)
+        bins[p.bb * 2 + ((p.edge || sp > 1.4) ? 1 : 0)].push(p)
+      }
+      var exitingDraw = exiting && !reducedMotion
+      for (b = 0; b < 12; b++) {
+        var arr = bins[b]
+        if (!arr.length) continue
+        ctx.fillStyle = pal[b]
+        if (exitingDraw) {
+          // 谢幕错峰淡出(头先散,尾拖后)
+          for (q = 0; q < arr.length; q++) {
+            p = arr[q]
+            var aMul = 1 - Math.min(1, Math.max(0, (exitT - p.delay01 * .8) / .38))
+            if (aMul <= 0) continue
+            ctx.globalAlpha = aMul
+            ctx.fillRect(p.x, p.y, p.s, p.s)
+          }
+        } else {
+          for (q = 0; q < arr.length; q++) { p = arr[q]; ctx.fillRect(p.x, p.y, p.s, p.s) }
+        }
+      }
+      ctx.globalAlpha = 1
+      // twinkle 高光(错峰正弦闪烁)
+      if (!reducedMotion) {
+        for (i = 0; i < particles.length; i++) {
+          p = particles[i]
+          if (!p.tw || p.off) continue
+          var br = .5 + .5 * Math.sin(s * p.twF + p.twP)
+          var al = .25 + br * .55
+          ctx.fillStyle = mood === 'amber'
+            ? 'rgba(255,224,150,' + al.toFixed(3) + ')'
+            : 'rgba(199,216,255,' + al.toFixed(3) + ')'
+          ctx.fillRect(p.x - .4, p.y - .4, p.s * 1.5, p.s * 1.5)
+        }
+      }
+      // spark(拖尾/爆发)
+      if (sparks.length) {
+        var sc0 = mood === 'amber' ? [240, 205, 120] : [157, 180, 255]
+        var sc1 = mood === 'amber' ? [255, 232, 170] : [199, 216, 255]
+        for (i = 0; i < sparks.length; i++) {
+          var sk = sparks[i]
+          var cc = sk.kind ? sc1 : sc0
+          ctx.fillStyle = 'rgba(' + cc[0] + ',' + cc[1] + ',' + cc[2] + ',' + (sk.life * .85).toFixed(3) + ')'
+          ctx.fillRect(sk.x, sk.y, sk.s, sk.s)
+        }
+      }
+      // idle 光晕
+      if (idleActive) {
+        var g = ctx.createRadialGradient(mouse.x, mouse.y, 0, mouse.x, mouse.y, 52)
+        g.addColorStop(0, mood === 'amber' ? 'rgba(240,205,120,.14)' : 'rgba(120,155,255,.16)')
+        g.addColorStop(1, 'rgba(0,0,0,0)')
+        ctx.fillStyle = g
+        ctx.fillRect(mouse.x - 52, mouse.y - 52, 104, 104)
+      }
+      ctx.globalCompositeOperation = 'source-over'
+    }
+
+    // ---- 主循环:固定步长物理 + 自适应降级 ----
+    var last = performance.now(), acc = 0, ftRing = [], ftTick = 0, degrade = 0, rafId = 0
+    function loop(now) {
+      rafId = requestAnimationFrame(loop)
+      if (document.hidden) { last = now; return }
+      var dt = now - last; last = now
+      if (dt > 120) dt = 120
+      if (degrade >= 2) { acc += dt; if (acc < 33.4) return; dt = acc; acc = 0 } // 30fps 节流
+      var t0f = performance.now()
+      acc += dt
+      var steps = 0
+      while (acc >= 16.7 && steps < 3) { acc -= 16.7; step(); steps++ }
+      if (steps > 0) draw(simT)
+      if (exiting && exitT > 1.15) { cancelAnimationFrame(rafId); ctx.clearRect(0, 0, W, H); return }
+      // 帧耗时统计 + 降级(隐 30% → 30fps),只降不升(启动页短生命周期)
+      var cost = performance.now() - t0f
+      ftRing.push(cost); if (ftRing.length > 40) ftRing.shift()
+      if (++ftTick % 12 === 0 && degrade < 2 && ftRing.length >= 20) {
+        var sum = 0
+        for (var i = 0; i < ftRing.length; i++) sum += ftRing[i]
+        stats.frameMs = Math.round(sum / ftRing.length * 100) / 100
+        var sorted = ftRing.slice().sort(function (a, b) { return a - b })
+        stats.p95 = Math.round(sorted[Math.floor(sorted.length * .95)] * 100) / 100
+        if (stats.frameMs > 8) {
+          degrade++
+          if (degrade === 1) for (var j = 0; j < particles.length; j++) particles[j].off = (j % 10) < 3
+        }
+        stats.degrade = degrade
+      }
+    }
+
+    // ---- 阶段联动:crash 琥珀 / ready 谢幕(壳侧时序零改动,纯视觉响应) ----
+    document.body.addEventListener('dsh-wstage', function (ev) {
+      var name = ev.detail
+      if (name === 'ready') {
+        if (!reducedMotion) exiting = true
+      } else {
+        mood = name === 'crash' ? 'amber' : 'blue'
+        stats.mood = mood
+        if (reducedMotion) draw(simT) // 静态模式按需重绘新 palette
+      }
+    })
+
+    // ---- 启动 ----
+    var rzTimer = 0
+    window.addEventListener('resize', function () {
+      clearTimeout(rzTimer)
+      rzTimer = setTimeout(function () {
+        sampleWhale(function (pts) {
+          initParticles(pts)
+          if (reducedMotion) { draw(simT); return }
+        })
+      }, 150)
+    })
+
+    resize()
+    sampleWhale(function (pts) {
       initParticles(pts)
-      requestAnimationFrame(frame)
+      if (reducedMotion) { draw(simT); return } // 静态鲸形一次成形,按需重绘
+      requestAnimationFrame(loop)
     })
   })()
 
@@ -278,16 +584,25 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   }
 
+  // [T11] 背景视差:鼠标归一化 → 弹性平滑;光斑按半径取深度(大=近=位移大,≤24px),极轻不抢鲸鱼
+  var bgM = { x: 0, y: 0, tx: 0, ty: 0 }
+  var bgOn = !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  if (bgOn) window.addEventListener('pointermove', function (ev) {
+    bgM.tx = (ev.clientX / window.innerWidth) * 2 - 1
+    bgM.ty = (ev.clientY / window.innerHeight) * 2 - 1
+  })
   function frameBg(t) {
     var s = t * .001
+    if (bgOn) { bgM.x += (bgM.tx - bgM.x) * .04; bgM.y += (bgM.ty - bgM.y) * .04 }
     ctx.globalCompositeOperation = 'source-over'
     ctx.fillStyle = '#0a0a0a'
     ctx.fillRect(0, 0, W, H)
     ctx.globalCompositeOperation = 'lighter'
     for (var i = 0; i < BLOBS.length; i++) {
       var b = BLOBS[i]
-      var cx = (b.ox + Math.sin(s * b.fx * 6.2832 + b.px * 6.2832) * .22) * W
-      var cy = (b.oy + Math.cos(s * b.fy * 6.2832 + b.py * 6.2832) * .20) * H
+      var depth = (0.35 + b.r) * 26
+      var cx = (b.ox + Math.sin(s * b.fx * 6.2832 + b.px * 6.2832) * .22) * W + bgM.x * depth
+      var cy = (b.oy + Math.cos(s * b.fy * 6.2832 + b.py * 6.2832) * .20) * H + bgM.y * depth * .62
       var rad = b.r * Math.max(W, H) * (1 + Math.sin(s * .18 + i * 1.7) * .12)
       var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad)
       g.addColorStop(0, 'rgba(' + b.c + ',' + b.a + ')')
@@ -310,17 +625,106 @@
   requestAnimationFrame(frameBg)
   canvas.classList.add('loaded')
 
+  // ---------- [T11] 字标交互引擎:逐字近距响应 + 划过流光 + crash 琥珀联动 ----------
+  // 鲸鱼引擎(上方 IIFE)零改动。10 条 path(鲸形 g + 9 字母)各自弹簧驱动:字心高斯感应
+  // (85px 特征半径)→ 上浮 + 品牌蓝 drop-shadow 辉光,远离收敛后清样式停写。SVG 内 CSS
+  // transform/filter 长度按用户单位计,以 K=渲染宽/143 换算屏幕幅度。流光 = 覆盖层 div 以
+  // 同一份 DSH_LOGO_SVG 作 mask(与鲸鱼采样同一 btoa 编码;pointerenter 触发,1.4s 冷却)。
+  // 入场 ds-hero-enter 带 translateY,结束前量字心会偏 20px → animationend 后重量 + 1.3s 兜底。
+  ;(function () {
+    var wm = document.getElementById('wordmark')
+    var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (!wm) return
+    var svgEl = wm.querySelector('svg')
+    if (!svgEl || !window.DSH_LOGO_SVG) return
+    var moodRGB = [157, 180, 255]   // blue 辉光;crash → 琥珀
+    var nodes = wm.querySelectorAll('path')
+    var paths = [], K = 1
+    for (var i = 0; i < nodes.length; i++) {
+      // 鲸形 path 在 clip g 内:位移挂 g 上让 clip 随动,避免上浮被裁底
+      paths.push({ el: i === 0 ? nodes[i].parentNode : nodes[i], bb: nodes[i], cx: 0, cy: 0, v: 0, w: false })
+    }
+    function measure() {
+      var r = svgEl.getBoundingClientRect()
+      if (!r.width) return
+      K = r.width / 143
+      for (var i = 0; i < paths.length; i++) {
+        var bb = paths[i].bb.getBBox()
+        paths[i].cx = r.left + (bb.x + bb.width / 2) * K
+        paths[i].cy = r.top + (bb.y + bb.height / 2) * K
+      }
+    }
+    var mx = -1e4, my = -1e4
+    window.addEventListener('pointermove', function (ev) { mx = ev.clientX; my = ev.clientY })
+    var R2 = 85 * 85
+    function tick() {
+      requestAnimationFrame(tick)
+      for (var i = 0; i < paths.length; i++) {
+        var p = paths[i]
+        var dx = mx - p.cx, dy = my - p.cy, d2 = dx * dx + dy * dy
+        var t = d2 > 65025 ? 0 : Math.exp(-d2 / R2)
+        p.v += (t - p.v) * .16
+        if (p.v < .005) {
+          if (p.w) { p.w = false; p.el.style.transform = ''; p.el.style.filter = '' }
+          continue
+        }
+        p.w = true
+        p.el.style.transform = 'translateY(' + (-3.2 / K * p.v).toFixed(2) + 'px)'
+        p.el.style.filter = 'drop-shadow(0 0 ' + (4.2 / K * p.v).toFixed(1) + 'px rgba(' +
+          moodRGB[0] + ',' + moodRGB[1] + ',' + moodRGB[2] + ',' + (.85 * p.v).toFixed(2) + '))'
+      }
+    }
+    // 流光覆盖层:mask 不支持的环境(极老内核)整个跳过,避免未裁剪渐变条裸奔
+    var sheen = null
+    var supportsMask = window.CSS && (CSS.supports('mask-image', 'url("data:,x")') || CSS.supports('-webkit-mask-image', 'url("data:,x")'))
+    if (supportsMask) {
+      var uri = 'url("data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(window.DSH_LOGO_SVG))) + '")'
+      sheen = document.createElement('div')
+      sheen.className = 'sheen'
+      sheen.style.maskImage = uri
+      sheen.style.webkitMaskImage = uri
+      sheen.style.maskSize = '100% 100%'
+      sheen.style.webkitMaskSize = '100% 100%'
+      sheen.appendChild(document.createElement('div')).className = 'sheen-band'
+      wm.appendChild(sheen)
+    }
+    var lastSheen = 0
+    wm.addEventListener('pointerenter', function () {
+      if (reduced || !sheen) return
+      var now = performance.now()
+      if (now - lastSheen < 1400) return
+      lastSheen = now
+      sheen.classList.remove('run'); void sheen.offsetWidth; sheen.classList.add('run')
+    })
+    document.body.addEventListener('dsh-wstage', function (ev) {
+      moodRGB = ev.detail === 'crash' ? [240, 205, 120] : [157, 180, 255]
+    })
+    wm.addEventListener('animationend', function (ev) {
+      if (ev.animationName === 'ds-hero-enter') measure()  // 入场 translateY 归零后重量字心
+    })
+    window.addEventListener('resize', function () { clearTimeout(measure._t); measure._t = setTimeout(measure, 150) })
+    measure()
+    setTimeout(measure, 1300)  // 兜底:入场动画(.12s 延迟 + .8s)结束后再校一次
+    if (!reduced) requestAnimationFrame(tick)
+  })()
+
   // ---------- 启动阶段 → 进度 ----------
+  // [q196] ui 阶段:服务就绪后 Web UI 挂载前(冷启动可达 10s+),进度从「等待服务」
+  // 平滑过渡到「加载界面」;'ready'(100%)由壳在揭窗节拍时才发,不再提前谎报「即将进入」。
   var STAGES = {
     probe: ['探测本地服务…', 10],
     spawn: ['启动 dsh 服务…', 24],
     wait: ['等待服务就绪(首次运行需下载依赖)…', 55],
+    ui: ['正在加载界面…', 88],
     ready: ['即将进入', 100],
     crash: ['dsh 服务异常退出,正在自动恢复…', 12],
   }
   var elStage = document.getElementById('stage')
   var elFill = document.getElementById('fill')
   var bridge = window.dshDesktop // 壳 preload 注入;file:// 直开预览时缺省容错
+  function fireStage(name) {
+    document.body.dispatchEvent(new CustomEvent('dsh-wstage', { detail: name }))
+  }
   if (bridge && bridge.onStage) {
     bridge.onStage(function (name) {
       var s = STAGES[name]
@@ -328,15 +732,17 @@
       document.body.classList.toggle('crash', name === 'crash')
       elStage.textContent = s[0]
       elFill.style.width = s[1] + '%'
+      fireStage(name)
     })
-  } else {
-    // 预览模式:模拟阶段推进
+  } else if (!/[?&]hold/.test(location.search)) {
+    // 预览模式:模拟阶段推进(?hold 供验收脚本手动驱动阶段)
     var seq = [['probe', 0], ['spawn', 700], ['wait', 1600], ['ready', 3200]]
     seq.forEach(function (it) {
       setTimeout(function () {
         var s = STAGES[it[0]]
         elStage.textContent = s[0]
         elFill.style.width = s[1] + '%'
+        fireStage(it[0])
       }, it[1])
     })
   }

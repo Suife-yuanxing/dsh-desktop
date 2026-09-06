@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "productName": "DeepSeek Harness",
-  "version": "0.5.3",
+  "version": "0.5.15",
   "description": "DeepSeek Harness desktop shell - Electron wrapper for the official Web UI",
   "main": "main.js",
   "author": "local",
@@ -11,6 +11,7 @@
     "predist": "node scripts/check-dist-lock.mjs",
     "dist": "electron-builder --win --config builder.yml --publish never",
     "verify:runtime": "node scripts/check-dsh-runtime.mjs",
+    "verify:boot-gate": "node scripts/check-boot-gate.mjs",
     "audit:patches": "node scripts/audit-patch-coverage.cjs",
     "fix:vision-router-portal": "node scripts/patch-vision-router-portal.mjs",
     "fix:mnemon-settings-visibility": "node scripts/patch-mnemon-settings-visibility.mjs"
