@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop-version-tab",
   "description": "dsh-desktop shell integration: plugin manage tab + persona/skills/skin/update settings sections",
-  "version": "0.3.8",
+  "version": "0.4.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

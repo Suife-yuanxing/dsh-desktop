@@ -69,6 +69,29 @@ window.__ModuleLoader__.load({
 			".cm_count{font-size:12px;color:var(--dsw-alias-label-tertiary)}",
 			".sk_thumb{width:52px;height:52px;border-radius:8px;object-fit:cover;flex-shrink:0;border:1px solid var(--dsw-alias-border-l2);background:rgba(127,127,127,.08)}",
 			".sk_thumbW{width:76px;height:52px}",
+			// ---- [WE] Wallpaper Engine 壁纸画廊卡:预览优先的响应式网格 ----
+			// 壁纸选型的决策信息是画面本身,行内 76×52 缩略图不够看;卡片放大预览,
+			// 状态(当前背景)上图画角标,操作按钮随卡片就地落位,不再漂在整行最右。
+			".we_grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(236px,1fr));gap:10px;align-content:start}",
+			".we_gridNA{grid-template-columns:repeat(auto-fill,minmax(188px,1fr));gap:8px}",
+			".we_card{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;overflow:hidden;transition:border-color .18s ease,box-shadow .18s ease}",
+			".we_card:hover{border-color:var(--dsw-alias-label-tertiary)}",
+			".we_cardOn{border-color:#d97757;box-shadow:0 0 0 1px rgba(217,119,87,.30)}",
+			".we_cardOn:hover{border-color:#d97757}",
+			".we_cardNA .we_prev{filter:saturate(.55) opacity(.85)}",
+			".we_prevWrap{position:relative;aspect-ratio:16/9;background:rgba(127,127,127,.08);border-bottom:1px solid var(--dsw-alias-border-l2)}",
+			".we_prev{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}",
+			".we_prevEmpty{display:flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);font-size:18px;font-weight:600}",
+			".we_chips{position:absolute;top:8px;left:8px;right:8px;display:flex;gap:6px;justify-content:flex-end;pointer-events:none}",
+			".we_chip{font-size:11px;line-height:1;padding:4px 9px;border-radius:99px;background:rgba(15,15,15,.62);color:#fff;letter-spacing:.02em}",
+			".we_chipOn{background:#d97757;color:#231107;font-weight:600}",
+			".we_body{display:flex;flex-direction:column;gap:5px;padding:10px 12px 12px;flex:1;min-width:0}",
+			".we_name{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}",
+			".we_meta{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:2px}",
+			".we_wid{font-family:var(--dsw-font-mono);font-size:11px;color:var(--dsw-alias-label-tertiary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+			".we_card .pm_btn{padding:5px 14px}",
+			".we_naDesc{font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.5}",
+			"@media (prefers-reduced-motion:reduce){.we_card{transition:none}}",
 			".cm_side input[type=range]{width:110px;accent-color:#d97757;cursor:pointer}",
 			// ---- 设置页统一版式(重绘:页头 + 卡片分组 + 行/控件精化) ----
 			// [R42] max-width 760→none:面板已统一加宽到 1180px(与插件市场同宽),内容区随宽填充
@@ -87,9 +110,17 @@ window.__ModuleLoader__.load({
 			".sk_tab:hover{color:var(--dsw-alias-label-primary)}",
 			".sk_tabOn{background:var(--dsw-alias-bg-module-platform,#fff);border-color:var(--dsw-alias-border-l2);color:#d97757;box-shadow:0 1px 4px rgba(0,0,0,.08)}",
 			// ---- [问题79] 插件市场批量下载队列:卡片注入按钮 + 固定队列坞 ----
-			".mqAdd{background:transparent;color:var(--dsw-alias-label-secondary);border:1px dashed var(--dsw-alias-border-l2);border-radius:6px;padding:3px 8px;font-size:12px;cursor:pointer;margin-right:6px;transition:border-color .15s,color .15s}",
-			".mqAdd:hover{border-color:var(--dsw-alias-label-secondary);color:var(--dsw-alias-label-primary)}",
-			".mqAddOn{border-style:solid;border-color:#3fb950;color:#3fb950}",
+			// [R75] "+队列"键重打磨。联动错觉根源:cardAction 是无 gap 的 inline-flex,旧
+			// margin-right 加在队列键右侧 → 与安装按钮 0 间隙贴合,方角 6px 紧贴药丸形
+			// 14px,悬停任一键整排读作一组分段控件。改:左间隙 7px 拉开两键(悬停永不
+			// 殃及邻键,鼠标到哪哪键才亮)、药丸形对齐设计语言、hover 实底化只作用自身
+			// (:active 压感/:focus-visible 键盘环;安装按钮零规则触碰,实测无 CSS 耦合)。
+			".mqAdd{background:transparent;color:var(--dsw-alias-label-secondary);border:1px dashed var(--dsw-alias-border-l2);border-radius:99px;line-height:16px;padding:3px 10px;font-size:12px;cursor:pointer;margin:0 2px 0 7px;transition:background-color .18s ease,border-color .18s ease,color .18s ease,transform .12s ease}",
+			".mqAdd:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12));border-style:solid;border-color:var(--dsw-alias-label-secondary);color:var(--dsw-alias-label-primary)}",
+			".mqAdd:active{transform:scale(.95)}",
+			".mqAdd:focus-visible{outline:2px solid var(--dsw-alias-state-focus,#d97757);outline-offset:1px}",
+			"@media (prefers-reduced-motion:reduce){.mqAdd{transition:none}}",
+			".mqAddOn{border-style:solid;border-color:#3fb950;color:#3fb950;background:rgba(63,185,80,.1)}",
 			".mq_dock{position:fixed;right:18px;bottom:18px;width:336px;z-index:99999;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:rgba(255,255,255,.94);background:light-dark(rgba(255,255,255,.94),rgba(23,25,31,.94));backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3);box-shadow:0 8px 30px rgba(0,0,0,.18);font-size:12px;overflow:hidden}",
 			".mq_head{display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l2)}",
 			".mq_title{font-weight:600;color:var(--dsw-alias-label-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
@@ -124,6 +155,18 @@ window.__ModuleLoader__.load({
 			"@media (max-width:840px){.ps_btns{justify-content:flex-start}}",
 			".pm_search{border-radius:10px;transition:border-color .15s,box-shadow .15s}",
 			".pm_search:focus-within{border-color:#d97757;box-shadow:0 0 0 3px rgba(217,119,87,.12)}",
+			// ---- [R73] 官方插件配置卡(插件→插件配置 tab)布局修正:防拉伸 + 展开卡通栏 ----
+			// 官方卡片网格(ul[class*="_cards"])默认 align-items:normal → stretch:
+			// 同行折叠卡被展开高卡拉成"标题+大片空白"空壳(高度对齐却无内容)。
+			// 展开态卡与折叠态卡(_a_card/_setCard)是不同构件——无类 SECTION:
+			// 1) items 顶对齐,各卡取自然高度;2) 展开 SECTION 通栏整行,表单字段
+			// 不再挤半栏,同行高度差消失,折叠卡维持两两并排(后缀+构件寻址,同 R43 手法)。
+			'ul[class*="_cards"]{align-items:start}',
+			'ul[class*="_cards"] > div > section{grid-column:1/-1;border:1px solid var(--dsw-alias-border-l2)}',
+			// 3) 官方列表混有空气泡位(data-slot-error="settings.plugin.item" 空 slot,
+			//    渲染为 463x0 隐形格):把插件市场挤到右列留下空位。空 slot 不生成盒,
+			//    格位即被回收;非空(真报错)时仍正常显示。
+			'ul[class*="_cards"] [data-slot-error="settings.plugin.item"]:empty{display:none}',
 			// ---- [R20→R47] 动效令牌兜底单一来源(better-sidebar 补丁冲掉时仍有效) ----
 			// [R47→优化] 节奏升级 240→380ms 强缓出(更多过渡帧,opacity+scale 协同);曲线 cubic-bezier(.16,.67,.11,.99)
 			// 侧栏/中列/entry/panel 全部随令牌同步,展开 380ms 23 帧@60fps。
@@ -181,20 +224,27 @@ window.__ModuleLoader__.load({
 			// 改由 installSidebarDotSync 按聊天内容区实时左缘 JS 定位(left/transform 留空),
 			// CSS 只管可见性;可见性再以 body.dsh-vt-chatflow-on 门控——SSH/记忆/任务看板等
 			// 无可见 chat-flow 的页面恒隐藏,不沿用聊天页坐标误显示。
-			".dsh-node-nav-rail{transition:opacity .22s ease,visibility .22s ease!important}",
+			".dsh-node-nav-rail{transition:opacity .22s ease,visibility .22s ease!important} @media (prefers-reduced-motion:reduce){.dsh-node-nav-preview,.dsh-node-nav-miss{animation:none!important}.dsh-node-nav-dot::after,.dsh-node-nav-dot::before{transition:none!important}}",
 			// [问题45] 空心灰圈风格(用户图2基准):插件基底 background:#fff + box-shadow 白晕
 			// 在壁纸上呈白色残影——改透明底 + label-tertiary 令牌描边(深浅色自适应),
 			// active 保留橙实心+呼吸光晕维持当前位辨识度。
-			".dsh-node-nav-dot{width:8px!important;height:8px!important;background:transparent!important;border:1.5px solid var(--dsw-alias-label-tertiary)!important;box-shadow:none!important;opacity:.6;transition:transform .22s cubic-bezier(.34,1.4,.64,1),background .18s ease,box-shadow .18s ease,border-color .18s ease,opacity .18s ease!important}",
-			".dsh-node-nav-dot:hover{opacity:1;transform:scale(1.3)!important;border-color:var(--dsw-alias-label-secondary)!important}",
-			".dsh-node-nav-dot-active{opacity:1!important;background:rgba(217,119,87,.98)!important;border-color:#d97757!important;box-shadow:0 0 0 3px rgba(217,119,87,.18),0 0 0 6px rgba(217,119,87,.08)!important;animation:dshVtDotBreath 4s ease-in-out infinite}",
-			"@keyframes dshVtDotBreath{0%,100%{box-shadow:0 0 0 3px rgba(217,119,87,.18),0 0 0 6px rgba(217,119,87,.08)}50%{box-shadow:0 0 0 4px rgba(217,119,87,.24),0 0 0 8px rgba(217,119,87,.1)}}",
-			".dsh-node-nav-dot-unloaded{opacity:.35!important;border-style:dashed!important}",
-			".dsh-node-nav-line{opacity:.3;transition:opacity .2s ease}",
-			".dsh-node-nav-rail:hover .dsh-node-nav-line{opacity:.85}",
-			".dsh-node-nav-bottom{opacity:.6;background:transparent!important;border-color:var(--dsw-alias-label-tertiary)!important;box-shadow:none!important;transition:transform .22s cubic-bezier(.34,1.4,.64,1),background .18s ease,box-shadow .18s ease,border-color .18s ease,opacity .18s ease!important}",
+			// [问题45→R77批次56] 空心灰圈升级玻璃珠:径向微光填充(light-dark 自适应,低 alpha
+			// +描边主导,壁纸无白残影)+内顶光;过渡曲线换 ease-out-quint 族(无回弹)。
+			".dsh-node-nav-dot{width:8px!important;height:8px!important;background:radial-gradient(circle at 32% 28%,light-dark(rgba(255,255,255,.5),rgba(255,255,255,.2)) 0%,light-dark(rgba(255,255,255,.14),rgba(255,255,255,.06)) 58%,light-dark(rgba(0,0,0,.035),rgba(255,255,255,.04)) 100%)!important;border:1.5px solid var(--dsw-alias-label-tertiary)!important;box-shadow:inset 0 1px 1px light-dark(rgba(255,255,255,.55),rgba(255,255,255,.16))!important;opacity:.72;transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s cubic-bezier(.22,1,.36,1),border-color .18s ease,opacity .18s ease!important} .dsh-node-nav-dot::after{content:\"\";position:absolute;inset:-6px;border-radius:50%;background:radial-gradient(circle,rgba(217,119,87,.17) 0%,rgba(217,119,87,0) 68%);opacity:0;transform:scale(.55);transition:opacity .2s cubic-bezier(.22,1,.36,1),transform .2s cubic-bezier(.22,1,.36,1);pointer-events:none}",
+			".dsh-node-nav-dot:hover{opacity:1;transform:scale(1.35)!important;border-color:var(--dsw-alias-label-secondary)!important;background:radial-gradient(circle at 32% 28%,light-dark(rgba(217,119,87,.3),rgba(217,119,87,.26)) 0%,light-dark(rgba(217,119,87,.13),rgba(217,119,87,.11)) 60%,light-dark(rgba(217,119,87,.07),rgba(217,119,87,.07)) 100%)!important;box-shadow:inset 0 1px 1px light-dark(rgba(255,255,255,.6),rgba(255,255,255,.2)),0 0 0 4px rgba(217,119,87,.1)!important} .dsh-node-nav-dot:hover::after{opacity:1;transform:scale(1)}",
+			".dsh-node-nav-dot-active{opacity:1!important;background:radial-gradient(circle at 32% 28%,#ec9b80 0%,#d97757 54%,#bb5938 100%)!important;border-color:rgba(158,79,51,.92)!important;box-shadow:inset 0 1px 1px rgba(255,255,255,.42),0 0 0 3px rgba(217,119,87,.15),0 1px 4px rgba(217,119,87,.3)!important;animation:dshVtDotBreath 4.5s ease-in-out infinite}",
+			"@keyframes dshVtDotBreath{0%,100%{box-shadow:inset 0 1px 1px rgba(255,255,255,.42),0 0 0 3px rgba(217,119,87,.14),0 1px 4px rgba(217,119,87,.26)}50%{box-shadow:inset 0 1px 1px rgba(255,255,255,.5),0 0 0 4px rgba(217,119,87,.22),0 2px 7px rgba(217,119,87,.38)}}",
+			// [R77批次56] 未加载态:虚线在 8px 圆上渲染成碎弧(测量见 dot-before/after-*.png)——
+			// 改 7px 细实心淡环,以尺寸+透明度表达「未加载」层级,形状完整不破损。
+			".dsh-node-nav-dot-unloaded{opacity:.3!important;width:7px!important;height:7px!important;border-style:solid!important;border-color:var(--dsw-alias-label-tertiary)!important}",
+			".dsh-node-nav-line{width:1.5px!important;margin-left:-.75px!important;opacity:.26;transition:opacity .22s ease}",
+			".dsh-node-nav-rail:hover .dsh-node-nav-line{opacity:.78}",
+			".dsh-node-nav-bottom{opacity:.66;background:radial-gradient(circle at 32% 28%,light-dark(rgba(255,255,255,.5),rgba(255,255,255,.2)) 0%,light-dark(rgba(255,255,255,.14),rgba(255,255,255,.06)) 58%,light-dark(rgba(0,0,0,.035),rgba(255,255,255,.04)) 100%)!important;border-color:var(--dsw-alias-label-tertiary)!important;box-shadow:inset 0 1px 1px light-dark(rgba(255,255,255,.55),rgba(255,255,255,.16))!important;transition:transform .2s cubic-bezier(.22,1,.36,1),background .2s cubic-bezier(.22,1,.36,1),border-color .18s ease,opacity .18s ease!important}",
 			".dsh-node-nav-bottom::after{border-color:var(--dsw-alias-label-tertiary)!important}",
-			".dsh-node-nav-bottom:hover{opacity:1;background:transparent!important;border-color:#d97757!important}",
+			".dsh-node-nav-bottom:hover{opacity:1;transform:scale(1.28)!important;background:radial-gradient(circle at 32% 28%,rgba(236,155,128,.95),rgba(217,119,87,.96) 58%,rgba(187,89,56,.98))!important;border-color:rgba(158,79,51,.92)!important;box-shadow:inset 0 1px 1px rgba(255,255,255,.4),0 0 0 4px rgba(217,119,87,.12)!important} .dsh-node-nav-bottom:hover::after{border-color:#fff!important}",
+			// [R77批次56] hover 预览浮层/miss 提示玻璃面:半透明+backdrop blur+高光描边+内顶光,
+			// 入场 ease-out-quint 0.2s(替换基底 dshNavIn 的 .16s ease);与 R51+ 液态玻璃语言同源。
+			".dsh-node-nav-preview{background:light-dark(rgba(255,255,255,.9),rgba(28,32,41,.92))!important;-webkit-backdrop-filter:blur(16px) saturate(1.5);backdrop-filter:blur(16px) saturate(1.5);border:1px solid light-dark(rgba(255,255,255,.6),rgba(255,255,255,.1))!important;box-shadow:0 12px 36px rgba(0,0,0,.16),0 2px 8px rgba(0,0,0,.08),inset 0 1px 0 light-dark(rgba(255,255,255,.55),rgba(255,255,255,.08))!important;animation:dshVtPrevIn .2s cubic-bezier(.22,1,.36,1)} @keyframes dshVtPrevIn{from{opacity:0;transform:translateX(5px)}} .dsh-node-nav-miss{background:light-dark(rgba(255,255,255,.92),rgba(28,32,41,.94))!important;-webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);border-color:light-dark(rgba(255,255,255,.6),rgba(255,255,255,.1))!important}",
 			// ---- [问题93] better-sidebar 入口 Claude 风卡片化:双钮包进圆角胶囊卡片 ----
 			// (令牌色自适应亮/暗主题;几何定位由 installSidebarEntryPin 驱动,右距写在行内/令牌)
 			'[class*="_toggleCluster"]{background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,.10),0 1px 3px rgba(0,0,0,.06);padding:3px;transition:right var(--dsh-bsr-slide-duration,.38s) var(--dsh-bsr-slide-ease,cubic-bezier(.16,.67,.11,.99)),background .15s ease,border-color .15s ease}',
@@ -210,8 +260,10 @@ window.__ModuleLoader__.load({
 			// ---- [R22] 边界:窄屏隐藏 rail;reduced-motion 全关动效 ----
 			"@media (max-width:900px){.dsh-node-nav-rail{display:none!important}}",
 			"@media (prefers-reduced-motion:reduce){#root > div[data-slot=\"root\"] > div{transition:none!important}html[data-dsh-taskboard-active] [data-dsh-taskboard-view],html[data-dsh-ssh-active] [data-dsh-ssh-view],html[data-dsh-mnemon-active] [data-dsh-mnemon-view]{animation:none!important}.dsh-node-nav-dot-active{animation:none!important}.dsh-node-nav-dot,.dsh-node-nav-bottom,.dsh-node-nav-rail,.dsh-node-nav-line{transition:none!important}[class*=\"_panel\"],[class*=\"_toggleCluster\"],[class*=\"_bottomPanel\"]{transition:none!important}}",
-			// ---- [问题1] 设置导航统一入口:隐藏「皮肤中心」「宠物」独立导航项 ----
-			// (内容保留可激活,皮肤页入口卡编程 click 隐藏项跳转;data-section-id 由 installSettingsNavPatch 注入)
+			// ---- [问题1→2026-09-04] 「皮肤中心」「宠物」独立导航项防御性隐藏 ----
+			// 遗留主题皮肤/宠物模块已整体移除(入口卡/安装态检测/返回路径均删);
+			// 若日后装回 @linxin666/dsh-skins、@linxin666/dsh-pet,其导航项仍不出现。
+			// (data-section-id 由 installSettingsNavPatch 注入)
 			"button[data-section-id=\"skin-center\"],button[data-section-id=\"pet\"]{display:none!important}",
 			// ---- [R29] 移除聊天框上方 git 分支 chip(分离 HEAD):侧边栏 Git 面板已有同类信息 ----
 			// 兜底层:patches.cjs [I] 段已让 BranchChip 不再入 DOM;此规则防插件升级后补丁锚点失配时 chip 复现。
@@ -229,7 +281,42 @@ window.__ModuleLoader__.load({
 			// 保留的 :has 规则仅用于清理旧副标题时的换行复位。
 			// 导航项统一:圆角 8 + hover/激活过渡 Claude 曲线(语义后缀 _navCell 稳定,哈希前缀随构建浮动)
 			'[class*="_navCell"]{border-radius:8px!important;transition:background .2s cubic-bezier(.32,.72,0,1),color .2s cubic-bezier(.32,.72,0,1)!important}',
-			'[class*="_navList"]{gap:2px}',
+			'[class*="_navList"]{gap:2px;position:relative}',
+			// ---- [navfx] 切区段动效:滑移高亮药丸 + 激活图标 settle(配合 installSettingsNavPatch 的 MO 检测) ----
+			// 滑行期间抑制真实激活底色(药丸即高亮本体;落位后与真实底色交叉淡接)。
+			// 特异性 (0,4,0) 压过皮肤纱色规则 (0,3,0):玻璃形态下皮肤 style 注入晚于本表,同特异性会输级联序。
+			'.dsh-vt-nav-gliding [class*="_navCell"][class*="_active"][aria-current="true"]{background:transparent!important;transition:none!important}',
+			// 药丸:绝对定位于 navList(position:relative 见上),z-index:-1 垫在文字下、面板底色上;只动 transform/opacity
+			'.dsh-vt-nav-glidePill{position:absolute;border-radius:8px;pointer-events:none;z-index:-1;opacity:1;will-change:transform;transition:transform .22s cubic-bezier(.32,.72,0,1),opacity .2s cubic-bezier(.32,.72,0,1)}',
+			// [iconfx2] 图标语义动效(检索定稿:语义动效优先——动作呼应图标含义,NN/g、M3 Motion;
+			// 自绘技法:pathLength=1 + dashoffset,CSS-Tricks/MDN)。两层:
+			// 1) 激活自绘:切区段时新激活图标的描边逐笔画出——首笔延迟 160ms 与药丸滑行
+			//    (220ms)交接,多笔画按次序错峰。dash 属性只存在于激活态规则,失活即还原
+			//    实线;作用域锁 svg[data-dsh-icon],注入未运行的兜底场景不误伤上游图标。
+			//    offset 取 1.02 而非 1:round 线帽在满偏移时会在起点露出一个圆点伪影。
+			'button[data-section-id][aria-current="true"] svg[data-dsh-icon] > *{stroke-dasharray:1;stroke-dashoffset:1.02;animation:dshVtIconDraw .3s cubic-bezier(.32,.72,0,1) .16s forwards}',
+			'button[data-section-id][aria-current="true"] svg[data-dsh-icon] > :nth-child(2){animation-delay:.27s}',
+			'button[data-section-id][aria-current="true"] svg[data-dsh-icon] > :nth-child(3){animation-delay:.38s}',
+			'button[data-section-id][aria-current="true"] svg[data-dsh-icon] > :nth-child(4){animation-delay:.49s}',
+			'@keyframes dshVtIconDraw{from{stroke-dashoffset:1.02}to{stroke-dashoffset:0}}',
+			// 2) 悬停语义预告:每个图标一个呼应含义的动作(仅 transform,同曲线,不用缩放;
+			//    transition 平滑去回)。窄幅仅图标模式下反馈同样落在图标上。
+			'[class*="_navCell"] svg,[class*="_navCell"] svg > *{transition:transform .3s cubic-bezier(.32,.72,0,1)}',
+			'.dshi-u-needle{transform-box:fill-box;transform-origin:0% 100%}',
+			'.dshi-p-head,.dshi-m-top,.dshi-a-k1,.dshi-a-k2,.dshi-s-div,.dshi-up-a{transform-box:fill-box;transform-origin:center}',
+			'button[data-section-id="general"]:hover svg{transform:rotate(22.5deg)}', // 齿轮转半个齿距(射线间隔 45°)
+			'button[data-section-id="models"]:hover svg{transform:rotate(-6deg)}', // 立方体拿起端详
+			'button[data-section-id="usage"]:hover .dshi-u-needle{transform:rotate(-28deg)}', // 仪表指针扫描
+			'button[data-section-id="persona"]:hover .dshi-p-head{transform:translateY(-1px)}', // 人像颔首
+			'button[data-section-id="skills"]:hover svg{transform:rotate(8deg)}', // 闪电一闪
+			'button[data-section-id="memory"]:hover .dshi-m-top{transform:translateY(-1px)}', // 数据库顶盖抬起
+			'button[data-section-id="skin"]:hover svg{transform:translateY(1px)}', // 水滴将坠
+			'button[data-section-id="plugins"]:hover svg{transform:translateY(1.2px)}', // 插头插下
+			'button[data-section-id="market"]:hover svg{transform:translateY(-1px)}', // 提起购物袋
+			'button[data-section-id="agent-preset"]:hover .dshi-a-k1{transform:translateX(-2px)}', // 滑块旋钮滑动
+			'button[data-section-id="agent-preset"]:hover .dshi-a-k2{transform:translateX(2px)}',
+			'button[data-section-id="sidebar-card"]:hover .dshi-s-div{transform:translateX(1px)}', // 面板分隔线展开
+			'button[data-section-id="updates"]:hover .dshi-up-a{transform:translateY(1px)}', // 下载箭头下探
 			// section 内容区卡片统一:settings.section 作用域内常见卡片/行容器圆角与边框节奏
 			'[data-slot="settings.section"] [class*="_card"]{border-radius:10px!important}',
 			'[data-slot="settings.section"] [class*="_row"]{border-radius:8px!important}',
@@ -310,7 +397,7 @@ window.__ModuleLoader__.load({
 					NM + ' [class*="_grid"]{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))!important}'
 				].join("");
 			})(),
-			// ---- [R43] 皮肤中心/宠物页返回按钮(导航项已隐藏,经皮肤页入口卡进入后无路返回) ----
+			// ---- [R43→K2f] 二级子页返回胶囊(通用设置子页顶部;原皮肤中心/宠物返回路径已随遗留模块移除) ----
 			".vt_backBar{display:inline-flex;align-items:center;gap:6px;width:fit-content;margin:2px 2px 10px;padding:5px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:99px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer;user-select:none;transition:border-color .15s ease,color .15s ease,background .15s ease}",
 			".vt_backBar:hover{border-color:#d97757;color:#d97757}",
 			".vt_backBar:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px}",
@@ -327,13 +414,19 @@ window.__ModuleLoader__.load({
 			// [问题62] 设置弹窗打开时解除侧栏列裁剪(fixed overlay 被 sidebarCol/frame
 			// 的 overflow:hidden 裁得全屏不可见);弹窗打开时侧栏无动画,解除安全。
 			'html.dsh-vt-settings-open div[class*="_sidebarCol"],html.dsh-vt-settings-open div[class*="_frame"]{overflow:visible!important}',
-			// 设置内模块切换:section 内容挂载时淡入上移(React 切区段卸载旧挂载新,动画仅挂载时播)
+			// 设置内模块切换:section 内容方向性入场(navfx:切区段按导航移动方向上/下入位,空间连续性;
+			// 首次打开无 data-dsh-dir 走默认上移。React 切区段卸旧挂新,动画仅挂载时播;data-dsh-dir 由
+			// MO 微任务先于绘制写入,入场首帧即选中正确关键帧)
 			"@keyframes dshVtSectionIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}",
-			'[data-slot="settings.section"]>*{animation:dshVtSectionIn .2s ease-out}',
+			"@keyframes dshVtSectionInUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}",
+			"@keyframes dshVtSectionInDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}",
+			'[data-slot="settings.section"]>*{animation:dshVtSectionIn .22s cubic-bezier(.32,.72,0,1)}',
+			'[data-slot="settings.section"][data-dsh-dir="down"]>*{animation-name:dshVtSectionInUp}',
+			'[data-slot="settings.section"][data-dsh-dir="up"]>*{animation-name:dshVtSectionInDown}',
 			// 皮肤背景层切换淡入(applySkinVisual 换媒体时);弹窗遮罩淡入
 			"#dsh-vt-bg-layer{animation:dshVtSectionIn .25s ease-out}",
 			// reduced-motion 关闭新增动画
-			"@media (prefers-reduced-motion:reduce){div[role=dialog],[data-slot=settings.section]>*,#dsh-vt-bg-layer{animation:none!important}}",
+			"@media (prefers-reduced-motion:reduce){div[role=dialog],[data-slot=settings.section]>*,#dsh-vt-bg-layer{animation:none!important}button[data-section-id][aria-current=true] svg[data-dsh-icon] > *{animation:none!important;stroke-dasharray:none!important;stroke-dashoffset:0!important}[class*=_navCell] svg,[class*=_navCell] svg > *{transition:none!important}.dsh-vt-nav-glidePill{display:none!important}}",
 			// ---- [b13问题1/3] 交互与定位兜底(级联最后一道防线) ----
 			// 玻璃 ::after 装饰层只能作用于伪元素;若选择器误拼接(或第三方同类注入)把
 			// pointer-events:none / position:absolute inset:0 挂到表面本体,设置面板会"透明不可点"、
@@ -423,7 +516,68 @@ window.__ModuleLoader__.load({
 			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"] > button[type=\"button\"]{top:calc(var(--dsh-titlebar-safe,44px) + 10px)!important;right:24px!important;-webkit-app-region:no-drag!important;transition:background-color .15s ease,border-color .15s ease,color .15s ease}",
 			"div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"] > button[class*=\"_close\"]{top:calc(var(--dsh-titlebar-safe,44px) + 10px)!important;right:24px!important;-webkit-app-region:no-drag!important;transition:background-color .15s ease,border-color .15s ease,color .15s ease}",
 			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"] > button[type=\"button\"]:hover,div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"] > button[class*=\"_close\"]:hover{background:#e81123!important;border-color:#e81123!important;color:#fff!important}",
-			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"] > button[type=\"button\"]:active,div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"] > button[class*=\"_close\"]:active{background:#c50f1f!important;border-color:#c50f1f!important}"
+			"div[role=\"dialog\"][aria-modal=\"true\"][style*=\"11000\"] > button[type=\"button\"]:active,div[role=\"dialog\"][aria-modal=\"true\"][class*=\"_backdrop\"] > button[class*=\"_close\"]:active{background:#c50f1f!important;border-color:#c50f1f!important;color:#fff!important}",
+			// [批次101 2026-09-05] 工作区菜单交互层:原生菜单零动画瞬现。锚点全部哈希免疫
+			// ([role=menu] + [class*=_local_] 本地名),同一菜单组件族(会话行操作菜单等)同享。
+			// 入场缩放+上浮;毛玻璃抬升(88% 别名底色 + 14px 焦外,深浅主题随别名变量翻转);
+			// 条目错峰滑入(视口区 0/30ms,页脚区 60/90ms,n≥5 封顶 120ms);
+			// hover/键盘高亮右移 2px + 图标点亮品牌橙;选中勾橙色弹出;按压回缩;箭头随开合翻转。
+			"button[class*=\"_workspace\"] svg{transition:transform .3s cubic-bezier(.32,.72,0,1)!important}",
+			"button[class*=\"_workspace\"][aria-expanded=\"true\"] svg:last-of-type{transform:rotate(180deg)}",
+			"[role=\"menu\"][class*=\"_portal_\"]{animation:dshMenuIn .22s cubic-bezier(.32,.72,0,1) both!important;transform-origin:0 0;box-shadow:0 12px 40px rgba(0,0,0,.14),0 2px 8px rgba(0,0,0,.08)!important;background:color-mix(in srgb,var(--dsw-alias-bg-layer-2,#fff) 88%,transparent)!important;-webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);overflow-x:hidden!important}",
+			"[role=\"menu\"][class*=\"_portal_\"] [class*=\"_viewport_\"]{overflow-x:hidden!important}",
+			"@keyframes dshMenuIn{from{opacity:0;transform:scale(.96) translateY(-5px)}to{opacity:1;transform:none}}",
+			"[role=\"menu\"][class*=\"_portal_\"] [class*=\"_itemWrap_\"]{animation:dshItemIn .26s cubic-bezier(.32,.72,0,1) both!important}",
+			"[role=\"menu\"][class*=\"_portal_\"] [class*=\"_viewport_\"]>[class*=\"_itemWrap_\"]:nth-child(2){animation-delay:30ms!important}",
+			"[role=\"menu\"][class*=\"_portal_\"] [class*=\"_viewport_\"]>[class*=\"_itemWrap_\"]:nth-child(n+3){animation-delay:60ms!important}",
+			"[role=\"menu\"][class*=\"_portal_\"] [class*=\"_footer_\"]>[class*=\"_itemWrap_\"]:nth-child(1){animation-delay:60ms!important}",
+			"[role=\"menu\"][class*=\"_portal_\"] [class*=\"_footer_\"]>[class*=\"_itemWrap_\"]:nth-child(2){animation-delay:90ms!important}",
+			"[role=\"menu\"][class*=\"_portal_\"] [class*=\"_footer_\"]>[class*=\"_itemWrap_\"]:nth-child(n+3){animation-delay:120ms!important}",
+			"[role=\"menu\"][class*=\"_portal_\"] [class*=\"_viewport_\"]>[class*=\"_itemWrap_\"]:nth-child(n+5){animation-delay:120ms!important}",
+			"@keyframes dshItemIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}",
+			"button[class*=\"_item_\"]{transition:background-color .18s ease,transform .18s cubic-bezier(.32,.72,0,1),color .18s ease!important}",
+			"button[class*=\"_item_\"]:hover,button[class*=\"_item_\"][data-highlighted=\"true\"]{transform:translateX(2px)!important}",
+			"button[class*=\"_item_\"]:active{transform:translateX(2px) scale(.985)!important}",
+			"button[class*=\"_item_\"]:hover [class*=\"_itemIcon_\"],button[class*=\"_item_\"][data-highlighted=\"true\"] [class*=\"_itemIcon_\"]{color:#d97757!important}",
+			"button[class*=\"_item_\"][class*=\"_selected_\"] [class*=\"_itemLabel_\"]{font-weight:600}",
+			"button[class*=\"_item_\"][class*=\"_selected_\"]>svg{color:#d97757!important;animation:dshCheckPop .3s cubic-bezier(.32,.72,0,1) .12s both!important}",
+			"@keyframes dshCheckPop{from{opacity:0;transform:scale(.4)}60%{transform:scale(1.15)}to{opacity:1;transform:scale(1)}}",
+			"@media (prefers-reduced-motion:reduce){[role=\"menu\"][class*=\"_portal_\"],[role=\"menu\"][class*=\"_portal_\"] [class*=\"_itemWrap_\"],button[class*=\"_item_\"][class*=\"_selected_\"]>svg{animation:none!important}button[class*=\"_workspace\"] svg,button[class*=\"_item_\"]{transition:none!important}}",
+			// [批次103 2026-09-05] 权限/专家等上开菜单(_sideTop_,非 _portal_)「白条」两连修:
+			// ①真凶=水平滚动条:批次101 条目 hover 右移 2px 在 overflow-y:auto(→x 亦 auto)的
+			//   _viewport_ 里撑出 2px 溢出,弹出 8px 经典滚动条(--dsh-scrollbar-thumb=#e5e5e5 圆角),
+			//   菜单 126→134,灰带悬于末行下=用户截图白条;仅 hover 时出现(用户二轮反馈定位)。
+			//   修复:全菜单族 viewport overflow-x:hidden(菜单恒纵向列表,横向滚动无意义;
+			//   批次101 只覆盖了 _portal_ 族,此族漏网)。注意:隐藏窗口下 :hover 样式不重算
+			//   (matches(':hover')=true 但 computed transform 不更新),CDP 复现必须前台窗口。
+			// ②贴附化:该族浮在白色输入卡上,原三层阴影(粉环+y3/blur8+无偏移 blur20 环境影)
+			//   在卡面画出宽衰减灰带+8css 白缝,观感松散。收底 padding 4→2、translate 下移 3px
+			//   令底环贴触发按钮顶缘(缝隙 8→1css)、阴影换单层紧接触影(衰减 8px→2px)。
+			//   _portal_ 菜单浮在页面米色底上无此问题且由批次101 玻璃层负责,显式排除避免互斥。
+			"[role=\"menu\"] [class*=\"_viewport_\"]{overflow-x:hidden!important}",
+			"[role=\"menu\"][class*=\"_sideTop_\"]:not([class*=\"_portal_\"]){padding-bottom:2px!important;translate:0 3px!important;box-shadow:rgb(234,220,226) 0px 0px 0px 0.5px,0 4px 10px -4px rgba(0,0,0,.10)!important}",
+			// ---- [R80] 归档会话管理页:列表/统计/幽灵警示/行操作 ----
+			".am_root{display:flex;flex-direction:column;gap:10px;padding:4px 0}",
+			".am_top{display:flex;align-items:center;justify-content:space-between;gap:10px}",
+			".am_stats{font-size:12px;color:var(--dsw-alias-label-secondary)}",
+			".am_btn{background:var(--dsw-alias-fill-l2);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 12px;font-size:12px;cursor:pointer;transition:border-color .18s,color .18s}",
+			".am_btn:hover{border-color:#d97757;color:#d97757}",
+			".am_btn:disabled{opacity:.45;cursor:default}",
+			".am_btnDanger{background:transparent;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:3px 12px;font-size:12px;cursor:pointer}",
+			".am_btnDanger:hover{border-color:#f85149;color:#f85149}",
+			".am_ghost{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid rgba(210,153,34,.45);background:rgba(210,153,34,.08);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--dsw-alias-label-primary)}",
+			".am_list{display:flex;flex-direction:column;gap:6px;max-height:56vh;overflow:auto}",
+			".am_row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:9px 12px}",
+			".am_main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}",
+			".am_title{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary);display:flex;align-items:center;gap:8px;min-width:0}",
+			".am_titleTxt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+			".am_meta{font-size:11px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+			".am_badge{font-size:10px;color:#d29922;border:1px solid rgba(210,153,34,.5);border-radius:99px;padding:0 7px;flex-shrink:0}",
+			".am_badgeEmpty{color:var(--dsw-alias-label-tertiary);border-color:var(--dsw-alias-border-l2)}",
+			".am_actions{display:flex;align-items:center;gap:6px;flex-shrink:0}",
+			".am_empty{border:1px dashed var(--dsw-alias-border-l2);border-radius:10px;padding:26px 12px;text-align:center;font-size:12px;color:var(--dsw-alias-label-tertiary)}",
+			".am_msg{font-size:12px;color:var(--dsw-alias-label-tertiary);min-height:16px;word-break:break-all}",
+			".am_msgErr{color:#f85149}.am_msgOk{color:#3fb950}",
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -433,6 +587,43 @@ window.__ModuleLoader__.load({
 			tag.textContent = css;
 			document.head.appendChild(tag);
 		}
+
+		// [批次100 2026-09-04] 启动遮蔽:重载/重启后的数据水合窗口里,空态 hero(composerHero/
+		// headline)与会话流(chat-flow)尚未挂载而 composer 卡先行顶置渲染——裸卡停在页顶
+		// ~2.5s,即用户截图的「重载/重启后布局破碎」态(R84 restoring 占位只覆盖 listPhase=
+		// pending 一段,hero=true 而内容未挂的窗口仍漏)。dsh-booting 期间隐藏 composer 卡;
+		// 空态或会话态任一就绪即解除;8s 兜底强制解除,数据永不就绪也不能吞掉输入框。
+		try {
+			var bootMask = document.createElement("style");
+			bootMask.dataset.plugin = "dsh-desktop-version-tab";
+			bootMask.dataset.pluginCss = "dsh-desktop-version-tab/bootmask";
+			bootMask.textContent = "html.dsh-booting [data-composer-card]{visibility:hidden!important}";
+			document.head.appendChild(bootMask);
+			document.documentElement.classList.add("dsh-booting");
+			var bootT0 = Date.now();
+			var bootPoll = setInterval(function () {
+				var ready = true;
+				try {
+					ready = document.querySelector('[class*="_composerHero"],[class*="_headline"],[data-chat-flow]') !== null;
+				} catch (e) { /* 查询异常按就绪处理,宁可早显不可久藏 */ }
+				if (ready || Date.now() - bootT0 > 8000) {
+					clearInterval(bootPoll);
+					document.documentElement.classList.remove("dsh-booting");
+					if (bootMask.parentNode) bootMask.parentNode.removeChild(bootMask);
+					// 隐藏窗口(最小化/遮挡)里渲染器无帧,visibility 的 1ms 过渡会冻在 hidden
+					// 起点直到窗口可见——直接 finish 掉遮罩引发的该过渡,落定即可见。
+					try {
+						var bootCards = document.querySelectorAll("[data-composer-card]");
+						for (var bi = 0; bi < bootCards.length; bi++) {
+							var bootAnims = bootCards[bi].getAnimations();
+							for (var bj = 0; bj < bootAnims.length; bj++) {
+								if (bootAnims[bj].propertyName === "visibility") { try { bootAnims[bj].finish(); } catch (e2) { /* 已结束 */ } }
+							}
+						}
+					} catch (e) { /* 无动画环境忽略 */ }
+				}
+			}, 100);
+		} catch (e) { /* 遮蔽失败不影响启动 */ }
 
 		function api(path, opts) {
 			return fetch(SHELL_API + path, opts).then(function (r) { return r.json(); });
@@ -444,6 +635,7 @@ window.__ModuleLoader__.load({
 		var NS6 = "dshDesktop.skin";
 		var NS7 = "dshDesktop.update";
 		var NS8 = "dshDesktop.webUiPlugins";
+		var NS9 = "dshDesktop.archiveMgr";
 
 		var PHASE_ZH = { pending: "待定", loading: "加载中", active: "运行中", failed: "失败", unloading: "卸载中", unobserved: "未观察" };
 
@@ -591,14 +783,12 @@ window.__ModuleLoader__.load({
 			"web-ui-task-board": { name: "任务看板", icon: "任", entry: "侧栏入口", desc: "任务看板视图:从侧栏「任务看板」入口打开;支持任务创建/状态流转/看板列展示。" },
 			"web-ui-git-graph": { name: "Git 图谱", icon: "G", entry: "右侧面板", desc: "better-sidebar 右侧面板的 Git 分支图谱页签(聊天框分支 chip 已按 R29 移除)。" },
 			"web-ui-remote-web-ui": { name: "远程 Web UI", icon: "远", desc: "远程访问 Web 界面:从侧栏「远程访问」入口获取访问地址。" },
-			"web-ui-pet": { name: "宠物", icon: "宠", section: "pet", desc: "桌面精灵宠物:启用/选择宠物、显示与尺寸位置调节、喂食互动。" },
 			"web-ui-ssh": { name: "SSH 远程", icon: "S", entry: "侧栏入口", desc: "SSH 远程连接视图:从侧栏「SSH」入口打开,管理远程主机与会话。" },
 			"web-ui-describe-image": { name: "图片描述工具", icon: "图", entry: "宿主工具", desc: "describe-image 宿主工具的 Web 接入(工具面,无独立 UI 入口)。" },
 			"web-ui-chat-recovery": { name: "聊天恢复", icon: "恢", entry: "聊天区", desc: "会话消息恢复能力(断连/异常后的消息重建,聊天区自动生效)。" },
 			"web-ui-liangshen": { name: "量身", icon: "量", desc: "liangshen 家族组件(按模型能力定制提示)。" },
 			"web-ui-skill-explorer": { name: "技能中心", icon: "技", desc: "技能浏览入口;已按 53b 用户需求禁用(行 web-ui-skill-explorer disabled)。" },
 			"web-ui-desktop-launcher": { name: "桌面快捷方式/启动器", icon: "桌", section: "webui", desc: "创建桌面图标、启动行为与关机确认设置(配置表单在「Web UI 插件」区段)。" },
-			"web-ui-skin-center": { name: "皮肤中心", icon: "皮", section: "skin-center", desc: "预置主题皮肤试穿/应用(蓝色幻想/鲸吟/数字雨等);入口卡也在「皮肤」页。" },
 			"web-ui-better-sidebar": { name: "better-sidebar(内嵌副本)", icon: "侧", locked: "去重守护:与独立 better-sidebar 争注 /sidebar/api 致启动崩溃(问题53),保持禁用", desc: "聚合包内嵌的 better-sidebar 副本;[E] profile 守护强制禁用,启用会致 dsh 启动崩溃。" },
 			"web-ui-compat": { name: "家族聚合包(compat 行)", icon: "聚", locked: "聚合兼容行:启用会重复挂载家族子包,保持禁用", desc: "dsh-web-ui-all 聚合包的兼容挂载行;子包已逐行单独挂载,启用会重复注册。" },
 		};
@@ -727,19 +917,38 @@ window.__ModuleLoader__.load({
 		}
 
 		function rpc(method, payload) {
-			return fetch("/api/" + method, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ type: "client-request", rpcId: uuid4(), method: method, payload: payload || {} }),
-			}).then(function (r) {
-				if (!r.ok) throw new Error("HTTP " + r.status);
-				return r.json();
-			}).then(function (full) {
+			// [批次104 2026-09-05] alpha.5 把 RPC 端点整体改为斜杠风格(/api/session/list)+ 通用
+			// 信封 payload={args:{request:<实参>}}(gateway 报「missing request / does not match
+			// endpoint」实证);rc.5 基座仍是点风格(/api/session.history)+ 顶层 payload 信封。
+			// 双轨探测:斜杠端点 404 即回落点风格,结果缓存进 wireRpcMode 防逐调用重复探测。
+			var slash = method.replace(/\./g, "/");
+			function extract(full) {
 				if (!full || full.type !== "server-response") throw new Error("bad envelope");
 				if (!full.result || !full.result.ok) throw new Error((full.result && full.result.error && full.result.error.message) || "rpc error");
 				return full.result.value;
-			});
+			}
+			var attempt = function (mode) {
+				var url = mode === "slash" ? "/api/" + slash : "/api/" + method;
+				var wire = mode === "slash"
+					? { type: "client-request", rpcId: uuid4(), method: slash, payload: { args: { request: payload || {} } } }
+					: { type: "client-request", rpcId: uuid4(), method: method, payload: payload || {} };
+				return fetch(url, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(wire),
+				}).then(function (r) {
+					if (mode === "slash" && r.status === 404) { wireRpcMode = "dot"; throw { fallback: true }; }
+					if (!r.ok) throw new Error("HTTP " + r.status);
+					return r.json();
+				});
+			};
+			if (wireRpcMode === "dot") return attempt("dot").then(extract);
+			return attempt("slash").catch(function (e) {
+				if (e && e.fallback) return attempt("dot");
+				throw e;
+			}).then(extract);
 		}
+		var wireRpcMode = "slash"; // [批次104] 运行时探测结果:slash(alpha.5)| dot(rc.5)
 
 		// ---------- 人设 tab(壳 30801 读写 home patch 的 system-prompt 行) ----------
 
@@ -808,7 +1017,6 @@ window.__ModuleLoader__.load({
 		// 删除 = 递归删除条目目录/文件。工作区/内置来源仅只读展示。
 
 		var TRASH_SVG = '<svg viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>';
-		var SKILL_SRC_ZH = { "project-dsh": "工作区 .dsh/skills", "project-agents": "工作区 .agents/skills", custom: "自定义目录", bundled: "内置" };
 
 		function SkillSwitch(props) {
 			var h = react.createElement;
@@ -817,6 +1025,39 @@ window.__ModuleLoader__.load({
 				role: "switch", "aria-checked": props.on ? "true" : "false",
 				title: props.title, disabled: props.disabled, onClick: props.onClick,
 			}, h("span", { className: "cm_swDot" }));
+		}
+
+		// 技能卡片行(用户技能/其他来源两页共用):图标/来源 chip/描述/删除/开关
+		// locked = 页面级锁定(如静默重扫中):此时 dir 即将变化,拒绝交互防旧位置误操作
+		function SkillRow(props) {
+			var h = react.createElement;
+			var s = props.s;
+			var act = props.act;
+			var busyVal = props.busy;
+			var locked = !!props.locked;
+			var confirming = props.confirmDel === s.key;
+			var setConfirmDel = props.setConfirmDel;
+			var isBusy = busyVal === s.key || locked;
+			return h("div", { className: "cm_row" + (s.disabled ? " cm_rowOff" : "") },
+				h("div", { className: "cm_icon" }, (s.name || "?").charAt(0).toUpperCase()),
+				h("div", { className: "cm_main" },
+					h("div", { className: "cm_titleRow" },
+						h("span", { className: "cm_name", title: s.dir || s.name }, s.name),
+						h("span", { className: "cm_src", title: s.sourceLabel + (s.disabled ? "(已禁用)" : "") }, s.sourceLabel),
+						s.modelInvocable ? null : h("span", { className: "cm_src" }, "仅 /命令")),
+					h("div", { className: "cm_desc", title: s.description }, s.description || ""),
+					confirming ? h("div", { className: "cm_confirm" },
+						h("span", { className: "cm_confirmTxt" }, "删除后无法恢复,确认删除 " + s.name + "？"),
+						h("button", { className: "cm_btnDanger", disabled: isBusy, onClick: function () { act.remove(s); } }, "删除"),
+						h("button", { className: "cm_btnGhost", onClick: function () { setConfirmDel(null); } }, "取消")) : null),
+				confirming ? null : h("div", { className: "cm_side" },
+					h("button", { className: "cm_del", title: "删除", disabled: isBusy, onClick: function () { setConfirmDel(s.key); },
+						"aria-label": "删除 " + s.name, dangerouslySetInnerHTML: { __html: TRASH_SVG } }),
+					h(SkillSwitch, {
+						on: !s.disabled, disabled: isBusy,
+						title: s.disabled ? "启用" : "禁用",
+						onClick: function () { act.toggle(s); },
+					})));
 		}
 
 		function SkillsTab() {
@@ -832,41 +1073,16 @@ window.__ModuleLoader__.load({
 			var setConfirmDel = confirmDel[1];
 
 			var applyEntries = function (entries) {
-				setSt(function (prev) { return { status: "ready", mine: entries || (prev.mine || []), others: prev.others || [] }; });
+				setSt(function (prev) { return { status: "ready", mine: entries || (prev.mine || []) }; });
 			};
 
-			var load = function () {
-				setSt({ status: "loading" });
-				// runtime 并集沿用"最近活跃会话上下文"取法,仅用于展示非 user 级来源
-				var runtimeP = rpc("session.list", {}).then(function (v) {
-					var items = (v && v.items) || [];
-					var sorted = items.slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
-					var picked = sorted.filter(function (s) { return !s.blank; }).slice(0, 3);
-					var blankOne = sorted.filter(function (s) { return s.blank; })[0];
-					if (blankOne && picked.length < 4) picked.push(blankOne);
-					if (!picked.length) return [];
-					return Promise.all(picked.map(function (s) {
-						return rpc("skill.list", { sessionId: s.sessionId }).then(function (sv) {
-							return (sv && sv.skills) || [];
-						}).catch(function () { return []; });
-					})).then(function (lists) {
-						var byName = {};
-						var merged = [];
-						lists.forEach(function (list) {
-							list.forEach(function (sk) {
-								if (!byName[sk.name]) { byName[sk.name] = true; merged.push(sk); }
-							});
-						});
-						return merged;
-					});
-				}).catch(function () { return []; });
-				Promise.all([api("/skills"), runtimeP]).then(function (r) {
-					var mine = (r[0] && r[0].entries) || [];
-					var mineNames = {};
-					mine.forEach(function (s) { mineNames[s.name] = true; });
-					var others = (r[1] || []).filter(function (s) { return !mineNames[s.name]; });
-					setSt({ status: "ready", mine: mine, others: others });
-				}).catch(function (e) { setSt({ status: "error", message: String((e && e.message) || e) }); });
+			var load = function (silent) {
+				if (!silent) setSt({ status: "loading" });
+				api("/skills").then(function (r) {
+					setSt({ status: "ready", mine: (r && r.entries) || [] });
+				}).catch(function (e) {
+					if (!silent) setSt({ status: "error", message: String((e && e.message) || e) });
+				});
 			};
 			react.useEffect(function () { load(); }, []);
 
@@ -902,52 +1118,188 @@ window.__ModuleLoader__.load({
 				h("button", { className: "pm_btn", onClick: function () { load(); } }, "重试"));
 
 			var query = q[0].trim().toLowerCase();
-			var mine = st[0].mine.filter(function (s) {
+			var byQuery = function (s) {
 				return !query || (s.name || "").toLowerCase().indexOf(query) >= 0 || (s.description || "").toLowerCase().indexOf(query) >= 0;
-			});
+			};
+			var mine = st[0].mine.filter(byQuery);
 			var rows = mine.map(function (s) {
-				var confirming = confirmDel[0] === s.key;
-				return h("div", { key: s.key, className: "cm_row" + (s.disabled ? " cm_rowOff" : "") },
-					h("div", { className: "cm_icon" }, (s.name || "?").charAt(0).toUpperCase()),
-					h("div", { className: "cm_main" },
-						h("div", { className: "cm_titleRow" },
-							h("span", { className: "cm_name", title: s.name }, s.name),
-							h("span", { className: "cm_src", title: s.sourceLabel + (s.disabled ? "(已禁用)" : "") }, s.sourceLabel),
-							s.modelInvocable ? null : h("span", { className: "cm_src" }, "仅 /命令")),
-						h("div", { className: "cm_desc", title: s.description }, s.description || ""),
-						confirming ? h("div", { className: "cm_confirm" },
-							h("span", { className: "cm_confirmTxt" }, "删除后无法恢复,确认删除 " + s.name + "？"),
-							h("button", { className: "cm_btnDanger", disabled: busy[0] === s.key, onClick: function () { doDelete(s); } }, "删除"),
-							h("button", { className: "cm_btnGhost", onClick: function () { setConfirmDel(null); } }, "取消")) : null),
-					confirming ? null : h("div", { className: "cm_side" },
-						h("button", { className: "cm_del", title: "删除", disabled: busy[0] === s.key, onClick: function () { setConfirmDel(s.key); },
-							"aria-label": "删除 " + s.name, dangerouslySetInnerHTML: { __html: TRASH_SVG } }),
-						h(SkillSwitch, {
-							on: !s.disabled, disabled: busy[0] === s.key,
-							title: s.disabled ? "启用" : "禁用",
-							onClick: function () { doToggle(s); },
-						})));
+				return h(SkillRow, { key: s.key, s: s, act: { toggle: doToggle, remove: doDelete }, busy: busy[0], confirmDel: confirmDel[0], setConfirmDel: setConfirmDel });
 			});
 			if (!rows.length) rows = [h("div", { key: "empty", className: "pm_msg" }, query ? "无匹配技能" : "用户技能目录为空。把技能目录(含 SKILL.md)放入 ~/.dsh/skills 即可在此管理。")];
 
-			var otherRows = st[0].others.map(function (s) {
-				return h("div", { key: "o-" + s.name, className: "cm_mini" },
-					h("span", { className: "cm_miniName", title: s.name }, "/" + s.name),
-					h("span", { className: "cm_src" }, SKILL_SRC_ZH[s.source] || s.source || "其他来源"));
-			});
+			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
+			return h("div", { className: "vt_group vt_span" },
+				h("div", { className: "vt_groupTitle" }, "用户技能"),
+				h("label", { className: "pm_search" },
+					h("span", { className: "pm_tag" }, "搜索"),
+					h("input", { value: q[0], placeholder: "按名称或描述过滤", onChange: function (ev) { q[1](ev.currentTarget.value); } })),
+				h("div", { className: "cm_count" }, mine.length + " 个用户技能"),
+				h("div", { className: "pm_list vt_2col" }, rows),
+				h("div", { className: msgCls }, msg[0]),
+				h("div", { className: "pm_msg" }, "开关 = 壳在 ~/.dsh/skills(~/.agents/skills)与其 -disabled 姊妹目录间移动技能,dsh 监听目录热生效,无需重启。删除不可恢复。"));
+		}
 
-		var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
-	return h("div", { className: "vt_group vt_span" },
-		h("div", { className: "vt_groupTitle" }, "用户技能"),
-		h("label", { className: "pm_search" },
-			h("span", { className: "pm_tag" }, "搜索"),
-			h("input", { value: q[0], placeholder: "按名称或描述过滤", onChange: function (ev) { q[1](ev.currentTarget.value); } })),
-		h("div", { className: "cm_count" }, mine.length + " 个用户技能" + (st[0].others.length ? " · " + st[0].others.length + " 个其他来源" : "")),
-		h("div", { className: "pm_list vt_2col" }, rows),
-		otherRows.length ? h("div", { className: "cm_h2" }, "其他来源(随工作区/组合自动加载)") : null,
-		otherRows.length ? h("div", { className: "pm_list vt_2col" }, otherRows) : null,
-			h("div", { className: msgCls }, msg[0]),
-			h("div", { className: "pm_msg" }, "开关 = 壳在 ~/.dsh/skills(~/.agents/skills)与其 -disabled 姊妹目录间移动技能,dsh 监听目录热生效,无需重启。"));
+		// ---------- 其他来源 tab(工作区/组合/插件包技能,独立分页) ----------
+		// 枚举三条腿,全部确定性,不再赌采样会话恰好处于附加态:
+		// 1) 当前打开会话的 skill.list(必然附加——老代码只采最近会话,而 skill.list
+		//    对未附加会话一律 session-not-found,采样全空时整列消失,即"偶发识别
+		//    不到"的根因);
+		// 2) workspace.list 的工作区/组合成员路径 → 壳扫盘 <ws>/.dsh|.agents/skills±disabled;
+		// 3) 壳索引 profiles 插件包内 SKILL.md,把 1) 的名字解析到磁盘位置。
+		// 有磁盘位置的条目为可启停/删除卡片(工作区=移入 -disabled 姊妹根,热生效;
+		// 插件包=移入包内 skills-disabled/ 检疫,provider 有模块级缓存,重启宿主生
+		// 效);无磁盘位置的(虚拟 provider)只读展示。
+		function OthersTab() {
+			var h = react.createElement;
+			var st = react.useState({ status: "loading" });
+			var setSt = st[1];
+			var q = react.useState("");
+			var busy = react.useState(null);
+			var setBusy = busy[1];
+			var msg = react.useState("");
+			var setMsg = msg[1];
+			var confirmDel = react.useState(null);
+			var setConfirmDel = confirmDel[1];
+			// 静默重扫锁定:重扫期间磁盘位置可能已变,锁住旧卡片的开关/删除防误操作
+			var scanning = react.useState(false);
+			var setScanning = scanning[1];
+
+			var currentSessionId = function () {
+				try {
+					var cur = JSON.parse(localStorage.getItem("dsh.sessions.current") || "null");
+					return cur && cur.sessionId ? cur.sessionId : null;
+				} catch (e) { return null; }
+			};
+
+			var load = function (silent) {
+				if (!silent) setSt({ status: "loading" });
+				else setScanning(true);
+				// 用户技能名用于排除(用户技能归 Skill 页管,这里只管其余来源)
+				var mineNamesP = api("/skills").then(function (r) {
+					var names = {};
+					((r && r.entries) || []).forEach(function (s) { names[s.name] = true; });
+					return names;
+				}).catch(function () { return {}; });
+				var wsPathsP = rpc("workspace.list", {}).then(function (v) {
+					var out = [];
+					((v && v.items) || []).forEach(function (w) { if (w && w.path) out.push(w.path); });
+					((v && v.federations) || []).forEach(function (f) { ((f && f.memberPaths) || []).forEach(function (p) { if (p) out.push(p); }); });
+					return out;
+				}).catch(function () { return []; });
+				var sid = currentSessionId();
+				var runtimeP = (sid
+					? rpc("skill.list", { sessionId: sid }).then(function (sv) { return [(sv && sv.skills) || []]; }).catch(function () { return []; })
+					: Promise.resolve([])).then(function (first) {
+						// 近会话补充(未附加的逐个失败吞掉),兜住当前会话 cwd 之外的项目技能
+						return rpc("session.list", {}).then(function (v) {
+							var sorted = ((v && v.items) || []).slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+							var picked = sorted.filter(function (s) { return !s.blank && s.sessionId !== sid; }).slice(0, 2);
+							return Promise.all(picked.map(function (s) {
+								return rpc("skill.list", { sessionId: s.sessionId }).then(function (sv) { return (sv && sv.skills) || []; }).catch(function () { return []; });
+							})).then(function (rest) { return first.concat(rest); });
+						}).catch(function () { return first; });
+					});
+				Promise.all([mineNamesP, wsPathsP, runtimeP]).then(function (r) {
+					var mineNames = r[0] || {};
+					var byName = {};
+					(r[2] || []).forEach(function (list) { (list || []).forEach(function (sk) { if (sk && sk.name && !byName[sk.name]) byName[sk.name] = sk; }); });
+					var otherNames = Object.keys(byName).filter(function (n) { return !mineNames[n]; });
+					return api("/skills/others", {
+						method: "POST", headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ paths: r[1] || [], names: otherNames }),
+					}).then(function (res) {
+						var cards = [];
+						var cardNames = {};
+						var cleanDesc = function (d) { return d === "|" ? "" : d || "" };
+						((res && res.entries) || []).forEach(function (e) {
+							if (mineNames[e.name] || cardNames[e.name]) return;
+							cardNames[e.name] = true;
+							cards.push({ key: "oc|" + e.dir, name: e.name, description: cleanDesc(e.description), sourceLabel: e.sourceLabel, disabled: !!e.dirDisabled, modelInvocable: e.modelInvocable !== false, dir: e.dir, zone: "workspace" });
+						});
+						var resolved = (res && res.resolved) || {};
+						otherNames.forEach(function (n) {
+							if (mineNames[n] || cardNames[n]) return;
+							var hit = resolved[n];
+							if (!hit) return;
+							cardNames[n] = true;
+							cards.push({ key: "oc|" + hit.dir, name: n, description: cleanDesc(byName[n] && byName[n].description), sourceLabel: hit.label, disabled: !!hit.disabled, modelInvocable: !!(byName[n] && byName[n].modelInvocable), dir: hit.dir, zone: hit.zone });
+						});
+						cards.sort(function (a, b) { return a.name.localeCompare(b.name); });
+						var minis = otherNames.filter(function (n) { return !cardNames[n]; }).map(function (n) {
+							return { key: "om|" + n, name: n, description: (byName[n] && byName[n].description) || "" };
+						});
+						setScanning(false);
+						setSt({ status: "ready", cards: cards, minis: minis });
+					});
+				}).catch(function (e) {
+					setScanning(false);
+					if (!silent) setSt({ status: "error", message: String((e && e.message) || e) });
+				});
+			};
+			react.useEffect(function () { load(); }, []);
+
+			// 按磁盘位置(dir)寻址的启停/删除,完事后静默重扫
+			var doToggleOther = function (s) {
+				setBusy(s.key); setMsg("");
+				api("/skills/toggle", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ dir: s.dir, disabled: !s.disabled }),
+				}).then(function (r) {
+					setBusy(null);
+					if (!r.ok) { setMsg(r.error || "操作被拒绝"); return; }
+					setMsg((s.disabled ? "已启用 " : "已禁用 ") + s.name + (s.zone === "pack" ? "(重启宿主后生效)" : ""));
+					load(true);
+				}).catch(function (e) { setBusy(null); setMsg("请求失败: " + e.message); });
+			};
+
+			var doDeleteOther = function (s) {
+				setBusy(s.key); setMsg("正在删除 " + s.name + " …");
+				api("/skills/delete", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ dir: s.dir }),
+				}).then(function (r) {
+					setBusy(null); setConfirmDel(null);
+					if (!r.ok) { setMsg(r.error || "删除被拒绝"); return; }
+					setMsg("已删除 " + s.name + (s.zone === "pack" ? "(重启宿主后生效)" : ""));
+					load(true);
+				}).catch(function (e) { setBusy(null); setConfirmDel(null); setMsg("请求失败: " + e.message); });
+			};
+
+			if (st[0].status === "loading") return h("div", { className: "pm_root" }, h("div", { className: "pm_msg" }, "正在扫描其他来源…"));
+			if (st[0].status === "error") return h("div", { className: "pm_root" },
+				h("div", { className: "pm_msg pm_msgErr" }, "读取失败: " + st[0].message),
+				h("button", { className: "pm_btn", onClick: function () { load(); } }, "重试"));
+
+			var query = q[0].trim().toLowerCase();
+			var byQuery = function (s) {
+				return !query || (s.name || "").toLowerCase().indexOf(query) >= 0 || (s.description || "").toLowerCase().indexOf(query) >= 0;
+			};
+			var cards = (st[0].cards || []).filter(byQuery).map(function (s) {
+				return h(SkillRow, { key: s.key, s: s, act: { toggle: doToggleOther, remove: doDeleteOther }, busy: busy[0], confirmDel: confirmDel[0], setConfirmDel: setConfirmDel, locked: scanning[0] });
+			});
+			var minis = (st[0].minis || []).filter(byQuery).map(function (s) {
+				return h("div", { key: s.key, className: "cm_mini" },
+					h("span", { className: "cm_miniName", title: s.description || s.name }, "/" + s.name),
+					h("span", { className: "cm_src" }, "只读"));
+			});
+			if (!cards.length && !minis.length) {
+				cards = [h("div", { key: "empty", className: "pm_msg" }, query ? "无匹配技能" : "未发现其他来源技能。工作区 .dsh/skills、组合成员或插件包内的技能会出现在这里。")];
+			}
+			var total = (st[0].cards || []).length + (st[0].minis || []).length;
+			var miniCount = (st[0].minis || []).length;
+
+			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
+			return h("div", { className: "vt_group vt_span" },
+				h("div", { className: "vt_groupTitle" }, "其他来源(随工作区/组合自动加载)"),
+				h("label", { className: "pm_search" },
+					h("span", { className: "pm_tag" }, "搜索"),
+					h("input", { value: q[0], placeholder: "按名称或描述过滤", onChange: function (ev) { q[1](ev.currentTarget.value); } })),
+				h("div", { className: "cm_count" }, total + " 个技能" + (miniCount ? " · " + miniCount + " 个只读" : "")),
+				h("div", { className: "pm_list vt_2col" }, cards),
+				minis.length ? h("div", { className: "cm_h2" }, "只读来源(虚拟 provider,无磁盘位置)") : null,
+				minis.length ? h("div", { className: "pm_list vt_2col" }, minis) : null,
+				h("div", { className: msgCls }, msg[0]),
+				h("div", { className: "pm_msg" }, "开关/删除作用于磁盘:工作区技能移入 -disabled 姊妹目录,dsh 监听热生效,无需重启;插件包技能移入包内 skills-disabled/ 检疫目录,重启宿主后生效(更新插件包会还原)。删除不可恢复。"));
 		}
 
 		// ---------- MCP tab(inventory 过滤 mcp 行;启停走壳 plugins/toggle,删除仅壳管理的 insert 块) ----------
@@ -1087,7 +1439,7 @@ window.__ModuleLoader__.load({
 				h("div", { className: "pm_msg" }, "保存后热载入。要求包可从 dsh 安装或 profile 解析(dsh plugin add);serverName 全局唯一。"));
 		}
 
-		// ---------- [问题74] 技能区段双标签容器:Skill 与 MCP 分页展示 ----------
+		// ---------- [问题74] 技能区段分页容器:用户技能 / 其他来源 / MCP 三页 ----------
 		// 切换即卸载/重挂载对应 tab 组件——数据加载/空态/交互逻辑全部复用原组件,
 		// 不混排在同一列表;每次切入重新拉取保证数据新鲜。
 		function SkillsMcpSection(props) {
@@ -1109,12 +1461,15 @@ window.__ModuleLoader__.load({
 					h("p", { className: "vt_intro" }, "管理本地技能目录与 MCP 服务器连接。启停与删除即时热生效,无需重启服务。")),
 				h("div", { className: "sk_tabs vt_span", role: "tablist", "aria-label": "技能与 MCP" },
 					tabBtn("skill", "Skill"),
+					tabBtn("others", "其他来源"),
 					tabBtn("mcp", "MCP")),
 				active === "skill"
 					? h(SkillsTab)
-					: h("div", { className: "vt_group vt_span" },
-						h("div", { className: "vt_groupTitle" }, "MCP 服务器"),
-						h(McpTab, { list: props.list })));
+					: active === "others"
+						? h(OthersTab)
+						: h("div", { className: "vt_group vt_span" },
+							h("div", { className: "vt_groupTitle" }, "MCP 服务器"),
+							h(McpTab, { list: props.list })));
 		}
 
 		// ---------- 更新 tab(壳 30801:壳更新走 GitHub Releases,dsh 更新走 npm latest) ----------
@@ -1147,7 +1502,9 @@ window.__ModuleLoader__.load({
 					rt[1]({ status: "ready", info: s });
 				}).catch(function () { rt[1]({ status: "oldshell" }); });
 			};
-			react.useEffect(function () { load(); loadRt(); }, []);
+				// [R125] 挂载即自动检查:检查结果此前只随手动点击刷新,页面存活期间会一直
+				// 显示上一会话的过期失败态(如壳重启前的「npm 查询失败」),误导排查。
+				react.useEffect(function () { load(); loadRt(); doCheck(); }, []);
 
 			var pollTrackDone = function () {
 				// 切换为 202 异步编排(写轨→重启→失败回滚);轮询到 !switching 即编排结束
@@ -1185,10 +1542,14 @@ window.__ModuleLoader__.load({
 
 			var doCheck = function () {
 				setBusy(true); setMsg("正在检查更新(壳 GitHub Releases + dsh npm)…");
-				api("/updates/check").then(function (c) {
+				// [R125] 120s 超时:壳重启窗口内发起的检查可能挂死 fetch,busy 永久为真、按钮失效
+				var checkOpts = { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" };
+				try { if (window.AbortSignal && AbortSignal.timeout) checkOpts.signal = AbortSignal.timeout(120000); } catch (e) { /* 老内核无 AbortSignal.timeout */ }
+				api("/updates/check", checkOpts).then(function (c) {
 					setBusy(false);
 					setSt(function (prev) { return { status: "ready", info: prev.info, check: c }; });
-					setMsg("检查完成。");
+					if (c && c.dshError) setMsg("检查完成,但 npm 查询失败: " + c.dshError);
+					else setMsg("检查完成。");
 				}).catch(function (e) { setBusy(false); setMsg("检查失败: " + e.message); });
 			};
 
@@ -1324,13 +1685,13 @@ window.__ModuleLoader__.load({
 
 		var BG_LAYER_ID = "dsh-desktop-skin-bg";
 		var BG_STYLE_ID = "dsh-desktop-skin-style";
-		var AUDIO_ID = "dsh-desktop-skin-audio";
-		var SKIN_KIND_ZH = { image: "图片", video: "视频", audio: "音频" };
+		var SKIN_KIND_ZH = { image: "图片", video: "视频" };
 
 		// [fix] Chromium 省电策略:页面不可见(窗口最小化/被完全遮挡/后台加载)时,
 		// "video-only background media" 的 play() 会被 AbortError 拒绝并停在第一帧,
 		// 回到前台也不会自动恢复。注册 visibilitychange 重放 + 拒绝后短退避重试。
-		var skinMedia = { video: null, audio: null };
+		// (氛围音频已随 2026-09-04 移除,skinMedia 仅背景视频)
+		var skinMedia = { video: null };
 				// [R48→b13] 最近一次皮肤状态:主题(深/浅)切换时重算液态玻璃色调。
 				// 守卫:html style 属性高频变化(--lg-px/py 鼠标流光逐帧写入),仅当
 				// colorScheme 深浅实际翻转才重算,避免每帧重写整段玻璃样式。
@@ -1368,18 +1729,14 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tap);
 			document.addEventListener("visibilitychange", function () {
 				if (document.visibilityState !== "visible") return;
-				["video", "audio"].forEach(function (k) {
-					var el = skinMedia[k];
-					if (el && el.isConnected && el.paused) skinPlay(el);
-				});
+				var el = skinMedia.video;
+				if (el && el.isConnected && el.paused) skinPlay(el);
 			});
 			// [R28] 拒播兜底:任何 play() 被拒后,用户下一次任意交互(pointerdown)即恢复。
 			// 壳已设 autoplayPolicy no-user-gesture-required(正常无此场景),此为策略收紧/异常拒播的保险丝。
 			document.addEventListener("pointerdown", function () {
-				["video", "audio"].forEach(function (k) {
-					var el = skinMedia[k];
-					if (el && el.isConnected && el.paused) skinPlay(el);
-				});
+				var el = skinMedia.video;
+				if (el && el.isConnected && el.paused) skinPlay(el);
 			}, { capture: true });
 		}
 
@@ -1700,7 +2057,7 @@ window.__ModuleLoader__.load({
 			}
 		}
 
-		/** 将皮肤状态渲染为背景层(img/video)+ 透明化样式 + 氛围音频。 */
+		/** 将皮肤状态渲染为背景层(img/video)+ 透明化样式。 */
 		function applySkinVisual(state) {
 			state = state || {};
 			lastSkinState = state;
@@ -1908,6 +2265,11 @@ window.__ModuleLoader__.load({
 				// A1. 行卡(插件管理/Web UI 插件/皮肤资产/预设行):轻纱+边线;悬停加深一档
 				'[class*="_overlay"] .pm_row,[class*="_overlay"] .cm_row,[class*="_overlay"] .skn_row,[class*="_overlay"] .cm_mini{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important}',
 				'[class*="_overlay"] .pm_row:hover,[class*="_overlay"] .cm_row:hover,[class*="_overlay"] .skn_row:hover{background-color:' + veilCardHover + '!important}',
+				// [WE] 壁纸画廊卡同纱(卡身直接承载标题文字,透明底不可读);
+				// 选中卡(当前背景)的强调边线置后覆盖,不被 edgeCard 吞掉。
+				'[class*="_overlay"] .we_card{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important}',
+				'[class*="_overlay"] .we_card:hover{background-color:' + veilCardHover + '!important}',
+				'[class*="_overlay"] .we_cardOn,[class*="_overlay"] .we_cardOn:hover{border-color:#d97757!important}',
 				// A2. 输入面/详情块(搜索框/文本域/代码块/展开详情):更轻一档,焦点仍走主 css 橙环
 				'[class*="_overlay"] .pm_search,[class*="_overlay"] .ps_txt,[class*="_overlay"] .sk_code,[class*="_overlay"] .pm_detail{background-color:' + veilCardSoft + '!important;border-color:' + edgeCard + '!important}',
 				// A3. 分组卡(vt_card,底色令牌已被透明链置空)与分段标签激活态(底色令牌同被置空):
@@ -1920,6 +2282,14 @@ window.__ModuleLoader__.load({
 				'[class*="_overlay"] [class*="_a_card"],[class*="_overlay"] [class*="_setCard"]{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important}',
 				'[class*="_overlay"] [class*="_setSeg"]{background-color:' + veilCardSoft + '!important;border-radius:10px}',
 				'[class*="_overlay"] [class*="_setSegOn"]{background-color:' + veilSegOn + '!important}',
+				//    展开态配置卡是无类 SECTION(上面的类名规则够不着),按构件补同纱,
+				//    壁纸态展开卡不再是突兀白块(R73)
+				'[class*="_overlay"] ul[class*="_cards"] > div > section{background-color:' + veilCard + '!important;border-color:' + edgeCard + '!important}',
+				// B2. [R75] 市场卡"+队列"键:壁纸态 hover 令牌(0x0f 级微透)被纱底吞没,
+				// 悬停无感 → 用皮肤调色板显式托底,单键实底反馈与默认态同语义;只作用
+				// 队列键自身,安装主键(官方 primary 悬停变色)不受牵连。
+				'[class*="_overlay"] .mqAdd{background-color:' + veilCardSoft + '!important;border-color:' + edgeCard + '!important}',
+				'[class*="_overlay"] .mqAdd:hover{background-color:' + veilCardHover + '!important;border-color:' + edgeCard + '!important}',
 				// ---- [R66] 液态玻璃五阶·四表面表现优化(参考 GitHub liquid-glass 实现:
 				//      nikdelvin/liquid-glass 抛光边分层→内沿辉光已并入 depthShadow;
 				//      dashersw/liquid-glass-js 菲涅尔随光边环→mask 边环+指针流光承接;
@@ -1972,7 +2342,8 @@ window.__ModuleLoader__.load({
 					if (wantTag === "VIDEO") {
 						media = document.createElement("video");
 						media.autoplay = true; media.loop = true; media.muted = false; media.playsInline = true;
-						media.volume = typeof state.volume === "number" ? state.volume : 0.35;
+						// 氛围音频移除后音量定值(原与「氛围音频」音量滑杆共用 state.volume,默认同为 0.35)
+						media.volume = 0.35;
 					} else {
 						media = document.createElement("img");
 						media.alt = "";
@@ -1980,7 +2351,6 @@ window.__ModuleLoader__.load({
 					layer.appendChild(media);
 				}
 				if (media.getAttribute("src") !== state.bg.url) media.setAttribute("src", state.bg.url);
-				if (wantTag === "VIDEO" && typeof state.volume === "number") media.volume = state.volume;
 				skinMedia.video = wantTag === "VIDEO" ? media : null;
 				if (wantTag === "VIDEO") skinPlay(media);
 			} else if (layer) {
@@ -2001,22 +2371,6 @@ window.__ModuleLoader__.load({
 			syncGlassSvg(lgActive);
 			syncGlassTracking(lgActive);
 			syncGlassMotion(lgActive);
-			var audioEl = document.getElementById(AUDIO_ID);
-			if (state.audio && state.audio.url) {
-				if (!audioEl) {
-					audioEl = document.createElement("audio");
-					audioEl.id = AUDIO_ID;
-					audioEl.loop = true;
-					document.body.appendChild(audioEl);
-				}
-				if (audioEl.getAttribute("src") !== state.audio.url) audioEl.setAttribute("src", state.audio.url);
-				audioEl.volume = typeof state.volume === "number" ? state.volume : 0.35;
-				skinMedia.audio = audioEl;
-				skinPlay(audioEl);
-			} else if (audioEl) {
-				skinMedia.audio = null;
-				audioEl.remove();
-			}
 		}
 
 		function fmtSize(n) {
@@ -2032,6 +2386,17 @@ window.__ModuleLoader__.load({
 
 		function SkinTab(props) {
 			var h = react.createElement;
+			// [K9 2026-09-06] 皮肤页二级化:主页右栏入口卡(自定义资产/换装),内容迁
+			// sub:skin-* 子页(K8 网格换装组由本补丁摘除,槽声明保留供子页消费)。
+			var renderSlot = props && props.renderSlot;
+			var dshSelect = props && props.select;
+			var dshShow = props && props.show;
+			if (typeof document !== "undefined" && !document.getElementById("dsh-skin-subpage-css")) {
+				var dshK9Tag = document.createElement("style");
+				dshK9Tag.id = "dsh-skin-subpage-css";
+				dshK9Tag.textContent = ".dshSkinEntries{display:flex;flex-direction:column;gap:10px;width:100%;flex:1 1 auto;min-height:0} .dshSkinEntry{box-sizing:border-box;flex:1 1 0;display:grid;grid-template-columns:1fr auto;column-gap:12px;align-items:center;width:100%;min-height:64px;text-align:left;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:12px 16px;cursor:pointer;color:var(--dsw-alias-label-primary);font-family:inherit;transition:border-color .25s cubic-bezier(.32,.72,0,1),background-color .25s cubic-bezier(.32,.72,0,1),box-shadow .25s cubic-bezier(.32,.72,0,1),transform .25s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover{border-color:rgba(217,119,87,.55);background:var(--dsw-specific-sidebar-nav-item-hover);box-shadow:0 6px 18px rgba(0,0,0,.07);transform:translateY(-1px)} .dshSkinEntry:active{transform:translateY(0);box-shadow:0 2px 6px rgba(0,0,0,.05);transition-duration:.12s} .dshSkinEntry:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px} .dshSkinEntryTitle{grid-column:1;grid-row:1;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);transition:color .25s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover .dshSkinEntryTitle{color:#d97757} .dshSkinEntryDesc{grid-column:1;grid-row:2;margin-top:2px;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)} .dshSkinEntryGo{grid-column:2;grid-row:1/3;justify-self:end;align-self:center;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1;transition:background-color .25s cubic-bezier(.32,.72,0,1),border-color .25s cubic-bezier(.32,.72,0,1),color .25s cubic-bezier(.32,.72,0,1),transform .25s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover .dshSkinEntryGo{background:#d97757;border-color:#d97757;color:#fff;transform:translateX(3px)} .dshSkinEntry:active .dshSkinEntryGo{transform:translateX(1px)} .dshEffCard{box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:12px 16px;min-height:72px;transition:border-color .25s cubic-bezier(.32,.72,0,1),box-shadow .25s cubic-bezier(.32,.72,0,1)} .dshEffCard:hover{border-color:rgba(217,119,87,.4);box-shadow:0 4px 14px rgba(0,0,0,.05)} .vt_page{align-items:stretch} @media (prefers-reduced-motion:reduce){.dshSkinEntry,.dshSkinEntryTitle,.dshSkinEntryGo,.dshEffCard{transition:none!important}.dshSkinEntry:hover{transform:none}.dshSkinEntry:hover .dshSkinEntryGo{transform:none}}";
+				document.head.appendChild(dshK9Tag);
+			}
 			var st = react.useState({ status: "loading" });
 			var setSt = st[1];
 			var we = react.useState({ status: "loading" });
@@ -2043,20 +2408,6 @@ window.__ModuleLoader__.load({
 			var confirmDel = react.useState(null);
 			var setConfirmDel = confirmDel[1];
 			var fileRef = react.useRef(null);
-			// [R19] 皮肤中心安装态:on=已启用 / off=未装或停用 / loading=检测中
-			var scPhase = react.useState("loading");
-			var setScPhase = scPhase[1];
-			react.useEffect(function () {
-				if (!props || !props.checkSkinCenter) { setScPhase("unknown"); return; }
-				props.checkSkinCenter().then(setScPhase).catch(function () { setScPhase("unknown"); });
-			}, []);
-			// [问题1] 宠物插件安装态(入口卡显示)
-			var petPhase = react.useState("loading");
-			var setPetPhase = petPhase[1];
-			react.useEffect(function () {
-				if (!props || !props.checkPet) { setPetPhase("unknown"); return; }
-				props.checkPet().then(setPetPhase).catch(function () { setPetPhase("unknown"); });
-			}, []);
 
 			var loadAssets = function () {
 				return api("/skin/assets").then(function (r) {
@@ -2103,7 +2454,7 @@ window.__ModuleLoader__.load({
 					setSt(function (prev) { return { status: "ready", assets: r.assets || [], state: prev.state || {} }; });
 					setMsg("已导入 " + file.name + "。");
 					var kind = (r.assets || []).filter(function (a) { return a.name === file.name; })[0];
-					// 图片/视频导入后直接应用为背景,音频导入后待用户手动播放
+					// 图片/视频导入后直接应用为背景
 					if (kind && (kind.kind === "image" || kind.kind === "video")) {
 						patchState({ bg: { kind: kind.kind, url: SHELL_API + kind.url, name: kind.name } }, function () { setMsg("已导入并应用为背景: " + file.name); });
 					}
@@ -2111,11 +2462,7 @@ window.__ModuleLoader__.load({
 			};
 
 			var applyAsset = function (a) {
-				if (a.kind === "audio") {
-					patchState({ audio: { url: SHELL_API + a.url, name: a.name } }, function () { setMsg("开始循环播放 " + a.name); });
-				} else {
-					patchState({ bg: { kind: a.kind, url: SHELL_API + a.url, name: a.name } }, function () { setMsg("已应用背景 " + a.name); });
-				}
+				patchState({ bg: { kind: a.kind, url: SHELL_API + a.url, name: a.name } }, function () { setMsg("已应用背景 " + a.name); });
 			};
 
 			var applyWallpaper = function (w) {
@@ -2141,9 +2488,10 @@ window.__ModuleLoader__.load({
 				h("button", { className: "pm_btn", onClick: function () { loadAssets(); } }, "重试"));
 
 			var cur = st[0].state || {};
-			var assets = st[0].assets || [];
+			// [2026-09-04] 氛围音频移除:历史遗留的音频资产不再列出(仍留在 desktop-assets 目录,可手动清理)
+			var assets = (st[0].assets || []).filter(function (a) { return a.kind !== "audio"; });
 
-			var bgRow = h("div", { className: "cm_row" },
+			var bgRow = h("div", { className: "cm_row dshEffCard" },
 				h("div", { className: "cm_icon" }, "背"),
 				h("div", { className: "cm_main" },
 					h("div", { className: "cm_titleRow" },
@@ -2159,28 +2507,12 @@ window.__ModuleLoader__.load({
 					}),
 					cur.bg ? h("button", { className: "pm_btn", onClick: function () { patchState({ bg: null }, function () { setMsg("已恢复默认背景"); }); } }, "关闭背景") : null));
 
-			var audioRow = h("div", { className: "cm_row" },
-				h("div", { className: "cm_icon" }, "音"),
-				h("div", { className: "cm_main" },
-					h("div", { className: "cm_titleRow" },
-						h("span", { className: "cm_name" }, cur.audio ? cur.audio.name : "无氛围音频"),
-						cur.audio ? h("span", { className: "cm_src" }, "循环") : null),
-					h("div", { className: "cm_desc" }, "音量 " + Math.round((cur.volume === undefined ? 0.35 : cur.volume) * 100) + "%")),
-				h("div", { className: "cm_side" },
-					cur.audio ? h("input", {
-						type: "range", min: "0", max: "100", step: "5",
-						value: Math.round((cur.volume === undefined ? 0.35 : cur.volume) * 100),
-						title: "氛围音频音量", "aria-label": "氛围音频音量",
-						onChange: function (ev) { patchState({ volume: parseInt(ev.currentTarget.value, 10) / 100 }); },
-					}) : null,
-					cur.audio ? h("button", { className: "pm_btn", onClick: function () { patchState({ audio: null }, function () { setMsg("已停止氛围音频"); }); } }, "停止") : null));
-
 			// [R48→问题71→R58] 液态玻璃开关:仅控制默认官方皮肤(无壁纸)态;
 			// 壁纸态已内置液态玻璃(折射+指针流光+流动扫光),壁纸启用时置灰提示。
 			// 默认关(显式 true 才开):避免启动/切模块时状态缺失导致玻璃被误点亮。
 			var glassOn = cur.glass === true;
 			var glassDisabled = !!cur.bg;
-			var glassRow = h("div", { className: "cm_row" + (glassDisabled ? " cm_rowOff" : "") },
+			var glassRow = h("div", { className: "cm_row dshEffCard" + (glassDisabled ? " cm_rowOff" : "") },
 				h("div", { className: "cm_icon" }, "玻"),
 				h("div", { className: "cm_main" },
 					h("div", { className: "cm_titleRow" },
@@ -2203,28 +2535,25 @@ window.__ModuleLoader__.load({
 			var assetRows = assets.map(function (a) {
 				var confirming = confirmDel[0] === a.name;
 				var isBg = !!(cur.bg && cur.bg.url && cur.bg.url.indexOf(encodeURIComponent(a.name)) >= 0 && cur.bg.url.indexOf("/skin/asset/") >= 0);
-				var isAudio = !!(cur.audio && cur.audio.url && cur.audio.url.indexOf(encodeURIComponent(a.name)) >= 0);
 				return h("div", { key: a.name, className: "cm_row" },
 					a.kind === "image"
 						? h("img", { className: "sk_thumb", src: SHELL_API + a.url, alt: "", loading: "lazy" })
-						: h("div", { className: "cm_icon" }, a.kind === "video" ? "▶" : "♪"),
+						: h("div", { className: "cm_icon" }, "▶"),
 					h("div", { className: "cm_main" },
 						h("div", { className: "cm_titleRow" },
 							h("span", { className: "cm_name", title: a.name }, a.name),
 							h("span", { className: "cm_src" }, SKIN_KIND_ZH[a.kind] + " · " + fmtSize(a.size)),
-							isBg ? h("span", { className: "cm_src" }, "当前背景") : null,
-							isAudio ? h("span", { className: "cm_src" }, "播放中") : null),
+							isBg ? h("span", { className: "cm_src" }, "当前背景") : null),
 						confirming ? h("div", { className: "cm_confirm" },
 							h("span", { className: "cm_confirmTxt" }, "删除文件 " + a.name + "？"),
 							h("button", { className: "cm_btnDanger", disabled: busy[0], onClick: function () { doDelete(a); } }, "删除"),
 							h("button", { className: "cm_btnGhost", onClick: function () { setConfirmDel(null); } }, "取消")) : null),
 					confirming ? null : h("div", { className: "cm_side" },
-						h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { applyAsset(a); } },
-							a.kind === "audio" ? (isAudio ? "重启" : "播放") : "设为背景"),
+						h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { applyAsset(a); } }, "设为背景"),
 						h("button", { className: "cm_del", title: "删除", disabled: busy[0], onClick: function () { setConfirmDel(a.name); },
 							"aria-label": "删除 " + a.name, dangerouslySetInnerHTML: { __html: TRASH_SVG } })));
 			});
-			if (!assetRows.length) assetRows = [h("div", { key: "empty", className: "pm_msg" }, "尚无自定义资产。点击「导入文件」添加 jpg/png/gif、mp4/webm 或 mp3/wav 等。")];
+			if (!assetRows.length) assetRows = [h("div", { key: "empty", className: "pm_msg" }, "尚无自定义资产。点击「导入文件」添加 jpg/png/gif 或 mp4/webm 等。")];
 
 			var weBody;
 		if (we[0].status === "loading") weBody = h("div", { className: "pm_msg" }, "正在扫描 Wallpaper Engine 创意工坊…");
@@ -2233,19 +2562,21 @@ window.__ModuleLoader__.load({
 		else {
 			var wps = we[0].wallpapers || [];
 			var usable = wps.filter(function (w) { return w.supported; });
-			var wRows = usable.map(function (w) {
+			// [WE 布局重构] 单列行卡 → 预览优先的画廊卡网格。可用项全部为 video,
+			// 类型标签是冗余信息不再逐卡重复;状态(当前背景)上图为角标。
+			var wCards = usable.map(function (w) {
 				var isBg = !!(cur.bg && cur.bg.url && cur.bg.url.indexOf("/skin/we/" + w.id + "/") >= 0);
-				return h("div", { key: w.id, className: "cm_row" },
-					w.previewUrl ? h("img", { className: "sk_thumb sk_thumbW", src: SHELL_API + w.previewUrl, alt: "", loading: "lazy" }) : h("div", { className: "cm_icon" }, "W"),
-					h("div", { className: "cm_main" },
-						h("div", { className: "cm_titleRow" },
-							h("span", { className: "cm_name", title: w.title }, w.title),
-							h("span", { className: "cm_src" }, "video"),
-							isBg ? h("span", { className: "cm_src" }, "当前背景") : null),
-						h("div", { className: "cm_desc" }, "创意工坊 #" + w.id)),
-					h("div", { className: "cm_side" },
-						isBg ? h("button", { className: "pm_btn", onClick: function () { patchState({ bg: null }); } }, "关闭") :
-							h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { applyWallpaper(w); } }, "应用")));
+				return h("div", { key: w.id, className: "we_card" + (isBg ? " we_cardOn" : "") },
+					h("div", { className: "we_prevWrap" },
+						w.previewUrl ? h("img", { className: "we_prev", src: SHELL_API + w.previewUrl, alt: "", loading: "lazy", decoding: "async" }) : h("div", { className: "we_prev we_prevEmpty" }, "W"),
+						h("div", { className: "we_chips" },
+							isBg ? h("span", { className: "we_chip we_chipOn" }, "当前背景") : null)),
+					h("div", { className: "we_body" },
+						h("div", { className: "we_name", title: w.title }, w.title),
+						h("div", { className: "we_meta" },
+							h("span", { className: "we_wid", title: "Steam 创意工坊 " + w.id }, "#" + w.id),
+							isBg ? h("button", { className: "pm_btn", onClick: function () { patchState({ bg: null }); } }, "关闭") :
+								h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { applyWallpaper(w); } }, "应用"))));
 			});
 			// [fix] 不可用条目按真实原因分类展示(scene/web/未下载),不再合并计数误导;
 			// 未下载 = 创意工坊条目在但声明的视频文件缺失(下载被清理),Steam 重下即恢复。
@@ -2255,78 +2586,82 @@ window.__ModuleLoader__.load({
 				incomplete: "视频文件缺失,在 Steam 中重新下载后可用",
 			};
 			var others = wps.filter(function (w) { return !w.supported; });
-			var oRows = others.map(function (w) {
+			var oCards = others.map(function (w) {
 				// 兼容旧壳数据:incomplete 字段缺失时按 video+不可用 推导为未下载
 				var isIncomplete = w.incomplete || (w.type === "video" && !w.supported);
 				var why = isIncomplete ? "incomplete" : (w.type === "web" ? "web" : "scene");
-				return h("div", { key: w.id, className: "cm_row cm_rowOff" },
-					w.previewUrl ? h("img", { className: "sk_thumb sk_thumbW", src: SHELL_API + w.previewUrl, alt: "", loading: "lazy" }) : h("div", { className: "cm_icon" }, "W"),
-					h("div", { className: "cm_main" },
-						h("div", { className: "cm_titleRow" },
-							h("span", { className: "cm_name", title: w.title }, w.title),
-							h("span", { className: "cm_src" }, w.type === "web" ? "web" : (isIncomplete ? "未下载" : "scene"))),
-						h("div", { className: "cm_desc" }, WE_NA_DESC[why])));
+				var typeLabel = w.type === "web" ? "web" : (isIncomplete ? "未下载" : "scene");
+				return h("div", { key: w.id, className: "we_card we_cardNA" },
+					h("div", { className: "we_prevWrap" },
+						w.previewUrl ? h("img", { className: "we_prev", src: SHELL_API + w.previewUrl, alt: "", loading: "lazy", decoding: "async" }) : h("div", { className: "we_prev we_prevEmpty" }, "W"),
+						h("div", { className: "we_chips" }, h("span", { className: "we_chip" }, typeLabel))),
+					h("div", { className: "we_body" },
+						h("div", { className: "we_name", title: w.title }, w.title),
+						h("div", { className: "we_naDesc" }, WE_NA_DESC[why])));
 			});
 			weBody = h("div", { className: "pm_list" },
-				wRows.length ? wRows : [h("div", { key: "we-empty", className: "pm_msg" }, "创意工坊中没有可直接应用的视频壁纸。")],
-				oRows.length ? [h("div", { key: "we-na-h", className: "sec_h" }, "暂不支持(" + oRows.length + ")")].concat(oRows) : null);
+				wCards.length ? h("div", { key: "we-grid", className: "we_grid" }, wCards)
+					: [h("div", { key: "we-empty", className: "pm_msg" }, "创意工坊中没有可直接应用的视频壁纸。")],
+				oCards.length ? [
+					h("div", { key: "we-na-h", className: "sec_h" }, "暂不支持(" + oCards.length + ")"),
+					h("div", { key: "we-na-grid", className: "we_grid we_gridNA" }, oCards)] : null);
 		}
 
 		var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已") === 0 ? " pm_msgOk" : "");
-		// [问题1] 编程跳转:click 隐藏的导航项(React useState active,原生 click 可切)
-		var gotoSection = function (id) {
-			try { var btn = document.querySelector('button[data-section-id="' + id + '"]'); if (btn) btn.click(); } catch (e) { /* 导航未渲染 */ }
-		};
-		// [R19+问题1] 主题皮肤(皮肤中心)入口卡:点击跳转(导航项已隐藏,单一入口)
-		var skinCenterRow = h("div", { className: "cm_row" + (scPhase[0] === "off" ? " cm_rowOff" : ""), onClick: scPhase[0] === "off" ? undefined : function () { gotoSection("skin-center"); }, style: scPhase[0] === "off" ? undefined : { cursor: "pointer" } },
-			h("div", { className: "cm_icon" }, "主"),
-			h("div", { className: "cm_main" },
-				h("div", { className: "cm_titleRow" },
-					h("span", { className: "cm_name" }, "主题皮肤(皮肤中心)"),
-					scPhase[0] === "on" ? h("span", { className: "cm_src" }, "已安装") :
-					scPhase[0] === "off" ? h("span", { className: "cm_src" }, "未启用") : null),
-				h("div", { className: "cm_desc" }, scPhase[0] === "off"
-					? "未检测到皮肤中心插件。安装 @linxin666/dsh-skins 后可试穿/应用预置主题皮肤。"
-					: "主题 = 整体配色方案(蓝色幻想/鲸吟/数字雨等 12 套,支持实时试穿);与本页背景媒体层互补,可叠加使用。")),
-			h("div", { className: "cm_side" },
-				scPhase[0] === "off" ? null : h("button", { className: "pm_btn", onClick: function (ev) { ev.stopPropagation(); gotoSection("skin-center"); } }, "打开主题皮肤 →")));
-		// [问题1] 宠物入口卡:点击跳转到宠物设置(导航项已隐藏,并入本模块)
-		var petRow = h("div", { className: "cm_row", onClick: function () { gotoSection("pet"); }, style: { cursor: "pointer" } },
-			h("div", { className: "cm_icon" }, "宠"),
-			h("div", { className: "cm_main" },
-				h("div", { className: "cm_titleRow" },
-					h("span", { className: "cm_name" }, "宠物"),
-					h("span", { className: "cm_src" }, petPhase[0] === "on" ? "已安装" : petPhase[0] === "off" ? "未启用" : "")),
-				h("div", { className: "cm_desc" }, "桌面精灵宠物:启用/选择宠物、显示与尺寸位置调节、喂食互动。")),
-			h("div", { className: "cm_side" },
-				petPhase[0] === "off" ? null : h("button", { className: "pm_btn", onClick: function (ev) { ev.stopPropagation(); gotoSection("pet"); } }, "打开宠物设置 →")));
+		// [K10 2026-09-06] 子页页头:返回由壳端返回胶囊承担(installSectionBackButtons,
+		// 皮肤子页显示「‹ 返回皮肤」);换装子页不再重复渲染标题(joi 槽自带标题与说明)。
+		if (dshShow === "skin-assets" || dshShow === "skin-suit") {
+			var dshSubHead = dshShow === "skin-assets" ? h("div", { className: "vt_head" },
+				h("h2", { className: "vt_h2" }, "自定义资产"),
+				h("p", { className: "vt_intro" }, "导入 jpg/png/gif 或 mp4/webm 等作为界面背景;点击资产行可设为背景或删除。")) : null;
+			if (dshShow === "skin-assets") {
+				return h("div", { className: "vt_page" },
+					h("input", { ref: fileRef, type: "file", style: { display: "none" },
+						accept: ".jpg,.jpeg,.png,.gif,.webp,.bmp,.mp4,.webm,.mov,.mkv",
+						onChange: onFile }),
+					dshSubHead,
+					h("div", { className: "vt_group vt_span" },
+						h("div", { className: "ps_btns" },
+							h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { if (fileRef.current) fileRef.current.click(); } }, "导入文件"),
+							h("span", { className: "cm_count" }, assets.length + " 个资产")),
+						h("div", { className: "pm_list" }, assetRows)),
+					h("div", { className: msgCls }, msg[0]));
+			}
+			var suitContent = renderSlot ? renderSlot("settings.skin.item", {}) : null;
+			return h("div", { className: "vt_page" },
+				dshSubHead,
+				h("div", { className: "vt_group vt_span dsh-suit-slot" },
+					suitContent || h("div", { className: "pm_msg" }, "换装主题插件未安装或已停用。")),
+				h("div", { className: msgCls }, msg[0]));
+		}
+		// [K9] 主页右栏入口卡:自定义资产(原位)+ 其下空白处的换装入口。
+		var dshEntries = h("div", { className: "dshSkinEntries" },
+			h("button", { type: "button", className: "dshSkinEntry", onClick: function () { if (dshSelect) dshSelect("sub:skin-assets"); } },
+				h("span", { className: "dshSkinEntryTitle" }, "自定义资产"),
+				h("span", { className: "dshSkinEntryDesc" }, "导入图片/视频作为界面背景,当前 " + assets.length + " 个资产。"),
+				h("span", { className: "dshSkinEntryGo" }, "›")),
+			h("button", { type: "button", className: "dshSkinEntry", onClick: function () { if (dshSelect) dshSelect("sub:skin-suit"); } },
+				h("span", { className: "dshSkinEntryTitle" }, "换装"),
+				h("span", { className: "dshSkinEntryDesc" }, "选一套衣装,房间会跟着换;也可回到 DeepSeek 原生外观。"),
+				h("span", { className: "dshSkinEntryGo" }, "›")));
 		return h("div", { className: "vt_page" },
 			h("input", { ref: fileRef, type: "file", style: { display: "none" },
-				accept: ".jpg,.jpeg,.png,.gif,.webp,.bmp,.mp4,.webm,.mov,.mkv,.mp3,.wav,.ogg,.flac,.m4a",
+				accept: ".jpg,.jpeg,.png,.gif,.webp,.bmp,.mp4,.webm,.mov,.mkv",
 				onChange: onFile }),
 			h("div", { className: "vt_head" },
 				h("h2", { className: "vt_h2" }, "皮肤"),
-				h("p", { className: "vt_intro" }, "背景媒体层:导入图片/视频作为界面背景,音频作循环氛围声;也可直接应用 Wallpaper Engine 创意工坊的视频壁纸。主题配色皮肤请使用紧邻的「皮肤中心」。")),
-			h("div", { className: "vt_group" },
-				h("div", { className: "vt_groupTitle" }, "主题皮肤"),
-				skinCenterRow),
-			h("div", { className: "vt_group" },
-				h("div", { className: "vt_groupTitle" }, "宠物"),
-				petRow),
+				h("p", { className: "vt_intro" }, "背景媒体层:导入图片/视频作为界面背景;也可直接应用 Wallpaper Engine 创意工坊的视频壁纸。")),
 			h("div", { className: "vt_group" },
 				h("div", { className: "vt_groupTitle" }, "当前效果"),
-				h("div", { className: "pm_list" }, [bgRow, glassRow, audioRow])),
-			h("div", { className: "vt_group" },
-				h("div", { className: "vt_groupTitle" }, "自定义资产"),
-				h("div", { className: "ps_btns" },
-					h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { if (fileRef.current) fileRef.current.click(); } }, "导入文件"),
-					h("span", { className: "cm_count" }, assets.length + " 个资产")),
-				h("div", { className: "pm_list" }, assetRows)),
+				h("div", { className: "pm_list" }, [bgRow, glassRow])),
+			// [K9] 自定义资产/换装二级页入口卡(内容迁 sub:skin-* 子页)
+			h("div", { className: "vt_group" }, h("div", { className: "vt_groupTitle" }, "个性化"), dshEntries),
+			// [K9] 换装组迁 sub:skin-suit 二级页(主页入口卡见上),K8 网格组摘除
 			h("div", { className: "vt_group vt_span" },
 			h("div", { className: "vt_groupTitle" }, "Wallpaper Engine"),
 			weBody),
 			h("div", { className: msgCls }, msg[0]),
-			h("div", { className: "pm_msg" }, "导入的文件保存于 ~/.dsh/desktop-assets/ 并由壳(30801)提供本地静态服务;图片/视频设为背景,音频作循环氛围声。Wallpaper Engine 视频壁纸直接从 Steam 创意工坊目录读取,无需改动 WE 本体。状态持久化在壳配置,新窗口自动恢复。"));
+			h("div", { className: "pm_msg" }, "导入的文件保存于 ~/.dsh/desktop-assets/ 并由壳(30801)提供本地静态服务;图片/视频设为背景。Wallpaper Engine 视频壁纸直接从 Steam 创意工坊目录读取,无需改动 WE 本体。状态持久化在壳配置,新窗口自动恢复。"));
 		}
 
 		// ---------- [local] 原生右栏 grid 轨道塌陷 ----------
@@ -2412,10 +2747,10 @@ window.__ModuleLoader__.load({
 			poll();
 		}
 
-	// ---- [local] 设置导航 data-section-id 注入(问题1:统一入口的前置使能;R32:全量标记+分组) ----
+	// ---- [local] 设置导航 data-section-id 注入(R32:全量标记+分组) ----
 	// SettingsRoot 打进 dsh web Vite 主 bundle,无法 patch;导航 button 无 data-* 标识。
-	// 运行时按 label 文本映射注入 data-section-id,CSS 据此隐藏「皮肤中心」「宠物」导航项,
-	// 皮肤页入口卡编程 click 隐藏项完成 section 跳转(active 是 useState,原生 click 可切)。
+	// 运行时按 label 文本映射注入 data-section-id;「皮肤中心」「宠物」两项自遗留主题皮肤/
+	// 宠物模块移除(2026-09-04)后仅作防御性隐藏(CSS 据此 display:none),无 UI 入口。
 	// [R32] 标记扩展到全部导航项 + 在组首项前注入分组标签(通用/对话/外观/扩展/系统)。
 	function installSettingsNavPatch() {
 		if (typeof document === "undefined") return;
@@ -2426,6 +2761,7 @@ window.__ModuleLoader__.load({
 			"皮肤中心": "skin-center", "宠物": "pet", "Skin Center": "skin-center", "Pet": "pet",
 			"通用设置": "general", "General": "general", "General Settings": "general",
 			"模型": "models", "Models": "models",
+			"Token 用量": "usage", "Token Usage": "usage",
 			"人设": "persona", "Persona": "persona",
 			"技能": "skills", "Skills": "skills",
 			"记忆系统": "memory", "Memory": "memory", "Memory System": "memory",
@@ -2454,7 +2790,7 @@ window.__ModuleLoader__.load({
 		// 显示序,幂等且由 MO 自愈链(mark)持续执行,任何时序下收敛到同一规范布局。
 		// 值留 10 档间隔便于插入;隐藏项(skin-center/pet/sidebar-card)也各归其组。
 		var NAV_ORDER = {
-			"general": 10, "models": 20,
+			"general": 10, "models": 20, "usage": 30,
 			"persona": 110, "skills": 120, "memory": 130,
 			"skin": 210, "skin-center": 215, "pet": 220,
 			"plugins": 310, "market": 320, "webui": 330, "agent-preset": 340, "sidebar-card": 350,
@@ -2465,19 +2801,22 @@ window.__ModuleLoader__.load({
 		// [问题46] 模块语义图标:上游 navCell 大多只有同一齿轮图案,按 section-id 换
 		// 线条语义图标(16x16,stroke currentColor 深浅色自适应),不改导航顺序。
 		// 幂等:data-dsh-icon 标记;React 重渲染还原上游 svg 时 MO mark 会再注入。
+		// [iconfx2] pathLength="1":把每段描边长度归一化,激活自绘动画(stroke-dashoffset)
+		// 无需 JS 量测周长;dshi-* 类挂载需要子元素级变换的形状(指针/旋钮/盖/箭头)。
 		var NAV_ICONS = {
-			"general": '<circle cx="8" cy="8" r="2.3"/><path d="M8 1.6v1.7M8 12.7v1.7M1.6 8h1.7M12.7 8h1.7M3.5 3.5l1.2 1.2M11.3 11.3l1.2 1.2M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2"/>',
-			"models": '<path d="M8 1.8 13.8 5v6L8 14.2 2.2 11V5L8 1.8z"/><path d="M2.2 5 8 8.2 13.8 5M8 8.2v6"/>',
-			"persona": '<circle cx="8" cy="5.2" r="2.6"/><path d="M2.9 13.6c.6-2.6 2.6-4.1 5.1-4.1s4.5 1.5 5.1 4.1"/>',
-			"skills": '<path d="M8.9 1.6 3.4 9h3.5l-.9 5.4L11.6 7H8.1l.8-5.4z"/>',
-			"memory": '<ellipse cx="8" cy="3.6" rx="4.8" ry="1.9"/><path d="M3.2 3.6v8.8c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9V3.6"/><path d="M3.2 8c0 1 2.1 1.9 4.8 1.9S12.8 9 12.8 8"/>',
-			"skin": '<path d="M8 1.8S3.4 6.9 3.4 10a4.6 4.6 0 0 0 9.2 0C12.6 6.9 8 1.8 8 1.8z"/>',
-			"plugins": '<path d="M6.1 2.2v2M9.9 2.2v2M4.3 5.6h7.4v1.9a3.7 3.7 0 0 1-3.7 3.7 3.7 3.7 0 0 1-3.7-3.7V5.6z"/><path d="M8 11.2v2.6"/>',
-			"market": '<path d="M3.4 5.4h9.2l-.8 7.6a1.5 1.5 0 0 1-1.5 1.4H5.7a1.5 1.5 0 0 1-1.5-1.4l-.8-7.6z"/><path d="M5.8 7.4V4.7a2.2 2.2 0 0 1 4.4 0v2.7"/>',
-			"webui": '<rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M2 6.1h12"/><path d="M4.1 4.5h.01M5.9 4.5h.01"/>',
-			"agent-preset": '<path d="M2.6 5h5M11.4 5h2M2.6 11h1.6M8 11h5.4"/><circle cx="9.5" cy="5" r="1.7"/><circle cx="6.1" cy="11" r="1.7"/>',
-			"sidebar-card": '<rect x="2" y="2.6" width="12" height="10.8" rx="1.6"/><path d="M6.3 2.6v10.8"/>',
-			"updates": '<path d="M8 2.4v7.2M5.1 6.7 8 9.6l2.9-2.9"/><path d="M2.9 11v1.6a1 1 0 0 0 1 1h8.2a1 1 0 0 0 1-1V11"/>',
+			"general": '<circle cx="8" cy="8" r="2.3" pathLength="1"/><path pathLength="1" d="M8 1.6v1.7M8 12.7v1.7M1.6 8h1.7M12.7 8h1.7M3.5 3.5l1.2 1.2M11.3 11.3l1.2 1.2M12.5 3.5l-1.2 1.2M4.7 11.3l-1.2 1.2"/>',
+			"models": '<path pathLength="1" d="M8 1.8 13.8 5v6L8 14.2 2.2 11V5L8 1.8z"/><path pathLength="1" d="M2.2 5 8 8.2 13.8 5M8 8.2v6"/>',
+			"usage": '<path pathLength="1" d="M2.6 12.2a5.8 5.8 0 1 1 10.8 0"/><path class="dshi-u-needle" pathLength="1" d="M8 11.6 10.6 7.4"/><circle pathLength="1" cx="8" cy="12" r="1"/><path pathLength="1" d="M2.6 13.8h10.8"/>',
+			"persona": '<circle class="dshi-p-head" pathLength="1" cx="8" cy="5.2" r="2.6"/><path pathLength="1" d="M2.9 13.6c.6-2.6 2.6-4.1 5.1-4.1s4.5 1.5 5.1 4.1"/>',
+			"skills": '<path pathLength="1" d="M8.9 1.6 3.4 9h3.5l-.9 5.4L11.6 7H8.1l.8-5.4z"/>',
+			"memory": '<ellipse class="dshi-m-top" pathLength="1" cx="8" cy="3.6" rx="4.8" ry="1.9"/><path pathLength="1" d="M3.2 3.6v8.8c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9V3.6"/><path pathLength="1" d="M3.2 8c0 1 2.1 1.9 4.8 1.9S12.8 9 12.8 8"/>',
+			"skin": '<path pathLength="1" d="M8 1.8S3.4 6.9 3.4 10a4.6 4.6 0 0 0 9.2 0C12.6 6.9 8 1.8 8 1.8z"/>',
+			"plugins": '<path pathLength="1" d="M6.1 2.2v2M9.9 2.2v2M4.3 5.6h7.4v1.9a3.7 3.7 0 0 1-3.7 3.7 3.7 3.7 0 0 1-3.7-3.7V5.6z"/><path pathLength="1" d="M8 11.2v2.6"/>',
+			"market": '<path pathLength="1" d="M3.4 5.4h9.2l-.8 7.6a1.5 1.5 0 0 1-1.5 1.4H5.7a1.5 1.5 0 0 1-1.5-1.4l-.8-7.6z"/><path pathLength="1" d="M5.8 7.4V4.7a2.2 2.2 0 0 1 4.4 0v2.7"/>',
+			"webui": '<rect pathLength="1" x="2" y="3" width="12" height="10" rx="1.6"/><path pathLength="1" d="M2 6.1h12"/><path pathLength="1" d="M4.1 4.5h.01M5.9 4.5h.01"/>',
+			"agent-preset": '<path pathLength="1" d="M2.6 5h5M11.4 5h2M2.6 11h1.6M8 11h5.4"/><circle class="dshi-a-k1" pathLength="1" cx="9.5" cy="5" r="1.7"/><circle class="dshi-a-k2" pathLength="1" cx="6.1" cy="11" r="1.7"/>',
+			"sidebar-card": '<rect pathLength="1" x="2" y="2.6" width="12" height="10.8" rx="1.6"/><path class="dshi-s-div" pathLength="1" d="M6.3 2.6v10.8"/>',
+			"updates": '<path class="dshi-up-a" pathLength="1" d="M8 2.4v7.2M5.1 6.7 8 9.6l2.9-2.9"/><path pathLength="1" d="M2.9 11v1.6a1 1 0 0 0 1 1h8.2a1 1 0 0 0 1-1V11"/>',
 		};
 		var injectNavIcons = function () {
 			try {
@@ -2487,8 +2826,8 @@ window.__ModuleLoader__.load({
 					var inner = NAV_ICONS[btn.getAttribute("data-section-id")];
 					if (!inner) continue;
 					var svg = btn.querySelector("svg");
-					if (!svg || svg.getAttribute("data-dsh-icon") === "1") continue;
-					svg.setAttribute("data-dsh-icon", "1");
+					if (!svg || svg.getAttribute("data-dsh-icon") === "2") continue; // [iconfx2] 版本位:已是当前版式才跳过;未标记或旧版式(1)都重注(pathLength/类名)
+					svg.setAttribute("data-dsh-icon", "2");
 					svg.setAttribute("viewBox", "0 0 16 16");
 					svg.setAttribute("fill", "none");
 					svg.setAttribute("stroke", "currentColor");
@@ -2549,6 +2888,112 @@ window.__ModuleLoader__.load({
 				}
 			} catch (e) { /* 自愈:下次 DOM 变化再试 */ }
 		};
+		// ---- [navfx] 切区段动效:导航滑移高亮 + 内容方向性过渡 --------------------
+		// 上游切区段 = React 同步提交:旧 navCell 摘激活类/aria-current、新 navCell 挂上,
+		// section 内容卸旧挂新,同批 DOM 变更落在同一 MO 回调(微任务,先于绘制)。借同一拍:
+		//   1) 滑移药丸:测量旧/新 cell 几何,navList 内生成绝对定位药丸从旧位滑到新位
+		//      (z-index:-1 垫文字下);滑行期抑制真实激活底色(dsh-vt-nav-gliding),落位后
+		//      药丸淡出与真实底色淡入交叉。药丸色取新 cell 计算后底色——默认主题/玻璃皮肤同源。
+		//   2) 方向性过渡:按 NAV_ORDER 判上移/下移,给 [data-slot=settings.section] 根写
+		//      data-dsh-dir,内容入场动画据此选上/下入位关键帧。
+		//   3) 激活图标 settle:纯 CSS(见 css 数组 navfx 段)。
+		// 幂等/自愈:药丸为瞬态节点(~400ms),状态仅 lastSid 一变量;reduced-motion 时
+		// 不滑移(保持原生交叉淡化);任何测量失败静默降级,下次变更再试。
+		var lastSid = null;
+		var glideAbort = null;
+		var navReduceMotion = function () {
+			try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches } catch (e) { return false }
+		};
+		var navListOf = function (cell) {
+			try { return cell.closest('[class*="_navList"]') } catch (e) { return null }
+		};
+		var glidePill = function (fromCell, toCell) {
+			try {
+				var list = navListOf(toCell);
+				if (!list) return;
+				var lr = list.getBoundingClientRect();
+				var fr = fromCell.getBoundingClientRect();
+				var tr = toCell.getBoundingClientRect();
+				// 隐藏项(皮肤中心/宠物 display:none)量不到几何:不滑移,退回原生交叉淡化
+				if (!lr.height || !fr.height || !tr.height) return;
+				// 药丸色 = 目标 cell 落位底色(抑制前读)。读取须绕开 CSS 过渡:激活类刚挂上时
+				// 背景正处于 transparent→底色的过渡起点,直接 getComputedStyle 读到的是过渡
+				// 插值(实测踩坑:恒为透明)。临时置 inline transition:none 强制按终值重算,
+				// 读毕即还(同一 tick 内完成,无中间绘制)。
+				// R32 navCell 规则的 transition 带 !important,普通内联覆盖无效,
+				// 须内联 !important 才能真正摘掉过渡(级联:内联 important > 样式表 important)。
+				var savedT = toCell.style.getPropertyValue("transition");
+				var savedP = toCell.style.getPropertyPriority("transition");
+				toCell.style.setProperty("transition", "none", "important");
+				var bg = getComputedStyle(toCell).backgroundColor;
+				toCell.style.setProperty("transition", savedT, savedP);
+				if (!bg || bg === "transparent" || bg === "rgba(0, 0, 0, 0)") return;
+				if (glideAbort) glideAbort(); // 快速连点:当场清掉上一场,同一 tick 内无缝接力
+				var pill = document.createElement("div");
+				pill.className = "dsh-vt-nav-glidePill";
+				pill.style.width = tr.width + "px";
+				pill.style.height = tr.height + "px";
+				pill.style.top = (tr.top - lr.top) + "px";
+				pill.style.left = (tr.left - lr.left) + "px";
+				pill.style.background = bg;
+				pill.style.transform = "translateY(" + (fr.top - tr.top) + "px)";
+				list.classList.add("dsh-vt-nav-gliding");
+				list.appendChild(pill);
+				// 双 rAF:先让初始 transform 完成一次样式解析,再放量滑向 0(落位=新 cell 原位)
+				requestAnimationFrame(function () {
+					requestAnimationFrame(function () { pill.style.transform = "translateY(0)" });
+				});
+				var done = false;
+				var settle = function () {
+					if (done) return;
+					done = true;
+					// [navfx-fix] 结尾闪一下的根治:旧时序是药丸先淡完(.14s)→150ms 后才摘抑制→
+					// 真实底色再淡入(.2s),两段之间高亮真空,视觉上凹陷一下。改为同一拍摘抑制
+					// + 启动药丸淡出,且淡出曲线/时长与 R32 底色淡入完全一致——两者 alpha 恒互补
+					//(药丸垫在底色之下),合成色逐帧恒定,交叉无痕。
+					list.classList.remove("dsh-vt-nav-gliding");
+					pill.style.opacity = "0";
+					window.setTimeout(function () {
+						if (pill.parentNode) pill.parentNode.removeChild(pill);
+						if (glideAbort === abort) glideAbort = null;
+					}, 230);
+				};
+				var timer = window.setTimeout(settle, 240);
+				var abort = function () {
+					if (done) return;
+					done = true;
+					window.clearTimeout(timer);
+					list.classList.remove("dsh-vt-nav-gliding");
+					if (pill.parentNode) pill.parentNode.removeChild(pill);
+					if (glideAbort === abort) glideAbort = null;
+				};
+				glideAbort = abort;
+			} catch (e) { /* 动效失败静默降级 */ }
+		};
+		var handleActiveChange = function (sectionRoots, allowGlide) {
+			try {
+				var active = document.querySelector('button[data-section-id][aria-current="true"]');
+				var sid = active ? active.getAttribute("data-section-id") : null;
+				if (sid === lastSid) return;
+				var prevSid = lastSid;
+				lastSid = sid;
+				if (!sid) return; // 弹窗关闭:仅清基线
+				// 方向性过渡:写本批新挂载的 section 根;无新增则回落写现有根(子元素同拍/晚到都覆盖)
+				var prevOrder = prevSid !== null && NAV_ORDER[prevSid] !== undefined ? NAV_ORDER[prevSid] : null;
+				if (prevOrder !== null) {
+					var order = NAV_ORDER[sid] !== undefined ? NAV_ORDER[sid] : ORDER_FALLBACK;
+					var dir = order > prevOrder ? "down" : "up";
+					var roots = sectionRoots && sectionRoots.length ? sectionRoots : document.querySelectorAll('[data-slot="settings.section"]');
+					for (var ri = 0; ri < roots.length; ri++) roots[ri].setAttribute("data-dsh-dir", dir);
+				}
+				// 滑移药丸:仅用户切换(class 变更拍)触发;弹窗初挂载不滑
+				if (allowGlide && active && prevSid !== null && !navReduceMotion()) {
+					var scope = navListOf(active) || document;
+					var fromCell = scope.querySelector('button[data-section-id="' + prevSid + '"]');
+					if (fromCell) glidePill(fromCell, active);
+				}
+			} catch (e) { /* 自愈:下次变更再试 */ }
+		};
 		var mark = function () {
 			try {
 				var buttons = document.querySelectorAll("button");
@@ -2588,21 +3033,43 @@ window.__ModuleLoader__.load({
 			// 先于绘制——旧方案 200ms 防抖窗口内「皮肤中心/宠物」旧导航项以
 			// display:flex 闪显(实测约 220ms;窗口隐藏时定时器节流更久),即合并 UI
 			// 后的导航残影。仅对设置面板范围内的变更同步,聊天流等高频变更仍走防抖。
+			// [navfx] 同一拍顺带识别切区段:class 变更(激活态切换信号)+ 本批新挂载的
+			// section 根(方向标记落点)。attributes 仅订阅 class,自身 data-*/style 写入不回流。
 			var sync = false;
+			var activeTouched = false;
+			var sectionRoots = [];
 			try {
-				for (var i = 0; i < mutations.length && !sync; i++) {
-					var added = mutations[i].addedNodes;
+				for (var i = 0; i < mutations.length; i++) {
+					var m = mutations[i];
+					if (m.type === "attributes") {
+						var t = m.target;
+						if (t && t.tagName === "BUTTON" && t.getAttribute("data-section-id")) activeTouched = true;
+						continue;
+					}
+					var added = m.addedNodes;
 					for (var j = 0; j < added.length; j++) {
-						if (inSettings(added[j])) { sync = true; break }
+						var n = added[j];
+						if (!sync && inSettings(n)) sync = true;
+						if (n && n.nodeType === 1) {
+							try {
+								if (n.matches('[data-slot="settings.section"]')) sectionRoots.push(n);
+								else if (n.querySelector) {
+									var found = n.querySelectorAll('[data-slot="settings.section"]');
+									for (var q = 0; q < found.length; q++) sectionRoots.push(found[q]);
+								}
+							} catch (e2) { /* 单点失败不阻塞 */ }
+						}
 					}
 				}
 			} catch (e) { sync = false }
-			if (sync) { mark(); return }
+			if (sync) mark();
+			if (activeTouched || sectionRoots.length) handleActiveChange(sectionRoots, activeTouched);
+			if (sync || activeTouched || sectionRoots.length) return;
 			if (queued) return;
 			queued = true;
 			window.setTimeout(function () { queued = false; mark() }, 200);
 		});
-		mo.observe(document.body, { childList: true, subtree: true });
+		mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
 	}
 
 	// ---- [local] node-nav 圆点与左侧栏联动 ----
@@ -2849,6 +3316,21 @@ window.__ModuleLoader__.load({
 		var summaries = {};
 		var inflight = {};
 		var failed = {}; // sid → 失败时刻;10 分钟内不重试(防空转烧 token)
+		// [批次61] 摘要展示净化:持久层可能存有 <think> 段污染/宿主伪消息头的旧摘要,
+		// 展示层(侧栏行 + 头部 crumb)统一剥离;剥完为空视为无摘要(回落 store 标题)。
+		var cleanSummary = function (s) {
+			if (typeof s !== "string") return null;
+			var t = s.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<\/?think>/gi, "");
+			t = t.replace(/^\s*(?:上下文注入|Current runtime context)[^\n]*\n?/, "").replace(/\s+/g, " ").trim();
+			return t || null;
+		};
+		// [批次104 2026-09-05] 脏摘要判定:模型偶发把思考正文直接泄进 content(实测
+		// 「<think>The user is asking to r」——壳端 30 字截断把闭合标签截掉,cleanSummary
+		// 剥掉 <think> 开标签后剩英文思考碎片,非空不回落原题、泵见「有摘要」永不重生成,
+		// 侧栏挂碎片 5 天)。正常摘要绝不含 think 字面,命中即整条作废走重生成,不作局部抢救。
+		var isDirtySummary = function (s) {
+			return typeof s !== "string" || /<think[\s>]|<\/think>/i.test(s);
+		};
 		var idByTitle = function () {
 			var map = {};
 			try {
@@ -2873,7 +3355,7 @@ window.__ModuleLoader__.load({
 					// 行绑定 sid 持久在 dataset(React 重渲染会丢,丢了由 4s 轮询重新匹配自愈);
 					// 标题被替换后 map[DOM文本] 失配,故优先读 dataset 绑定。
 					var sid = row.getAttribute("data-dsh-sid") || map[(titleEl.textContent || "").trim()];
-					var sum = sid ? summaries[sid] : null;
+					var sum = cleanSummary(sid ? summaries[sid] : null);
 					// 旧副标题清理(R37 遗留样式行,避免双显示)
 					var legacy = row.querySelector("[data-dsh-summary]");
 					if (legacy) legacy.parentNode.removeChild(legacy);
@@ -2886,9 +3368,39 @@ window.__ModuleLoader__.load({
 							titleEl.setAttribute("title", titleEl.getAttribute("data-dsh-orig") || cur);
 							titleEl.textContent = sum;
 						}
+					} else if (sid && titleEl.getAttribute("data-dsh-orig")) {
+						// [批次104] 摘要被作废(脏数据清洗/缓存清除)后行回落 store 原题:React 不感知
+						// 此前的 textContent 替换,不重渲染就一直挂着脏碎片;主动恢复并清 orig 登记,
+						// 下次新摘要替换时重新记录。data-dsh-sid 保留给回填泵定位,不在此处清。
+						titleEl.textContent = titleEl.getAttribute("data-dsh-orig");
+						titleEl.removeAttribute("data-dsh-orig");
 					}
 				}
+				syncHeader();
 			} catch (e) { /* 自愈:下轮再试 */ }
+		};
+		// ---- [批次61 修复·头部同步] 侧栏摘要改题(R40)只换了侧栏行文本,头部面包屑(crumb)与窗口
+		// 标题仍显示 store 标题 →「检查本机已安装的逆向工程工具」vs「检查本机逆向工具」双轨不一致。
+		// 让二者跟随当前会话摘要:crumb 是 React 受控按钮、重渲染会回退,与侧栏行同策略由 4s 轮询
+		// 幂等重盖;data-dsh-orig 每轮以 React 当前渲染值为权威,会话切换后旧值自然被新值覆盖,
+		// document.title 按原标题子串替换(保留「 — DeepSeek Harness」等后缀)。
+		var syncHeader = function () {
+			var crumb = document.querySelector('[data-slot="conversation.session.header"] [class*="_crumbCurrent"]');
+			var csid = currentSid();
+			var csum = cleanSummary(csid ? summaries[csid] : null);
+			if (!crumb || !csum) return;
+			var ccur = (crumb.textContent || "").trim();
+			if (ccur !== csum) {
+				crumb.setAttribute("data-dsh-orig", ccur);
+				crumb.setAttribute("title", ccur); // 悬停可读 store 原标题(与侧栏行同语义)
+				crumb.textContent = csum;
+			}
+			// [批次100 2026-09-04] 标题改为「头—尾」整段重建:头部必须整体等于摘要才幂等。
+			// 旧 replace(dorig, csum) 在 dorig 是 csum 子串时(摘要回声标题)每轮 4s 轮询都在
+			// 已插入的摘要前缀里再替换一次 → 窗口标题无限繁殖(实测「用户请求」×28 且持续
+			// 增长,重载/重启后继续)。整段重建顺带自愈历史污染头(头部 ≠ 摘要一律重写)。
+			var sep = document.title.indexOf(" — ");
+			if (sep > 0 && document.title.slice(0, sep) !== csum) document.title = csum + document.title.slice(sep);
 		};
 		var currentSid = function () {
 			try { var snap = ctx.sessions.list.getSnapshot(); return (snap && snap.current) || null } catch (e) { return null }
@@ -2899,9 +3411,14 @@ window.__ModuleLoader__.load({
 			if (!flow) return "";
 			var userTxt = "", asstTxt = "";
 			var nodes = flow.querySelectorAll('[data-slot="conversation.chat.node"]');
-			for (var i = 0; i < nodes.length && i < 6; i++) {
+			for (var i = 0; i < nodes.length && i < 10; i++) {
 				var nd = nodes[i];
 				var t = (nd.textContent || "").trim();
+				if (!t) continue;
+				// [批次61] 宿主伪消息(上下文注入/运行时上下文/MNEMON/system-reminder)不进摘要输入;
+				// 字面 <think> 段剥离——e5a37c54 的摘要被污染成「<think>用户询问检查本机…」即此因。
+				if (/^(上下文注入|Current runtime context|\[MNEMON\]|<system-reminder>)/.test(t)) continue;
+				t = t.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<\/?think>/gi, "").replace(/\s+/g, " ").trim();
 				if (!t) continue;
 				var isUser = nd.querySelector('[class*="userBubble"], [class*="userS"]') !== null;
 				if (isUser) { if (!userTxt) userTxt = t.slice(0, 400); }
@@ -2928,24 +3445,158 @@ window.__ModuleLoader__.load({
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ sessionId: sid, text: text }),
 			}).then(function (r) { return r.json(); }).then(function (j) {
-				if (j && j.ok && j.summary) { summaries[sid] = j.summary; renderAll(); }
+				// [批次104] 脏摘要(think 泄漏)拒收:入 10 分钟冷却,防「缓存命中同一脏值→清洗→重试」空转
+				if (j && j.ok && !isDirtySummary(j.summary) && cleanSummary(j.summary)) { summaries[sid] = j.summary; renderAll(); }
 				else failed[sid] = Date.now();
 			}).catch(function () { failed[sid] = Date.now(); }).then(function () { delete inflight[sid]; });
 		};
+		// ---- [R69] 主题回填:可见行缺摘要时经 host wire 取首条用户消息补生成 ----
+		// 旧逻辑只为「当前会话 + 回合结束后」生成;缓存停摆(如 8-24 起的 401)之后,
+		// 侧栏其余行永远停留在截断标题。回填按行序串行(1 并发),失败进 failed[] 同款
+		// 10 分钟冷却。历史窗口只取头部 16 个事件(首条真实用户消息必在其中;
+		// 助手首轮回复通常在数百 seq 之后,不追——主题由用户首轮诉求即可成立)。
+		var backfillQueue = [];
+		var backfillBusy = false;
+		// [批次104 2026-09-05] alpha.5 把 session.history 改名 session/page:斜杠端点 +
+		// payload={args:{request:{address:{kind:"session",sessionId}, throughSeq, beforeSeq, maxMessages}}}
+		// (gateway 三连报错「does not match endpoint / missing request / boundary validation」实测定型,
+		// throughSeq 缺失同样被 boundary validation 拒收);响应 value 从 events[] 变 records[].event。
+		// rc.5 基座仍是 /api/session.history 点风格。wireHistPage 双轨探测,404 回落后缓存模式。
+		var wireHistMode = "page";
+		var wireHistPage = function (sid) {
+			var attempt = function (mode) {
+				var url = mode === "page" ? "/api/session/page" : "/api/session.history";
+				var body = mode === "page"
+					? { type: "client-request", rpcId: "sbf-" + sid + "-" + Date.now(), method: "session/page", payload: { args: { request: { address: { kind: "session", sessionId: sid }, throughSeq: 16, beforeSeq: 16, maxMessages: 16 } } } }
+					: { type: "client-request", rpcId: "sbf-" + sid + "-" + Date.now(), method: "session.history", payload: { sessionId: sid, beforeSeq: 16, maxMessages: 16 } };
+				return fetch(url, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(body),
+				}).then(function (r) {
+					if (mode === "page" && r.status === 404) { wireHistMode = "history"; throw { fallback: true }; }
+					return r.json();
+				}).then(function (j) {
+					if (j && j.result && j.result.ok) {
+						var v = j.result.value || {};
+						var raw = v.records || v.events || [];
+						return raw.map(function (x) { return x && x.event ? x.event : x; });
+					}
+					return [];
+				});
+			};
+			if (wireHistMode === "history") return attempt("history");
+			return attempt("page").catch(function (e) {
+				if (e && e.fallback) return attempt("history");
+				throw e;
+			});
+		};
+		var firstUserTextFromHistory = function (evs) {
+			try {
+				for (var i = 0; i < evs.length; i++) {
+					var ev = evs[i];
+					if (!ev || ev.type !== "user/message") continue;
+					var d = ev.data || {};
+					if (d.source && d.source.kind !== "user") continue;
+					var parts = d.content || [];
+					var t = "";
+					for (var k = 0; k < parts.length; k++) if (parts[k] && parts[k].type === "text") t += (t ? "\n" : "") + parts[k].text;
+					t = (t || "").replace(/\s+/g, " ").trim();
+					// 跳过宿主注入的伪用户消息(上下文注入/运行时上下文/记忆检索/系统提醒);
+					// 字面 <think> 段剥离(批次61,与 collectText 同因同修)
+					if (/^(上下文注入|Current runtime context|\[MNEMON\]|<system-reminder>)/.test(t)) continue;
+					t = t.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<\/?think>/gi, "").trim();
+					if (!t) continue;
+					return t.slice(0, 800);
+				}
+			} catch (e) { /* 形状变动自愈 */ }
+			return "";
+		};
+		var backfillPump = function () {
+			if (backfillBusy || !backfillQueue.length) return;
+			var sid = backfillQueue.shift();
+			if (!sid || summaries[sid] || inflight[sid]) { backfillPump(); return; }
+			backfillBusy = true;
+			inflight[sid] = true;
+			var done = function (ok) {
+				if (!ok && !summaries[sid]) failed[sid] = Date.now();
+				delete inflight[sid];
+				backfillBusy = false;
+				renderAll();
+				backfillPump();
+			};
+			wireHistPage(sid).then(function (evs) {
+				var text = firstUserTextFromHistory(evs);
+				if (text.length < 10) { done(false); return; }
+				return fetch(SHELL_API + "/session-summary", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ sessionId: sid, text: "用户:" + text }),
+				}).then(function (r2) { return r2.json(); }).then(function (j2) {
+					// [批次104] 脏摘要拒收:done(false) 入 10 分钟冷却(同 maybeGenerate,防空转循环)
+					if (j2 && j2.ok && !isDirtySummary(j2.summary) && cleanSummary(j2.summary)) { summaries[sid] = j2.summary; done(true); }
+					else done(false);
+				});
+			}).catch(function () { done(false); });
+		};
+		var backfillVisible = function () {
+			try {
+				var map = idByTitle();
+				var rows = document.querySelectorAll('div[data-slot="sidebar"] [class*="sessionRow"]');
+				for (var i = 0; i < rows.length; i++) {
+					var titleEl = rows[i].querySelector('[class*="_title"]');
+					if (!titleEl) continue;
+					var sid = rows[i].getAttribute("data-dsh-sid") || map[(titleEl.textContent || "").trim()];
+					if (!sid || summaries[sid] || inflight[sid]) continue;
+					if (failed[sid] && Date.now() - failed[sid] < 600000) continue;
+					if (backfillQueue.indexOf(sid) === -1) backfillQueue.push(sid);
+				}
+			} catch (e) { /* 自愈:下轮再试 */ }
+			backfillPump();
+		};
 		fetch(SHELL_API + "/session-summaries").then(function (r) { return r.json(); }).then(function (j) {
-			if (j && j.ok) { summaries = j.summaries || {}; renderAll(); }
+			if (j && j.ok) {
+				summaries = j.summaries || {};
+				// [批次104] 持久层脏摘要(<think> 泄漏)加载即作废:行回落原题,回填泵按缺失重生成
+				for (var sk in summaries) if (isDirtySummary(summaries[sk])) delete summaries[sk];
+				renderAll();
+			}
 		}).catch(function () {});
 		window.setInterval(function () {
 			renderAll();
 			maybeGenerate();
+			backfillVisible();
 		}, 4000);
+		// [批次69 闪变根治] 4s 轮询是唯一回补通道时,React 重渲染(开合侧边卡片/投影帧/选中变化)
+		// 把标题还原为 store 原生值后,要等下一拍 renderAll 才换回摘要——回退值在屏上停留可达一整
+		// 拍,即「启动/展开折叠侧边卡片时标题短暂改变又恢复」的闪变。补 MutationObserver 前绘修复
+		// (批次63 盘符行同款「观察者微任务先于绘制」模式):回调在微任务检查点运行,React 提交后
+		// 同一帧内即重盖摘要,回退值永不上屏。回调先按记录目标过滤,仅侧栏/头部 crumb 相关变更才
+		// 全扫,会话流式区的高频 childList 批次零成本穿过;自身 textContent 写入引发的记录因
+		// cur===sum 幂等跳过,无自激循环。4s 轮询保留作映射失配/document.title 的兜底自愈。
+		try {
+			var flashObserver = new MutationObserver(function (recs) {
+				for (var i = 0; i < recs.length; i++) {
+					var tgt = recs[i].target;
+					var el = tgt && tgt.nodeType === 3 ? tgt.parentElement : tgt;
+					if (!el || !el.closest) continue;
+					if (el.closest('div[data-slot="sidebar"]') || el.closest('[data-slot="conversation.session.header"]')) {
+						renderAll();
+						return;
+					}
+				}
+			});
+			flashObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+		} catch (e) { /* 环境不支持则退化为纯 4s 轮询 */ }
 	}
 
 	// ---- [需求] 目录选择器盘符行:「选择工作区目录」对话框标题/面包屑下方增加盘符快捷入口 ----
 	// 上游目录浏览器只能从主目录逐级下钻,Windows 下无法直达其他盘——注入盘符行,
 	// 点击后复用组件自带的路径编辑器提交链路(点编辑区 → native setter 回填 →
 	// Enter 提交 navigate),不碰 React 内部状态;盘符清单由壳 /drives 探测。
-	// 1s 轮询自愈:对话框每次打开/React 重渲染都可能丢掉注入行,丢了就重注。
+	// [批次63] 出现时机对齐:原先靠 1s 轮询补渲染,盘符行比面板晚至 1s 才弹入;
+	// 改 MutationObserver 盯对话框挂载/内容填充,当帧注入(观察者微任务先于绘制,
+	// 与面板同帧出现)。轮询仅留作 React 重渲染丢行后的自愈重注。
 	var DRIVE_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="5" width="13" height="7" rx="1.6"/><circle cx="11.4" cy="8.5" r=".9" fill="currentColor" stroke="none"/><path d="M4 8.5h4"/></svg>';
 	var pickerDrives = null; // null=未拉取;[]=无盘符(POSIX/壳离线)
 	function pickerDialog() {
@@ -3020,7 +3671,7 @@ window.__ModuleLoader__.load({
 	function installDrivePicker(ctx) {
 		if (typeof document === "undefined") return;
 		// 首选:dsh 自带 listDirectory 逐盘符探测(免壳依赖,旧壳也生效);
-		// 失败兜底:壳 /drives(需 v0.4.6+ 壳;当前壳无此路由时返错→空列表)。
+		// 失败兜底:壳 /drives(需 v0.4.6+ 壳;旧壳无此路由时返错→保持未知,有界重试)。
 		var probe = function () {
 			try {
 				var ws = ctx && ctx.workspaces;
@@ -3030,18 +3681,39 @@ window.__ModuleLoader__.load({
 				return Promise.allSettled(letters.map(function (L) {
 					return ws.listDirectory(L + ":\\").then(function () { return L + ":"; });
 				})).then(function (rs) {
-					return rs.filter(function (r) { return r.status === "fulfilled"; }).map(function (r) { return r.value; });
+					var ok = rs.filter(function (r) { return r.status === "fulfilled"; }).map(function (r) { return r.value; });
+					// 全盘拒绝=服务未就绪(非真无盘符):返 null 保持未知,交壳兜底/重试
+					return ok.length ? ok : null;
 				}).catch(function () { return null; });
 			} catch (e) { return Promise.resolve(null); } // inject 守卫拒绝时降级到壳 API
 		};
-		// 延迟到 apply 之后:避免服务未就绪/注入守卫异常拖垮插件加载
-		window.setTimeout(function () {
+		var probing = false, tries = 0;
+		var flushDialog = function () { var dlg = pickerDialog(); if (dlg) renderDriveRow(dlg); };
+		// 拉取盘符:有界重试(未就绪 3s 后再试,至多 5 次);探测完成时面板已开→立即补渲染
+		var ensureDrives = function () {
+			if (pickerDrives !== null || probing || tries >= 5) return;
+			probing = true; tries++;
 			probe().then(function (ds) {
-				if (ds && ds.length) { pickerDrives = ds; return; }
-				if (ds !== null) { pickerDrives = []; return; } // 探测成功但无盘符(POSIX)
-				api("/drives").then(function (j) { pickerDrives = (j && j.ok && j.drives) || []; }).catch(function () { pickerDrives = []; });
-			});
-		}, 2000);
+				if (ds) { pickerDrives = ds; probing = false; flushDialog(); return; }
+				return api("/drives").then(function (j) {
+					probing = false;
+					if (j && j.ok) { pickerDrives = j.drives || []; flushDialog(); return; }
+					window.setTimeout(ensureDrives, 3000); // 壳未就绪/旧壳无路由
+				});
+			}).catch(function () { probing = false; window.setTimeout(ensureDrives, 3000); });
+		};
+		// [批次63] 出现时机对齐:原先启动 2s 后才探测、面板靠 1s 轮询补渲染 → 盘符行
+		// 比面板晚至 1s 弹入。改:启动 300ms 即探测(纯异步不拖加载);MutationObserver
+		// 盯对话框挂载/内容填充,当帧注入;盘符未知时开面板顺手拉起探测;1s 轮询仅留作
+		// React 重渲染丢行后的自愈重注。
+		window.setTimeout(ensureDrives, 300);
+		var mo = new MutationObserver(function () {
+			var dlg = pickerDialog();
+			if (!dlg) return;
+			if (pickerDrives === null) ensureDrives();
+			renderDriveRow(dlg);
+		});
+		mo.observe(document.body, { childList: true, subtree: true });
 		window.setInterval(function () {
 			var dlg = pickerDialog();
 			if (dlg) renderDriveRow(dlg);
@@ -3141,18 +3813,17 @@ window.__ModuleLoader__.load({
 		// 面板构建代码保留但不再有入口触发;如需恢复,重建 ensureEntry 注入即可。
 	}
 
-	// ---------- [R43] 皮肤中心/宠物页返回按钮 ----------
-	// 两个区段的导航项已被隐藏(问题1 统一入口),从「皮肤」页入口卡进入后只能靠导航「皮肤」
-	// 返回。此处在激活区段为 skin-center/pet 时,于内容滚动区顶部注入返回胶囊按钮,点击编程
-	// 跳回皮肤区段(同 gotoSection 手法)。React 重渲染会移除注入节点 → MO 自愈重注(同 R35 图标)。
+	// ---------- [R43→K2f] 二级子页返回按钮 ----------
+	// 原为 skin-center/pet 隐藏区段提供返回路径(2026-09-04 随遗留「主题皮肤/宠物」模块一并移除);
+	// 现仅服务 [K2f] 的二级子页(基础设置/专家/备份与迁移/Vision Router):导航行已隐藏(K2d),
+	// active 落在 data-dsh-sub 行上——检测后于内容滚动区顶部注入返回胶囊,点击编程跳回「通用设置」。
+	// React 重渲染会移除注入节点 → MO 自愈重注(同 R35 图标)。
 
 	function installSectionBackButtons() {
 		if (typeof document === "undefined") return;
 		var sync = function () {
 			var dlg = document.querySelector('div[role="dialog"]');
 			if (!dlg) return;
-			var active = dlg.querySelector('[class*="_active"][data-section-id]');
-			var sid = active ? active.getAttribute("data-section-id") : "";
 			// [K2f 2026-08-28] 四个二级子页(基础设置/专家/备份与迁移/Vision Router):
 			// 导航行已隐藏(K2d),active 落在 data-dsh-sub 行上——检测后注入返回胶囊,
 			// 点击回「通用设置」入口卡页(按钮复用现有 vt_backBar 样式,同 R44 模式)。
@@ -3160,11 +3831,16 @@ window.__ModuleLoader__.load({
 			var options = dlg.querySelector('[class*="_options"]');
 			if (!options) return;
 			var bar = options.querySelector(":scope > [data-dsh-back]");
-			var target = "";
-			if ((sid === "skin-center" || sid === "pet") && document.querySelector('button[data-section-id="skin"]')) target = "skin";
-			else if (subActive && document.querySelector('button[data-section-id="general"]')) target = "general";
+			var target = "", label = "";
+			if (subActive) {
+				var dshParent = subActive.previousElementSibling;
+				while (dshParent && dshParent.getAttribute && dshParent.getAttribute("data-dsh-sub") === "true") dshParent = dshParent.previousElementSibling;
+				if (dshParent && dshParent.getAttribute && dshParent.getAttribute("data-section-id")) {
+					target = dshParent.getAttribute("data-section-id");
+					label = "返回" + (dshParent.textContent || "").trim();
+				}
+			}
 			if (!target) { if (bar) bar.remove(); return; }
-			var label = target === "skin" ? "返回皮肤设置" : "返回通用设置";
 			// 已存在且目标一致:幂等跳过(React 重渲染冲掉后由 MO 自愈重注)
 			if (bar && bar.dataset.dshTarget === target) return;
 			if (bar) bar.remove();
@@ -3656,6 +4332,329 @@ window.__ModuleLoader__.load({
 		mo.observe(document.body, { childList: true, subtree: true });
 	}
 
+	// ---------- [R80] 归档会话管理:通用设置第五卡的管理页 ----------
+	// 数据源= 壳 GET /sessions/archived(归档序 + 投影标题/时间 + 磁盘占用/幽灵)。
+	// 恢复= ctx.workspaces.unarchiveSession(上游 RPC;旧运行时缺席时降级隐藏按钮,
+	// 不产生死按钮)。彻底删除= 壳 POST /sessions/delete(与 R79 同款四处清理;
+	// 管理页列表本身即归档集,无需先 archiveSession)。幽灵清理= 对 ghost 行逐条
+	// 调删除端点(端点对缺目录幂等)。host 广播 host/archived-sessions-changed 时
+	// 侧栏自刷新;本页动作为主,提供手动刷新按钮。
+	function installArchiveManager(ctx) {
+		if (!ctx || !ctx.slots || !ctx.locale || !ctx.workspaces) return;
+		if (typeof ctx.slots.inject !== "function" || typeof ctx.slots.register !== "function") return;
+		ctx.effect(() => ctx.locale.register(NS9, {
+			zh: {
+				"section.label": "归档会话管理",
+				"refresh": "刷新",
+				"empty": "没有已归档的会话",
+				"ghostBadge": "幽灵",
+				"emptyBadge": "空",
+				"ghostClean": "清理残留",
+				"restore": "恢复",
+				"del": "彻底删除",
+				"confirmTitle": "彻底删除会话",
+				"cancel": "取消",
+				"ok": "删除",
+				"restored": "会话已恢复到侧栏",
+				"deleted": "会话已彻底删除",
+				"noRuntime": "当前桌面壳未提供恢复能力,请更新桌面壳后重试",
+				"failPrefix": "失败: ",
+			},
+			en: {
+				"section.label": "Archived Sessions",
+				"refresh": "Refresh",
+				"empty": "No archived sessions",
+				"ghostBadge": "ghost",
+				"emptyBadge": "empty",
+				"ghostClean": "Clean leftovers",
+				"restore": "Restore",
+				"del": "Delete for good",
+				"confirmTitle": "Delete session permanently",
+				"cancel": "Cancel",
+				"ok": "Delete",
+				"restored": "Session restored to the sidebar",
+				"deleted": "Session deleted for good",
+				"noRuntime": "This desktop shell lacks restore support; please update the shell",
+				"failPrefix": "failed: ",
+			},
+		}), "dsh-archive-mgr: dictionaries");
+		const t = ctx.locale.bind(NS9);
+		var canRestore = typeof ctx.workspaces.unarchiveSession === "function";
+		window.__dshArchiveProbe = function () {
+			return { canRestore: canRestore, sectionMounted: true };
+		};
+
+		var fmtSize = function (bytes) {
+			if (!bytes || bytes <= 0) return "0 KB";
+			if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
+			return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+		};
+		var fmtTime = function (iso) {
+			if (!iso) return "";
+			var d = new Date(iso);
+			if (isNaN(d.getTime())) return "";
+			return d.toLocaleString();
+		};
+
+		function ArchiveManagerSection() {
+			var h = react.createElement;
+			var stateS = react.useState({ status: "loading", items: [], totalBytes: 0 });
+			var state = stateS[0], setState = stateS[1];
+			var busyS = react.useState(null);
+			var busy = busyS[0], setBusy = busyS[1];
+			var msgS = react.useState({ text: "", kind: "" });
+			var msg = msgS[0], setMsg = msgS[1];
+			var confirmS = react.useState(null);
+			var confirmDel = confirmS[0], setConfirmDel = confirmS[1];
+
+			var showMsg = function (text, kind) { setMsg({ text: text || "", kind: kind || "" }); };
+			var failMsg = function (op, e) {
+				var m = e && (e.message || e.code) ? (e.message || e.code) : String(e);
+				showMsg(op + " " + t("failPrefix") + m, "err");
+			};
+
+			var load = react.useCallback(function () {
+				return api("/sessions/archived").then(function (j) {
+					if (!j || !j.ok) throw new Error((j && j.error) || "HTTP error");
+					setState({ status: "ready", items: j.sessions || [], totalBytes: j.totalBytes || 0 });
+				}).catch(function (e) {
+					setState({ status: "error", items: [], totalBytes: 0 });
+					failMsg(t("refresh"), e);
+				});
+			}, []);
+			react.useEffect(function () { load(); }, []);
+
+			var doRestore = function (id) {
+				if (!canRestore) { showMsg(t("noRuntime"), "err"); return; }
+				setBusy(id);
+				Promise.resolve().then(function () { return ctx.workspaces.unarchiveSession(id); })
+					.then(function () { showMsg(t("restored"), "ok"); return load(); })
+					.catch(function (e) { failMsg(t("restore"), e); })
+					.then(function () { setBusy(null); });
+			};
+			var doDelete = function (id) {
+				setBusy(id);
+				api("/sessions/delete", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ sessionId: id }),
+				}).then(function (j) {
+					if (!j || !j.ok) throw new Error((j && j.error) || "HTTP error");
+					showMsg(t("deleted"), "ok");
+					return load();
+				}).catch(function (e) { failMsg(t("del"), e); })
+					.then(function () { setBusy(null); });
+			};
+			var doCleanGhosts = function () {
+				var ghosts = state.items.filter(function (it) { return it.ghost; });
+				if (!ghosts.length) return;
+				setBusy("__ghosts__");
+				var p = Promise.resolve();
+				ghosts.forEach(function (g) {
+					p = p.then(function () {
+						return api("/sessions/delete", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ sessionId: g.id }),
+						});
+					});
+				});
+				p.then(function () { showMsg(t("ghostClean") + ": " + ghosts.length, "ok"); return load(); })
+					.catch(function (e) { failMsg(t("ghostClean"), e); return load(); })
+					.then(function () { setBusy(null); });
+			};
+
+			if (state.status === "loading") {
+				return h("div", { className: "am_root" }, h("div", { className: "am_msg" }, "…"));
+			}
+			var ghosts = state.items.filter(function (it) { return it.ghost; });
+			var stats = state.items.length + " · " + fmtSize(state.totalBytes);
+			var rows = state.items.map(function (it) {
+				var title = it.title || (String(it.id || "").replace(/^session-/, "").slice(0, 8) || it.id);
+				var metaParts = [];
+				var time = fmtTime(it.lastActivityAt);
+				if (time) metaParts.push(time);
+				metaParts.push(it.cwd || it.projectKey || "");
+				metaParts.push(fmtSize(it.bytes));
+				var badges = [];
+				if (it.ghost) badges.push(h("span", { key: "g", className: "am_badge" }, t("ghostBadge")));
+				else if (!it.bytes) badges.push(h("span", { key: "e", className: "am_badge am_badgeEmpty" }, t("emptyBadge")));
+				return h("div", { key: it.id, className: "am_row" },
+					h("div", { className: "am_main" },
+						h("div", { className: "am_title" },
+							h("span", { className: "am_titleTxt" }, title), badges),
+						h("div", { className: "am_meta" }, metaParts.join(" · "))),
+					h("div", { className: "am_actions" },
+						h("button", {
+							type: "button", className: "am_btn", disabled: !!busy || it.ghost,
+							title: it.ghost ? t("noRuntime") : undefined,
+							onClick: function () { doRestore(it.id); },
+						}, t("restore")),
+						h("button", {
+							type: "button", className: "am_btnDanger", disabled: !!busy,
+							onClick: function () { setConfirmDel(it); },
+						}, t("del"))));
+			});
+			return h("div", { className: "am_root" },
+				h("div", { className: "am_top" },
+					h("span", { className: "am_stats" }, stats),
+					h("button", { type: "button", className: "am_btn", disabled: !!busy, onClick: function () { load(); } }, t("refresh"))),
+				ghosts.length ? h("div", { className: "am_ghost" },
+					h("span", null, t("ghostBadge") + ": " + ghosts.length),
+					h("button", { type: "button", className: "am_btn", disabled: !!busy, onClick: doCleanGhosts }, t("ghostClean"))) : null,
+				h("div", { className: "am_msg" + (msg.kind === "err" ? " am_msgErr" : msg.kind === "ok" ? " am_msgOk" : "") }, msg.text),
+				rows.length ? h("div", { className: "am_list" }, rows) : h("div", { className: "am_empty" }, t("empty")),
+				confirmDel ? (function () {
+					// [R80fix] style 必须是 React 对象:字符串在 createElement 校验即抛
+					// Minified React error #62(The style prop expects a mapping...),
+					// 槽位错误边界把整个 section 卸载 → 管理页空白/卡死。
+					var overlay = h("div", {
+						style: {
+							position: "fixed", inset: 0, zIndex: 2147483000, display: "flex",
+							alignItems: "center", justifyContent: "center",
+							background: "rgba(0,0,0,.34)",
+						},
+						onMouseDown: function (e) { if (e.target === e.currentTarget) setConfirmDel(null); },
+					}, h("div", {
+						style: {
+							width: "min(400px,86vw)", padding: "20px 22px 16px", borderRadius: 14,
+							color: "var(--dsw-alias-label-primary)", background: "var(--dsw-alias-bg-base)",
+							border: "1px solid var(--dsw-alias-border-l)",
+							boxShadow: "0 18px 60px rgba(0,0,0,.28)",
+						},
+					},
+						h("div", { style: { fontSize: 15, fontWeight: 600, marginBottom: 8 } }, t("confirmTitle")),
+						h("div", { style: { fontSize: 13, lineHeight: "20px", color: "var(--dsw-alias-label-secondary)", marginBottom: 18, wordBreak: "break-all" } },
+							(confirmDel.title || confirmDel.id) + " — " + t("del") + "?"),
+						h("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
+							h("button", {
+								type: "button", className: "am_btn",
+								onClick: function () { setConfirmDel(null); },
+							}, t("cancel")),
+							h("button", {
+								type: "button", className: "am_btnDanger",
+								style: { borderColor: "#da3633", color: "#f85149" },
+								onClick: function () { var row = confirmDel; setConfirmDel(null); doDelete(row.id); },
+							}, t("ok")))));
+					return overlay;
+				})() : null);
+		}
+
+		ctx.slots.inject("settings.section", () => ctx.slots.register({
+			name: "settings.section",
+			id: "archive-manager",
+			order: 65,
+			label: () => t("section.label"),
+			locale: NS9,
+		}, function ArchiveManagerHost() {
+			return react.createElement(ArchiveManagerSection);
+		}));
+	}
+
+	function installSessionDelete(ctx) {
+		if (typeof document === "undefined") return;
+		if (window.__dshSessionDelete) return; // 热重载/重复 apply 单例守卫
+		if (!ctx || !ctx.workspaces || typeof ctx.workspaces.archiveSession !== "function") return;
+		// [R79] 会话删除桥:补丁 [U] 在会话行「...」菜单注入「删除会话」(danger 红行),
+		// onSelect 优先调本桥;桥缺席时回落 onArchive=纯归档(永不产生死菜单项)。
+		// 编排: 确认弹窗 → ctx.workspaces.archiveSession(host 一致隐藏:列表即时消失、
+		// 当前会话自动清选)→ 壳 POST /sessions/delete 物理清除(日志目录+workspace.json
+		// 引用+投影缓存+摘要缓存四处)。归档失败即中止;壳 404(旧壳)如实提示「已归档未清除」。
+		var overlay = null;
+		var escHandler = null;
+		var toastEl = null, toastTimer = null;
+		var toast = function (msg, kind) {
+			try {
+				if (!toastEl || !toastEl.parentNode) {
+					toastEl = document.createElement("div");
+					toastEl.setAttribute("data-dsh-sdel-toast", "");
+					toastEl.style.cssText = "position:fixed;left:50%;bottom:84px;transform:translateX(-50%);"
+						+ "padding:8px 16px;border-radius:10px;font-size:12px;line-height:18px;z-index:2147483000;"
+						+ "color:var(--dsw-alias-label-primary,#333);background:var(--dsw-alias-bg-base,#fff);"
+						+ "border:1px solid var(--dsw-alias-border-l,rgba(0,0,0,.12));box-shadow:0 8px 28px rgba(0,0,0,.18);"
+						+ "max-width:70vw;pointer-events:none;opacity:0;transition:opacity .18s ease";
+					document.body.appendChild(toastEl);
+				}
+				toastEl.textContent = msg;
+				toastEl.style.borderColor = kind === "err" ? "var(--dsw-alias-state-error-primary,#d64545)" : "";
+				toastEl.style.opacity = "1";
+				if (toastTimer) window.clearTimeout(toastTimer);
+				toastTimer = window.setTimeout(function () { if (toastEl) toastEl.style.opacity = "0"; }, kind === "err" ? 4200 : 2000);
+			} catch (e) { /* 展示层自愈 */ }
+		};
+		var close = function () {
+			if (escHandler) { document.removeEventListener("keydown", escHandler, true); escHandler = null; }
+			if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+			overlay = null;
+		};
+		var run = function (sessionId) {
+			Promise.resolve()
+				.then(function () { return ctx.workspaces.archiveSession(sessionId); })
+				.then(function () {
+					return fetch(SHELL_API + "/sessions/delete", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ sessionId: sessionId }),
+					}).then(function (r) {
+						return r.json().catch(function () { return null; }).then(function (j) {
+							if (r.ok && j && j.ok) { toast("会话已删除", "ok"); return; }
+							if (r.status === 404) { toast("会话已归档;彻底清除需更新桌面壳后重试", "err"); return; }
+							toast("会话已归档,但清除失败" + (j && j.error ? ": " + j.error : ""), "err");
+						});
+					});
+				})
+				.catch(function (e) {
+					var m = (e && (e.message || e.code)) ? (e.message || e.code) : String(e);
+					toast("删除失败: " + m, "err");
+				});
+		};
+		var showConfirm = function (sessionId, title) {
+			close();
+			overlay = document.createElement("div");
+			overlay.setAttribute("data-dsh-sdel-overlay", "");
+			overlay.style.cssText = "position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;"
+				+ "background:rgba(0,0,0,.34);backdrop-filter:blur(2px)";
+			var card = document.createElement("div");
+			card.setAttribute("data-dsh-sdel-card", "");
+			card.style.cssText = "width:min(400px,86vw);padding:20px 22px 16px;border-radius:14px;"
+				+ "color:var(--dsw-alias-label-primary,#222);background:var(--dsw-alias-bg-base,#fff);"
+				+ "border:1px solid var(--dsw-alias-border-l,rgba(0,0,0,.12));box-shadow:0 18px 60px rgba(0,0,0,.28)";
+			var h = document.createElement("div");
+			h.textContent = "删除会话";
+			h.style.cssText = "font-size:15px;font-weight:600;margin-bottom:8px";
+			var p = document.createElement("div");
+			p.style.cssText = "font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary,#555);margin-bottom:18px;word-break:break-all";
+			p.textContent = "将永久删除「" + (title || sessionId) + "」的会话记录,此操作不可恢复。";
+			var row = document.createElement("div");
+			row.style.cssText = "display:flex;justify-content:flex-end;gap:8px";
+			var btnCancel = document.createElement("button");
+			btnCancel.type = "button";
+			btnCancel.textContent = "取消";
+			btnCancel.style.cssText = "cursor:pointer;height:32px;padding:0 14px;border-radius:8px;font-size:13px;"
+				+ "color:var(--dsw-alias-label-primary,#222);background:transparent;"
+				+ "border:1px solid var(--dsw-alias-border-l,rgba(0,0,0,.16))";
+			var btnOk = document.createElement("button");
+			btnOk.type = "button";
+			btnOk.textContent = "删除";
+			btnOk.style.cssText = "cursor:pointer;height:32px;padding:0 16px;border-radius:8px;font-size:13px;"
+				+ "color:#fff;background:var(--dsw-alias-state-error-primary,#d64545);border:none";
+			btnCancel.addEventListener("click", close);
+			btnOk.addEventListener("click", function () { close(); run(sessionId); });
+			overlay.addEventListener("mousedown", function (e) { if (e.target === overlay) close(); });
+			escHandler = function (e) { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+			document.addEventListener("keydown", escHandler, true);
+			row.appendChild(btnCancel); row.appendChild(btnOk);
+			card.appendChild(h); card.appendChild(p); card.appendChild(row);
+			overlay.appendChild(card);
+			document.body.appendChild(overlay);
+			btnOk.focus();
+		};
+		window.__dshSessionDelete = function (sessionId, title) {
+			if (typeof sessionId !== "string" || !sessionId) return;
+			showConfirm(sessionId, title);
+		};
+	}
+
 	function apply(ctx) {
 		// [local] 原生右栏轨道塌陷:display:none 之外的 grid 轨道补偿
 		installNativeTrackCollapse();
@@ -3663,7 +4662,7 @@ window.__ModuleLoader__.load({
 		installSidebarDotSync();
 		// [问题93→95] better-sidebar 入口/面板右距统一常量底线(废弃内容测量,两页类型像素恒一致)
 		installSidebarEntryPin();
-		// [local] 设置导航 data-section-id 注入(问题1:皮肤/皮肤中心/宠物统一入口)
+		// [local] 设置导航 data-section-id 注入(R32 全量标记+分组;skin-center/pet 防御性隐藏)
 		installSettingsNavPatch();
 		// [问题47] 发送乐观回显:新会话首条 ~4s 后端回执空窗的感知补偿(热会话 150ms 快路径不触发)
 		installSendEcho();
@@ -3677,12 +4676,16 @@ window.__ModuleLoader__.load({
 		installSettingsOverlayEscape();
 		// [问题79] 插件市场批量下载队列(+队列按钮/进度坞/串行执行/错误隔离)
 		installMarketQueue();
-		// [R43] 皮肤中心/宠物页返回按钮(内容区顶部胶囊,跳回皮肤区段)
+		// [R43→K2f] 通用设置二级子页返回胶囊(内容区顶部;原皮肤中心/宠物返回已随遗留模块移除)
 		installSectionBackButtons();
 		// [R62] 侧栏滚动条邻近显现:默认隐形,鼠标接近容器右缘感应带才显色
 		installScrollbarProximity();
 		// [问题112] 开合侧边卡片主列下潜钳制(输入框上抬挤压/文本手风琴/重排性能)
 		installPushClamp();
+		// [R79] 会话删除桥:菜单「删除会话」→ 确认弹窗 → 归档 + 壳端点物理清除
+		installSessionDelete(ctx);
+		// [R80] 归档会话管理:通用设置第五卡的二级管理页
+		installArchiveManager(ctx);
 		// [问题4] 提示词增强按钮已迁至独立插件 dsh-enhance-prompt(2026-08),dshvt 不再注入,避免双挂载。
 			// 「插件」区段:唯一的"插件管理"tab(合并原只读清单;上游 all tab 行已禁用)
 			ctx.effect(() => ctx.locale.register(NS2, {
@@ -3760,23 +4763,6 @@ window.__ModuleLoader__.load({
 				en: { nav: "Skin" },
 			}), "dsh-skin-section: dictionaries");
 			const t6 = ctx.locale.bind(NS6);
-		// [R19+问题1] 插件安装态检测(皮肤中心/宠物,供「皮肤」页入口卡显示)
-		// 用 DOM 探测而非 pluginInventory:home patch 的 disabled 行(ui-skin-center)会误伤运行时判定;
-		// 设置面板内导航按钮与 SkinTab 同屏渲染,首轮即命中。
-		const checkNavButton = (labelText) => new Promise((resolve) => {
-			const probe = (tries) => {
-				try {
-					const btns = Array.from(document.querySelectorAll("button"));
-				 const hit = btns.find((b) => (b.textContent || "").trim() === labelText);
-					if (hit) return resolve("on");
-				} catch (e) { /* 重试 */ }
-				if (tries <= 0) return resolve("off");
-				window.setTimeout(() => probe(tries - 1), 300);
-			};
-			probe(6);
-		});
-		const checkSkinCenter = () => checkNavButton("皮肤中心");
-		const checkPet = () => checkNavButton("宠物");
 		ctx.slots.inject("settings.section", () => ctx.slots.register({
 			name: "settings.section",
 			id: "skin",
@@ -3787,8 +4773,8 @@ window.__ModuleLoader__.load({
 					kind: "list",
 					scope: "root"
 				} }
-			}, function SkinSectionHost(props) { // [K2d] 透传 renderSlot:皮肤页底部补 settings.skin.item 槽(joi 换装迁入)
-			return react.createElement("div", null, react.createElement(SkinTab, { checkSkinCenter, checkPet }), props && props.renderSlot ? props.renderSlot("settings.skin.item", {}) : null);
+			}, function SkinSectionHost(props) { // [K2d→K8] renderSlot 改透传 SkinTab:换装落位页面网格(自定义资产之下),不再垫底后追
+			return react.createElement(SkinTab, { renderSlot: props && props.renderSlot, select: props && props.select, show: props && props.show });
 		}));
 
 			ctx.effect(() => ctx.locale.register(NS7, {
@@ -3806,7 +4792,7 @@ window.__ModuleLoader__.load({
 				return react.createElement(UpdateTab);
 			}));
 
-			// 皮肤:启动时从壳读取持久化状态并恢复背景/氛围音频(壳未运行则静默跳过)
+			// 皮肤:启动时从壳读取持久化状态并恢复背景(壳未运行则静默跳过)
 		try { localStorage.removeItem("dshDesktop.skin"); } catch (e) { /* 旧键清理 */ }
 		api("/skin/assets").then(function (r) {
 			applySkinVisual(r.state);
@@ -3820,3 +4806,6 @@ window.__ModuleLoader__.load({
 });
 
 /*dsh-local-patch:v2026-08-23*/
+/*dsh-local-patch:k9-skin-subpages*/
+
+/*dsh-local-patch:k10-skin-subpages*/
