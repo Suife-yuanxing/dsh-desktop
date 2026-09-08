@@ -397,6 +397,28 @@ window.__ModuleLoader__.load({
 					NM + ' [class*="_grid"]{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))!important}'
 				].join("");
 			})(),
+			// ---- [批次121/R83] 会话视图滚动渐隐(常驻,全皮肤通用,零色彩假设) ----
+			// 1) 顶部渐隐:官方会话滚动容器(_scrollBody)顶缘的硬截断——半行文字/图标被
+			//    齐线切开。mask 落在滚动容器边框盒上(视口锚定,不随 scrollTop 漂移),
+			//    线性淡出 32px;淡出 reveal 的是其后任意皮肤背景(默认白/joi 奶油/玻璃
+			//    氛围/壁纸),未来皮肤无需适配。
+			//    门控 .dsh-scr-pt(内容已滚离顶部):静止在会话最顶时首行内容不被雾化,
+			//    只在滚动中挂(installScrollFadeSync 驱动)。
+			//    [批次128 全量回退] 浮岛布局实验(批次122-127:浮岛头部/悬浮侧栏/聊天
+			//    列根透明/侧栏收槽/窗控与开关钮整合/内容面精修/node-nav 摘除)经用户
+			//    裁决「把现在的全部布局回退」整体撤销——本块恢复 121 原始 32px 渐隐
+			//    带,头部/侧栏/内容面/node-nav/手柄轨全部回归应用原生样式。快照
+			//    client.js.bak-b127 保有回退前完整浮岛形态,可整体复活。
+			// 2) 底部渐隐:composer 底座(data-composer-seat,官方 sticky z7)盒顶即输入
+			//    卡顶,卡上缘内容毫无过渡直撞边缘(暗底皮肤/joi 下尤其扎眼)。::before
+			//    向上延伸 44px 由透明渐变到 --dsw-alias-bg-base——官方 seat 自带渐变
+			//    (transparent→bg-base 36px)的同色语言向上续接,内容先融进底色再抵卡。
+			//    壁纸态该令牌被透明链置空 → 渐变自然失效,玻璃卡浮层语义不变。
+			//    门控 .dsh-scr-nb(内容未滚到最低):静止在底部时最后一条消息的操作钮
+			//    (复制/评价/存记忆)恰在卡上缘 44px 带内,恒挂会罩住可交互行——只在
+			//    滚动内容真的从卡后穿过时挂。
+			'div[data-slot="conversation"] [class*="_scrollBody"].dsh-scr-pt{-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 32px)!important;mask-image:linear-gradient(180deg,transparent 0,#000 32px)!important}',
+			'div[data-slot="conversation"] [class*="_scrollBody"].dsh-scr-nb div[data-composer-seat]::before{content:"";position:absolute;left:0;right:0;top:-44px;height:44px;pointer-events:none;background-image:linear-gradient(180deg,transparent,var(--dsw-alias-bg-base))}',
 			// ---- [R43→K2f] 二级子页返回胶囊(通用设置子页顶部;原皮肤中心/宠物返回路径已随遗留模块移除) ----
 			".vt_backBar{display:inline-flex;align-items:center;gap:6px;width:fit-content;margin:2px 2px 10px;padding:5px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:99px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer;user-select:none;transition:border-color .15s ease,color .15s ease,background .15s ease}",
 			".vt_backBar:hover{border-color:#d97757;color:#d97757}",
@@ -560,14 +582,29 @@ window.__ModuleLoader__.load({
 			".am_root{display:flex;flex-direction:column;gap:10px;padding:4px 0}",
 			".am_top{display:flex;align-items:center;justify-content:space-between;gap:10px}",
 			".am_stats{font-size:12px;color:var(--dsw-alias-label-secondary)}",
-			".am_btn{background:var(--dsw-alias-fill-l2);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 12px;font-size:12px;cursor:pointer;transition:border-color .18s,color .18s}",
+			".am_btn{background:var(--dsw-alias-fill-l2);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 12px;font-size:12px;cursor:pointer;transition:border-color .18s,color .18s,background .18s,transform .06s}",
 			".am_btn:hover{border-color:#d97757;color:#d97757}",
+			".am_btn:active{transform:translateY(1px)}",
 			".am_btn:disabled{opacity:.45;cursor:default}",
-			".am_btnDanger{background:transparent;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:3px 12px;font-size:12px;cursor:pointer}",
-			".am_btnDanger:hover{border-color:#f85149;color:#f85149}",
+			".am_btnDanger{background:transparent;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:3px 12px;font-size:12px;cursor:pointer;transition:border-color .18s,color .18s,background .18s,transform .06s}",
+			".am_btnDanger:hover{border-color:#f85149;color:#f85149;background:rgba(248,81,73,.08)}",
+			".am_btnDanger:active{transform:translateY(1px)}",
+			".am_btnDanger:disabled{opacity:.45;cursor:default}",
 			".am_ghost{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid rgba(210,153,34,.45);background:rgba(210,153,34,.08);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--dsw-alias-label-primary)}",
-			".am_list{display:flex;flex-direction:column;gap:6px;max-height:56vh;overflow:auto}",
-			".am_row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:9px 12px}",
+			".am_list{display:flex;flex-direction:column;gap:6px;max-height:56vh;overflow:auto;transition:opacity .18s ease}",
+			".am_listBusy{opacity:.55;pointer-events:none}",
+			".am_row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:9px 12px;cursor:pointer;transition:border-color .16s ease,background .16s ease,opacity .16s ease}",
+			".am_row:hover{border-color:var(--dsw-alias-border-l);background:rgba(127,127,127,.05)}",
+			".am_rowSel,.am_rowSel:hover{border-color:rgba(217,119,87,.55);background:rgba(217,119,87,.07)}",
+			".am_rowBusy{opacity:.5;pointer-events:none}",
+			".am_ck{width:14px;height:14px;margin:0;accent-color:#d97757;cursor:pointer;flex-shrink:0}",
+			".am_ck:disabled{cursor:default}",
+			".am_selbar{display:flex;align-items:center;justify-content:space-between;gap:10px}",
+			".am_selAll{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer;user-select:none}",
+			".am_selHint{font-size:11px;color:var(--dsw-alias-label-tertiary)}",
+			".am_selActions{display:flex;align-items:center;gap:6px}",
+			".am_delBatch{border-color:rgba(248,81,73,.45);color:#f85149}",
+			".am_delBatch:hover{background:#f85149;color:#fff}",
 			".am_main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}",
 			".am_title{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary);display:flex;align-items:center;gap:8px;min-width:0}",
 			".am_titleTxt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
@@ -578,6 +615,13 @@ window.__ModuleLoader__.load({
 			".am_empty{border:1px dashed var(--dsw-alias-border-l2);border-radius:10px;padding:26px 12px;text-align:center;font-size:12px;color:var(--dsw-alias-label-tertiary)}",
 			".am_msg{font-size:12px;color:var(--dsw-alias-label-tertiary);min-height:16px;word-break:break-all}",
 			".am_msgErr{color:#f85149}.am_msgOk{color:#3fb950}",
+			// [R81] 弹窗淡入/卡片弹入、状态行动画(配合 key 重挂重放)
+			"@keyframes amMsgIn{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}",
+			".am_msg{animation:amMsgIn .2s ease}",
+			"@keyframes amFadeIn{from{opacity:0}}",
+			".am_dlgOverlay{animation:amFadeIn .14s ease}",
+			"@keyframes amPopIn{from{opacity:0;transform:scale(.96) translateY(4px)}}",
+			".am_dlgCard{animation:amPopIn .16s ease}",
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -625,6 +669,29 @@ window.__ModuleLoader__.load({
 			}, 100);
 		} catch (e) { /* 遮蔽失败不影响启动 */ }
 
+		// [批次121/R83] 滚动渐隐门控同步:给会话滚动容器挂 .dsh-scr-pt(已滚离顶部,
+		// 点亮顶部 mask 渐隐)/.dsh-scr-nb(未达底部,点亮 seat 上方渐变垫)。静止在
+		// 两端的可交互内容(首行内容/末条消息操作钮)永不被纱罩住。scroll 事件不
+		// 冒泡,用 document 捕获段委托(视图重挂零重绑);会话打开的程序化
+		// scrollTo 与定时兜底覆盖无用户滚动路径;1.2s 轻轮询兜视图切换后新元素
+		// 首滚前的空窗(单次 querySelectorAll+两次 classList,开销可忽略)。
+		try {
+			var syncScrollFadeSync = function () {
+				var sbs = document.querySelectorAll('div[data-slot="conversation"] [class*="_scrollBody"]');
+				for (var si = 0; si < sbs.length; si++) {
+					var sb = sbs[si];
+					var max = sb.scrollHeight - sb.clientHeight;
+					var can = max > 16;
+					sb.classList.toggle("dsh-scr-pt", can && sb.scrollTop > 8);
+					sb.classList.toggle("dsh-scr-nb", can && sb.scrollTop < max - 8);
+				}
+			};
+			document.addEventListener("scroll", syncScrollFadeSync, { capture: true, passive: true });
+			window.addEventListener("resize", syncScrollFadeSync, { passive: true });
+			setTimeout(syncScrollFadeSync, 600);
+			setInterval(syncScrollFadeSync, 1200);
+		} catch (e) { /* 门控失败退化为无渐隐,不影响功能 */ }
+
 		function api(path, opts) {
 			return fetch(SHELL_API + path, opts).then(function (r) { return r.json(); });
 		}
@@ -634,7 +701,6 @@ window.__ModuleLoader__.load({
 		var NS4 = "dshDesktop.skills";
 		var NS6 = "dshDesktop.skin";
 		var NS7 = "dshDesktop.update";
-		var NS8 = "dshDesktop.webUiPlugins";
 		var NS9 = "dshDesktop.archiveMgr";
 
 		var PHASE_ZH = { pending: "待定", loading: "加载中", active: "运行中", failed: "失败", unloading: "卸载中", unobserved: "未观察" };
@@ -769,139 +835,6 @@ window.__ModuleLoader__.load({
 				h("div", { className: "pm_msg" }, "切换即时生效(写入 ~/.dsh/cordis.patch.yml,由 dsh 热加载,无需重启)。核心插件与系统禁用项不可在此操作;启用 = 恢复组合默认。"));
 		}
 		
-		// ---------- [b20] Web UI 插件统一页(并入「插件」模块的第三个 tab) ----------
-		// 家族 bundle(dsh-web-ui-all)的 loader 行 id 恒为 web-ui-* 前缀,以 entryId 前缀
-		// 从 pluginInventory 运行时清单中筛出 web UI 插件,合并展示名称/运行状态/
-		// 启停管理/入口跳转;启停复用壳 /plugins/toggle(与「插件管理」tab 同一写回链路)。
-		// 原「Web UI 插件」独立区段(web-ui-settings 包)保留作为配置表单承载层,
-		// 本页「打开设置」即编程跳转过去,双入口不互斥。
-		var WEBUI_META = {
-			"web-ui-settings": { name: "Web UI 插件组(设置桥)", icon: "桥", section: "webui", desc: "家族插件的配置表单承载与设置命名空间桥(启用开关/配置字段的读写通道)。" },
-			"web-ui-plugin-manager": { name: "插件管理(家族组件)", icon: "管", desc: "家族版用户插件清单展示;已由官方「插件管理」tab 与插件市场全覆盖(问题84 隐藏)。" },
-			"web-ui-community-plugins": { name: "社区插件清单", icon: "社", section: "market", desc: "社区插件静态索引,已并入「插件市场」社区 tab。" },
-			"web-ui-dsh-aionui-panel": { name: "aionui 原生面板", icon: "右", desc: "原生右栏(explorer/preview)组件;已被 noside 规则隐藏,better-sidebar 为唯一右侧表面。" },
-			"web-ui-task-board": { name: "任务看板", icon: "任", entry: "侧栏入口", desc: "任务看板视图:从侧栏「任务看板」入口打开;支持任务创建/状态流转/看板列展示。" },
-			"web-ui-git-graph": { name: "Git 图谱", icon: "G", entry: "右侧面板", desc: "better-sidebar 右侧面板的 Git 分支图谱页签(聊天框分支 chip 已按 R29 移除)。" },
-			"web-ui-remote-web-ui": { name: "远程 Web UI", icon: "远", desc: "远程访问 Web 界面:从侧栏「远程访问」入口获取访问地址。" },
-			"web-ui-ssh": { name: "SSH 远程", icon: "S", entry: "侧栏入口", desc: "SSH 远程连接视图:从侧栏「SSH」入口打开,管理远程主机与会话。" },
-			"web-ui-describe-image": { name: "图片描述工具", icon: "图", entry: "宿主工具", desc: "describe-image 宿主工具的 Web 接入(工具面,无独立 UI 入口)。" },
-			"web-ui-chat-recovery": { name: "聊天恢复", icon: "恢", entry: "聊天区", desc: "会话消息恢复能力(断连/异常后的消息重建,聊天区自动生效)。" },
-			"web-ui-liangshen": { name: "量身", icon: "量", desc: "liangshen 家族组件(按模型能力定制提示)。" },
-			"web-ui-skill-explorer": { name: "技能中心", icon: "技", desc: "技能浏览入口;已按 53b 用户需求禁用(行 web-ui-skill-explorer disabled)。" },
-			"web-ui-desktop-launcher": { name: "桌面快捷方式/启动器", icon: "桌", section: "webui", desc: "创建桌面图标、启动行为与关机确认设置(配置表单在「Web UI 插件」区段)。" },
-			"web-ui-better-sidebar": { name: "better-sidebar(内嵌副本)", icon: "侧", locked: "去重守护:与独立 better-sidebar 争注 /sidebar/api 致启动崩溃(问题53),保持禁用", desc: "聚合包内嵌的 better-sidebar 副本;[E] profile 守护强制禁用,启用会致 dsh 启动崩溃。" },
-			"web-ui-compat": { name: "家族聚合包(compat 行)", icon: "聚", locked: "聚合兼容行:启用会重复挂载家族子包,保持禁用", desc: "dsh-web-ui-all 聚合包的兼容挂载行;子包已逐行单独挂载,启用会重复注册。" },
-		};
-		
-		function WebUiPluginsTab(props) {
-			var h = react.createElement;
-			var state = react.useState({ status: "loading" });
-			var setState = state[1];
-			var busy = react.useState(null);
-			var setBusy = busy[1];
-			var msg = react.useState("");
-			var setMsg = msg[1];
-		
-			var load = function () {
-				return Promise.all([props.list(), api("/plugins")]).then(function (r) {
-					setState({ status: "ready", entries: (r[0] && r[0].entries) || [], shell: r[1] });
-				}).catch(function (e) {
-					setState({ status: "error", message: String((e && e.message) || e) });
-				});
-			};
-			react.useEffect(function () { load(); }, []);
-		
-			var gotoSection = function (id) {
-				// 延迟一拍再点:在 React 合成事件处理器内同步派发嵌套 click 会被当前
-				// 事件批处理吞掉导航态切换(b20 实证:直接调用可切,处理器内同步调不切)。
-				window.setTimeout(function () {
-					try { var btn = document.querySelector('button[data-section-id="' + id + '"]'); if (btn) btn.click(); } catch (e) { /* 导航未渲染 */ }
-				}, 0);
-			};
-			
-			var doToggle = function (row, disable) {
-				setBusy(row.pid);
-				setMsg((disable ? "正在禁用 " : "正在启用 ") + row.name + " …");
-				api("/plugins/toggle", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ entryId: row.pid, disabled: disable }),
-				}).then(function (r) {
-					if (!r.ok) { setMsg(r.error || "操作被拒绝"); setBusy(null); return; }
-					// 轮询运行时状态翻转(dsh watcher 热应用有延迟);期望 enabled === !disable
-					var tries = 0;
-					var poll = setInterval(function () {
-						tries += 1;
-						props.list().then(function (snap) {
-							var e = (snap.entries || []).filter(function (x) { return x.entryId === row.entryId; })[0];
-							var flipped = e === undefined || e.enabled === !disable;
-							if (!flipped && tries < 30) return;
-							clearInterval(poll);
-							setBusy(null);
-							setMsg(flipped ? (disable ? "已禁用 " : "已启用 ") + row.name : "状态切换较慢,已刷新当前列表");
-							load();
-						}).catch(function () {
-							if (tries >= 30) { clearInterval(poll); setBusy(null); setMsg("状态未知,已刷新当前列表"); load(); }
-						});
-					}, 500);
-				}).catch(function (e) {
-					setMsg("请求失败: " + e.message);
-					setBusy(null);
-				});
-			};
-		
-			if (state[0].status === "loading") return h("div", { className: "pm_root" }, h("div", { className: "pm_msg" }, "正在读取 Web UI 插件清单…"));
-			if (state[0].status === "error") return h("div", { className: "pm_root" },
-				h("div", { className: "pm_msg pm_msgErr" }, "读取失败: " + state[0].message),
-				h("button", { className: "pm_btn", onClick: function () { setState({ status: "loading" }); load(); } }, "重试"));
-		
-			var s = state[0];
-			var disabledSet = {};
-			(s.shell && s.shell.disabled || []).forEach(function (id) { disabledSet[id] = true; });
-		
-			var rows = s.entries.filter(function (e) {
-				return typeof e.entryId === "string" && e.entryId.indexOf("include:web-ui-") === 0;
-			}).sort(function (a, b) { return a.entryId < b.entryId ? -1 : 1; }).map(function (e) {
-				var pid = e.entryId.slice(8);
-				var meta = WEBUI_META[pid] || {};
-				var name = meta.name || shortName(e.moduleName);
-				var userOff = e.enabled === false && !!disabledSet[pid];
-				var systemOff = e.enabled === false && !userOff;
-				var running = e.enabled && e.fiberPhase === "active";
-				var statusTag = running ? "运行中" : e.enabled ? (PHASE_ZH[e.fiberPhase] || e.fiberPhase || "未观察") : userOff ? "已禁用" : "系统禁用";
-				var statusCls = "pm_tag " + (running ? "pm_tagOn" : e.enabled ? "pm_tag" : "pm_tagOff");
-				var openBtn = meta.section ? h("span", { className: "pm_btn", role: "button", tabIndex: 0, title: "跳转到对应设置区段",
-					// 用 span 而非 button:行本身是 role=button 的点击面,嵌套 <button> 会触发隐式表单
-					// 提交 fallback(按钮默认 type=submit),抢焦点/中断后续编程跳转(b20 实证)。
-					onClick: function (ev) { ev.stopPropagation(); gotoSection(meta.section); },
-					onKeyDown: function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); gotoSection(meta.section); } }
-				}, "打开设置 →")
-					: meta.entry ? h("span", { className: "pm_tag" }, meta.entry) : null;
-				var toggleBtn = null;
-				if (meta.locked) toggleBtn = h("span", { className: "pm_tag pm_tagSys", title: meta.locked }, "受保护");
-				else if (userOff) toggleBtn = h("button", { className: "pm_btn", disabled: busy[0] === pid, onClick: function () { doToggle({ pid: pid, entryId: e.entryId, name: name }, false); } }, "启用");
-				else if (e.enabled) toggleBtn = h("button", { className: "pm_btn pm_btnDis", disabled: busy[0] === pid, onClick: function () { doToggle({ pid: pid, entryId: e.entryId, name: name }, true); } }, "禁用");
-				else toggleBtn = h("button", { className: "pm_btn", disabled: busy[0] === pid, onClick: function () { doToggle({ pid: pid, entryId: e.entryId, name: name }, false); } }, "启用");
-				return h("div", { key: e.entryId, className: "cm_row" + (e.enabled ? "" : " pm_rowOff") },
-					h("div", { className: "cm_icon" }, meta.icon || name.slice(0, 1)),
-					h("div", { className: "cm_main" },
-						h("div", { className: "cm_titleRow" },
-							h("span", { className: "cm_name" }, name),
-							h("span", { className: statusCls }, statusTag)),
-						h("div", { className: "cm_desc" }, (meta.desc || "") + " 模块: " + (e.moduleName || "-"))),
-					h("div", { className: "cm_side" }, openBtn, toggleBtn));
-			});
-			if (!rows.length) rows = [h("div", { key: "empty", className: "pm_msg" }, "未发现 web UI 插件(家族 bundle 未挂载?)")];
-		
-			var msgCls = "pm_msg" + (msg[0].indexOf("失败") >= 0 || msg[0].indexOf("拒绝") >= 0 ? " pm_msgErr" : msg[0].indexOf("已禁用") === 0 || msg[0].indexOf("已启用") === 0 ? " pm_msgOk" : "");
-			return h("div", { className: "vt_page" },
-				h("div", { className: "vt_head" },
-					h("h2", { className: "vt_h2" }, "Web UI 插件"),
-					h("p", { className: "vt_intro" }, "dsh-web-ui 家族插件的合并管理页:统一查看名称/运行状态/启停,并从入口打开对应功能。启停即时生效(写入 ~/.dsh/cordis.patch.yml,dsh 热加载);详细配置表单在对应设置区段(点「打开设置」跳转)。")),
-				h("div", { className: "pm_list vt_2col", "aria-busy": busy[0] ? "true" : undefined }, rows),
-				h("div", { className: msgCls }, msg[0]));
-		}
-
 		var inject = ["slots", "locale", "remote", "remote.pluginInventory", "sessions", "workspaces"];
 
 		// ---------- dsh HTTP RPC(POST /api/<method>,ClientRequest 信封,同源) ----------
@@ -2326,6 +2259,20 @@ window.__ModuleLoader__.load({
 				'div[data-slot="sidebar.workspaces"] [class*="sessionRow"][class*="selected"]{box-shadow:inset 0 1px 0 rgba(255,255,255,' + (darkBg ? ".16" : ".45") + '),inset 0 0 10px rgba(255,255,255,' + (darkBg ? ".04" : ".10") + ')!important}',
 				// [R66] reduced-motion:悬停抬升类交互全部静止(与 dshLgFlow 关停同媒体查询)
 				'@media (prefers-reduced-motion:reduce){[data-composer-card],[class*="_overlay"] .sGenSubCard,button[class*="paneCard"]{transition:none!important}[class*="_overlay"] .sGenSubCard:hover,button[class*="paneCard"]:hover{transform:none!important}}',
+				// ---- [批次121/R83] 会话视图壁纸态可读性补偿(接 R58/R60/R66 系列) ----
+				// G. composer 栈 stats 行(轮次·步数/tok 速率/缓存命中率):官方无任何
+				//    表面,小号次级文字直接浮在壁纸上、与透过玻璃卡的内容相叠。轻纱胶囊
+				//    托底——布局零位移(不加 padding,呼吸感由 8px 同色 spread 光晕承担),
+				//    色用 R60 行卡 veilCard 同族。寻址:seat 内无任何可交互控件
+				//    (button/textarea/input,composer 根与模式簇皆含钮被排除)的 _root
+				//    模块根,全 seat 实测唯一命中即 stats 行(其外层是无类 React 包装,
+				//    嵌套组合器不可达)。
+				'div[data-composer-seat] div[class*="_root"]:not(:has(button)):not(:has(textarea)):not(:has(input)){background-color:' + veilCard + '!important;border-radius:99px!important;box-shadow:0 0 0 8px ' + veilCard + '!important}',
+				// H. 会话 header 文字轻影(壁纸态,R83/121):透明链置空头部令牌底后,文字
+				//    直接落在壁纸上——暗壁纸双层细影托浅字,亮壁纸白柔光分离深字。
+				//    [批次128 全量回退] 122 的玻璃卡面(bg/f2 折射/边/影)随浮岛布局
+				//    一并撤销,header 回归流内原生样式+本条文字轻影。
+				'div[data-slot="conversation"] header[class*="_header"]{text-shadow:' + veilTextShadow + '!important}',
 				].join("");
 			} else {
 				// [R48→问题71] 无壁纸时:仅当 glass 显式为 true 才应用毛玻璃;
@@ -4339,6 +4286,12 @@ window.__ModuleLoader__.load({
 	// 管理页列表本身即归档集,无需先 archiveSession)。幽灵清理= 对 ghost 行逐条
 	// 调删除端点(端点对缺目录幂等)。host 广播 host/archived-sessions-changed 时
 	// 侧栏自刷新;本页动作为主,提供手动刷新按钮。
+	// [R81] 批量删除:行勾选框(整行可点)+表头全选(半选态)+选择工具栏;
+	// 确认弹窗双形态(单删/批量 N 项),串行逐条删、进度「x/N…」、失败不中断;
+	// 交互:行 hover/选中着色、按钮按压反馈、弹窗淡入+Esc+默认焦点取消、
+	// 状态行 key 重挂动画、刷新后勾选集对齐存活行。
+	// [R81+] 打开期间 5s 轻轮询+签名去重:别处(主页时序/另一窗口)的归档变化
+	// 自动跟进,不再依赖手动刷新;隐藏页/操作中/弹窗中暂停。
 	function installArchiveManager(ctx) {
 		if (!ctx || !ctx.slots || !ctx.locale || !ctx.workspaces) return;
 		if (typeof ctx.slots.inject !== "function" || typeof ctx.slots.register !== "function") return;
@@ -4359,6 +4312,20 @@ window.__ModuleLoader__.load({
 				"deleted": "会话已彻底删除",
 				"noRuntime": "当前桌面壳未提供恢复能力,请更新桌面壳后重试",
 				"failPrefix": "失败: ",
+				"selAll": "全选",
+				"selHint": "勾选会话后可批量删除",
+				"selected": "已选",
+				"batchDel": "批量删除",
+				"clearSel": "取消选择",
+				"batchTitle": "批量彻底删除",
+				"batchBody1": "将永久删除选中的 ",
+				"batchBody2": " 个会话,此操作不可恢复。",
+				"deleting1": "正在删除 ",
+				"deleting2": "…",
+				"batchDone1": "已删除 ",
+				"failList": "失败: ",
+				"confirmBody1": "将永久删除「",
+				"confirmBody2": "」的会话记录,此操作不可恢复。",
 			},
 			en: {
 				"section.label": "Archived Sessions",
@@ -4376,12 +4343,26 @@ window.__ModuleLoader__.load({
 				"deleted": "Session deleted for good",
 				"noRuntime": "This desktop shell lacks restore support; please update the shell",
 				"failPrefix": "failed: ",
+				"selAll": "Select all",
+				"selHint": "Tick sessions to delete in batch",
+				"selected": "Selected",
+				"batchDel": "Delete selected",
+				"clearSel": "Clear",
+				"batchTitle": "Delete sessions permanently",
+				"batchBody1": "Permanently delete ",
+				"batchBody2": " selected sessions? This cannot be undone.",
+				"deleting1": "Deleting ",
+				"deleting2": "…",
+				"batchDone1": "Deleted ",
+				"failList": "failed: ",
+				"confirmBody1": "Permanently delete \"",
+				"confirmBody2": "\"? This cannot be undone.",
 			},
 		}), "dsh-archive-mgr: dictionaries");
 		const t = ctx.locale.bind(NS9);
 		var canRestore = typeof ctx.workspaces.unarchiveSession === "function";
 		window.__dshArchiveProbe = function () {
-			return { canRestore: canRestore, sectionMounted: true };
+			return { canRestore: canRestore, sectionMounted: true, batchDelete: true };
 		};
 
 		var fmtSize = function (bytes) {
@@ -4406,6 +4387,15 @@ window.__ModuleLoader__.load({
 			var msg = msgS[0], setMsg = msgS[1];
 			var confirmS = react.useState(null);
 			var confirmDel = confirmS[0], setConfirmDel = confirmS[1];
+			// [R81] 批量删除:sel=勾选集(id→true),prog=批量进度({done,total})
+			var selS = react.useState({});
+			var sel = selS[0], setSel = selS[1];
+			var progS = react.useState(null);
+			var prog = progS[0], setProg = progS[1];
+			var sigRef = react.useRef(""); // [R81+] 清单签名(id 列表+总字节),去重轮询
+			// [R81+] 操作期门控 ref:批量删/单删/恢复进行中或弹窗开着时轮询让位
+			var opRef = react.useRef(false);
+			opRef.current = !!busy || !!prog || !!confirmDel;
 
 			var showMsg = function (text, kind) { setMsg({ text: text || "", kind: kind || "" }); };
 			var failMsg = function (op, e) {
@@ -4413,16 +4403,53 @@ window.__ModuleLoader__.load({
 				showMsg(op + " " + t("failPrefix") + m, "err");
 			};
 
-			var load = react.useCallback(function () {
+			var load = react.useCallback(function (silent) {
 				return api("/sessions/archived").then(function (j) {
 					if (!j || !j.ok) throw new Error((j && j.error) || "HTTP error");
-					setState({ status: "ready", items: j.sessions || [], totalBytes: j.totalBytes || 0 });
+					var items = j.sessions || [];
+					// [R81+] 数据签名去重:轮询拉到相同清单时跳过 setState(免无谓重渲染)
+					var sig = items.map(function (it) { return it.id; }).join(",") + "|" + (j.totalBytes || 0);
+					var changed = sig !== sigRef.current;
+					if (changed) sigRef.current = sig;
+					// 勾选集对齐最新列表:已消失的行(被删/被恢复)自然剔除勾选
+					setSel(function (prev) {
+						var alive = {};
+						var kept = 0;
+						items.forEach(function (it) { if (prev[it.id]) { alive[it.id] = true; kept++; } });
+						return Object.keys(prev).length === kept ? prev : alive;
+					});
+					if (changed) setState({ status: "ready", items: items, totalBytes: j.totalBytes || 0 });
 				}).catch(function (e) {
+					// [R81+] 静默轮询失败不打扰现状(壳瞬时不可达不整页翻错误态),
+					// 只有挂载首拉/手动刷新才降级错误视图
+					if (silent) return;
 					setState({ status: "error", items: [], totalBytes: 0 });
 					failMsg(t("refresh"), e);
 				});
 			}, []);
 			react.useEffect(function () { load(); }, []);
+			// [R81] 确认弹窗 Esc 关闭(挂 document 捕获层;stopPropagation 拦截向下
+			// 传播,否则 Radix 设置弹窗的 Esc 处理会连带关闭整个设置弹窗——活体复现)
+			react.useEffect(function () {
+				if (!confirmDel) return;
+				var onKey = function (e) {
+					if (e.key !== "Escape") return;
+					e.stopPropagation();
+					e.preventDefault();
+					setConfirmDel(null);
+				};
+				document.addEventListener("keydown", onKey, true);
+				return function () { document.removeEventListener("keydown", onKey, true); };
+			}, [confirmDel]);
+			// [R81+] 打开期间轻轮询:归档动作发生在别处(主页时序/另一窗口)时本页自动
+			// 跟进,不再依赖手动刷新;签名不变不重渲染;隐藏页/操作中让位;静默失败不打扰
+			react.useEffect(function () {
+				var timer = window.setInterval(function () {
+					if (document.hidden || opRef.current) return;
+					load(true);
+				}, 5000);
+				return function () { window.clearInterval(timer); };
+			}, [load]);
 
 			var doRestore = function (id) {
 				if (!canRestore) { showMsg(t("noRuntime"), "err"); return; }
@@ -4463,12 +4490,77 @@ window.__ModuleLoader__.load({
 					.catch(function (e) { failMsg(t("ghostClean"), e); return load(); })
 					.then(function () { setBusy(null); });
 			};
+			// [R81] 批量删除:勾选集 → 确认弹窗 → 串行逐条调删除端点(单条失败不中断,
+			// 失败清单进结果行);进度写 prog 驱动「正在删除 x/N…」,全程 busy 禁操作。
+			var toggleSel = function (id) {
+				if (busy) return;
+				setSel(function (prev) {
+					var next = {};
+					for (var k in prev) next[k] = true;
+					if (prev[id]) delete next[id];
+					else next[id] = true;
+					return next;
+				});
+			};
+			var toggleAll = function () {
+				if (busy || !state.items.length) return;
+				var ids = state.items.map(function (it) { return it.id; });
+				var allSel = ids.every(function (id) { return sel[id]; });
+				if (allSel) { setSel({}); return; }
+				var next = {};
+				ids.forEach(function (id) { next[id] = true; });
+				setSel(next);
+			};
+			var askBatchDelete = function () {
+				if (busy) return;
+				var ids = state.items.filter(function (it) { return sel[it.id]; }).map(function (it) { return it.id; });
+				if (!ids.length) return;
+				setConfirmDel({ batch: true, ids: ids });
+			};
+			var doBatchDelete = function (ids) {
+				var total = ids.length;
+				var done = 0, okCount = 0, failed = [];
+				setBusy("__batch__");
+				setProg({ done: 0, total: total });
+				var p = Promise.resolve();
+				ids.forEach(function (id) {
+					p = p.then(function () {
+						return api("/sessions/delete", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ sessionId: id }),
+						}).then(function (j) {
+							if (!j || !j.ok) throw new Error((j && j.error) || "HTTP error");
+							okCount++;
+						});
+					}).catch(function (e) {
+						failed.push((String(id).replace(/^session-/, "").slice(0, 8)) || id);
+					}).then(function () {
+						done++;
+						setProg({ done: done, total: total });
+					});
+				});
+				p.then(function () {
+					setProg(null);
+					var line = t("batchDone1") + okCount + "/" + total;
+					if (failed.length) line += " · " + t("failList") + failed.join(", ");
+					showMsg(line, failed.length ? "err" : "ok");
+					setSel({});
+					return load();
+				}).catch(function (e) { setProg(null); failMsg(t("batchDel"), e); })
+					.then(function () { setBusy(null); });
+			};
 
 			if (state.status === "loading") {
 				return h("div", { className: "am_root" }, h("div", { className: "am_msg" }, "…"));
 			}
 			var ghosts = state.items.filter(function (it) { return it.ghost; });
 			var stats = state.items.length + " · " + fmtSize(state.totalBytes);
+			// [R81] 勾选派生:全选/半选(表头 indeterminate)与已选清单
+			var allIds = state.items.map(function (it) { return it.id; });
+			var selIds = allIds.filter(function (id) { return sel[id]; });
+			var allSel = allIds.length > 0 && selIds.length === allIds.length;
+			var someSel = selIds.length > 0 && !allSel;
 			var rows = state.items.map(function (it) {
 				var title = it.title || (String(it.id || "").replace(/^session-/, "").slice(0, 8) || it.id);
 				var metaParts = [];
@@ -4479,7 +4571,20 @@ window.__ModuleLoader__.load({
 				var badges = [];
 				if (it.ghost) badges.push(h("span", { key: "g", className: "am_badge" }, t("ghostBadge")));
 				else if (!it.bytes) badges.push(h("span", { key: "e", className: "am_badge am_badgeEmpty" }, t("emptyBadge")));
-				return h("div", { key: it.id, className: "am_row" },
+				var isSel = !!sel[it.id];
+				// [R81] 整行可点切换勾选;点按钮/勾选框/操作区不误触(选择权交给控件本身)
+				return h("div", {
+					key: it.id,
+					className: "am_row" + (isSel ? " am_rowSel" : "") + (busy === it.id ? " am_rowBusy" : ""),
+					onClick: function (e) {
+						if (e.target && e.target.closest && e.target.closest("button,input,label,.am_actions")) return;
+						toggleSel(it.id);
+					},
+				},
+					h("input", {
+						type: "checkbox", className: "am_ck", checked: isSel, disabled: !!busy,
+						onChange: function () { toggleSel(it.id); },
+					}),
 					h("div", { className: "am_main" },
 						h("div", { className: "am_title" },
 							h("span", { className: "am_titleTxt" }, title), badges),
@@ -4499,45 +4604,84 @@ window.__ModuleLoader__.load({
 				h("div", { className: "am_top" },
 					h("span", { className: "am_stats" }, stats),
 					h("button", { type: "button", className: "am_btn", disabled: !!busy, onClick: function () { load(); } }, t("refresh"))),
+				// [R81] 选择工具栏:全选(半选态)/已选计数/取消选择/批量删除
+				rows.length ? h("div", { className: "am_selbar" },
+					h("label", { className: "am_selAll" },
+						h("input", {
+							type: "checkbox", className: "am_ck", disabled: !!busy,
+							checked: allSel,
+							ref: function (el) { if (el) el.indeterminate = someSel; },
+							onChange: toggleAll,
+						}),
+						h("span", null, selIds.length ? t("selected") + " " + selIds.length : t("selAll"))),
+					selIds.length
+						? h("div", { className: "am_selActions" },
+							h("button", { type: "button", className: "am_btn", disabled: !!busy, onClick: function () { setSel({}); } }, t("clearSel")),
+							h("button", { type: "button", className: "am_btnDanger am_delBatch", disabled: !!busy, onClick: askBatchDelete },
+								t("batchDel") + " (" + selIds.length + ")"))
+						: h("span", { className: "am_selHint" }, t("selHint")),
+				) : null,
 				ghosts.length ? h("div", { className: "am_ghost" },
 					h("span", null, t("ghostBadge") + ": " + ghosts.length),
 					h("button", { type: "button", className: "am_btn", disabled: !!busy, onClick: doCleanGhosts }, t("ghostClean"))) : null,
-				h("div", { className: "am_msg" + (msg.kind === "err" ? " am_msgErr" : msg.kind === "ok" ? " am_msgOk" : "") }, msg.text),
-				rows.length ? h("div", { className: "am_list" }, rows) : h("div", { className: "am_empty" }, t("empty")),
-				confirmDel ? (function () {
-					// [R80fix] style 必须是 React 对象:字符串在 createElement 校验即抛
-					// Minified React error #62(The style prop expects a mapping...),
-					// 槽位错误边界把整个 section 卸载 → 管理页空白/卡死。
-					var overlay = h("div", {
-						style: {
-							position: "fixed", inset: 0, zIndex: 2147483000, display: "flex",
-							alignItems: "center", justifyContent: "center",
-							background: "rgba(0,0,0,.34)",
-						},
-						onMouseDown: function (e) { if (e.target === e.currentTarget) setConfirmDel(null); },
-					}, h("div", {
-						style: {
-							width: "min(400px,86vw)", padding: "20px 22px 16px", borderRadius: 14,
-							color: "var(--dsw-alias-label-primary)", background: "var(--dsw-alias-bg-base)",
-							border: "1px solid var(--dsw-alias-border-l)",
-							boxShadow: "0 18px 60px rgba(0,0,0,.28)",
-						},
+				// [R81] 批量进行中此行被进度文本接管;key 变更重放淡入动画
+				(function () {
+					var msgText = prog ? t("deleting1") + prog.done + "/" + prog.total + t("deleting2") : msg.text;
+					var msgKey = (prog ? "$p" + prog.done + "/" + prog.total : msg.text) + "|" + msg.kind;
+					return h("div", {
+						key: msgKey,
+						className: "am_msg" + (msg.kind === "err" ? " am_msgErr" : msg.kind === "ok" ? " am_msgOk" : ""),
+					}, msgText);
+				})(),
+				rows.length ? h("div", { className: "am_list" + (prog ? " am_listBusy" : "") }, rows) : h("div", { className: "am_empty" }, t("empty")),
+			confirmDel ? (function () {
+				// [R80fix] style 必须是 React 对象:字符串在 createElement 校验即抛
+				// Minified React error #62(The style prop expects a mapping...),
+				// 槽位错误边界把整个 section 卸载 → 管理页空白/卡死。
+				// [R81] 双形态:单删{title,id} / 批量{batch,ids[]};文案/按钮随形态切换,
+				// Esc 关闭,默认焦点落「取消」(危险操作回车=取消更安全)。
+				var isBatch = !!confirmDel.batch;
+				var n = isBatch ? confirmDel.ids.length : 1;
+				var body = isBatch
+					? t("batchBody1") + n + t("batchBody2")
+					: t("confirmBody1") + (confirmDel.title || confirmDel.id) + t("confirmBody2");
+				var overlay = h("div", {
+					className: "am_dlgOverlay",
+					style: {
+						position: "fixed", inset: 0, zIndex: 2147483000, display: "flex",
+						alignItems: "center", justifyContent: "center",
+						background: "rgba(0,0,0,.34)",
 					},
-						h("div", { style: { fontSize: 15, fontWeight: 600, marginBottom: 8 } }, t("confirmTitle")),
-						h("div", { style: { fontSize: 13, lineHeight: "20px", color: "var(--dsw-alias-label-secondary)", marginBottom: 18, wordBreak: "break-all" } },
-							(confirmDel.title || confirmDel.id) + " — " + t("del") + "?"),
-						h("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
-							h("button", {
-								type: "button", className: "am_btn",
-								onClick: function () { setConfirmDel(null); },
-							}, t("cancel")),
-							h("button", {
-								type: "button", className: "am_btnDanger",
-								style: { borderColor: "#da3633", color: "#f85149" },
-								onClick: function () { var row = confirmDel; setConfirmDel(null); doDelete(row.id); },
-							}, t("ok")))));
-					return overlay;
-				})() : null);
+					onMouseDown: function (e) { if (e.target === e.currentTarget) setConfirmDel(null); },
+				}, h("div", {
+					className: "am_dlgCard",
+					style: {
+						width: "min(400px,86vw)", padding: "20px 22px 16px", borderRadius: 14,
+						color: "var(--dsw-alias-label-primary)", background: "var(--dsw-alias-bg-base)",
+						border: "1px solid var(--dsw-alias-border-l)",
+						boxShadow: "0 18px 60px rgba(0,0,0,.28)",
+					},
+				},
+					h("div", { style: { fontSize: 15, fontWeight: 600, marginBottom: 8 } },
+						isBatch ? t("batchTitle") : t("confirmTitle")),
+					h("div", { style: { fontSize: 13, lineHeight: "20px", color: "var(--dsw-alias-label-secondary)", marginBottom: 18, wordBreak: "break-all" } },
+						body),
+					h("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
+						h("button", {
+							type: "button", className: "am_btn", autoFocus: true,
+							onClick: function () { setConfirmDel(null); },
+						}, t("cancel")),
+						h("button", {
+							type: "button", className: "am_btnDanger",
+							style: { borderColor: "#da3633", color: "#f85149" },
+							onClick: function () {
+								var ids = isBatch ? confirmDel.ids : [confirmDel.id];
+								setConfirmDel(null);
+								if (isBatch) doBatchDelete(ids); else doDelete(ids[0]);
+							},
+						}, isBatch ? t("del") + " ×" + n : t("ok")))));
+				return overlay;
+			})() : null);
 		}
 
 		ctx.slots.inject("settings.section", () => ctx.slots.register({
@@ -4707,22 +4851,6 @@ window.__ModuleLoader__.load({
 			}, function ManagedTabHost() {
 				// 经 createElement 交给 React 渲染,保证 PluginManagerTab 内的 hooks 生效
 				return react.createElement(PluginManagerTab, { list: list });
-			}));
-
-			// [b20] 「插件」区段第三个 tab:Web UI 插件合并管理页(家族 web-ui-* 行统一展示/启停/入口)
-			ctx.effect(() => ctx.locale.register(NS8, {
-				zh: { tab: "Web UI 插件" },
-				en: { tab: "Web UI" },
-			}), "dsh-webui-plugins-tab: dictionaries");
-			const t8 = ctx.locale.bind(NS8);
-			ctx.slots.inject("settings.plugins.tab", () => ctx.slots.register({
-				name: "settings.plugins.tab",
-				id: "web-ui-plugins",
-				order: 30,
-				label: () => t8("tab"),
-				locale: NS8,
-			}, function WebUiPluginsTabHost() {
-				return react.createElement(WebUiPluginsTab, { list: list });
 			}));
 
 			// ---------- 独立设置模块(settings.section,单页无 tab chrome,同 Agent 预设) ----------
