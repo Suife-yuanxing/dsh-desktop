@@ -25,6 +25,7 @@ const ORIGINALS = {
   factory: `            factory: function(require) {
               var React = require('react');
               var primitives;`,
+  callsite: '              var presentation = createPresentation(React);',
   overlay: `      );
       return React.createElement(React.Fragment, null, thumb, overlay);`,
 }
@@ -35,7 +36,10 @@ if (c.includes(PATCHED_MARKER)) {
   console.log('fix:vision-router-portal — 已打补丁,跳过。')
   process.exit(0)
 }
-if (!c.includes(ORIGINALS.create) || !c.includes(ORIGINALS.factory) || !c.includes(ORIGINALS.overlay)) {
+// [2026-09-08 修正] v2.1.0 结构: createPresentation 定义在 factory 之外,factory 作用域的
+// ReactDOM 必须经调用点显式传入,否则参数恒 undefined、门控静默走 fallback(旧版 3 锚点
+// 脚本对该版本是静默空操作)。故补 callsite 锚点,共 4 锚点。
+if (!c.includes(ORIGINALS.create) || !c.includes(ORIGINALS.factory) || !c.includes(ORIGINALS.callsite) || !c.includes(ORIGINALS.overlay)) {
   console.error('fix:vision-router-portal — 锚点不匹配(插件已改版?),拒绝盲改;请人工核对 ' + file)
   process.exit(1)
 }
@@ -57,6 +61,10 @@ c = c.replace(
                 try { ReactDOM = require('react-dom/client'); } catch (_) { ReactDOM = undefined; }
               }
               var primitives;`,
+)
+c = c.replace(
+  ORIGINALS.callsite,
+  '              var presentation = createPresentation(React, ReactDOM);',
 )
 c = c.replace(
   ORIGINALS.overlay,

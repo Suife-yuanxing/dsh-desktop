@@ -1273,10 +1273,11 @@ function patchSettingsInfoArch() {
       results.push({ ...rewrite(mp, '.bak-order', apply, failures), version: ver })
     }
   }
-  // C3/C4/C7: 单文件 order 改写(Web UI 插件 110→17 / 宠物 130→18 / 皮肤中心 120→14.5)
+  // C4/C7: 单文件 order 改写(宠物 130→18 / 皮肤中心 120→14.5)。
+  // C3 的 web-ui-settings(webui-order)条目已移除:dsh-web-ui 家族聚合包卸载后该包
+  // 永久 missing,壳内「Web UI 插件」tab(dshvt b20)也已整体摘除,见批次 R81。
   // C7 浮点 order 已验证:registry 排序为 a.order - b.order 数值比较(scoped-slots.tsx:839),14.5 落在 皮肤14 与 插件15 之间。
   const orderSpecs = [
-    { dir: '@linxin666/dsh-client-ui-web-ui-settings', re: /id: "web-ui-plugins",(\s*\n\s*)order: 110,/, to: 'id: "web-ui-plugins",$1order: 17,', label: 'webui-order' },
     { dir: '@linxin666/dsh-pet', re: /id: "pet",(\s*\n\s*)order: 130,/, to: 'id: "pet",$1order: 18,', label: 'pet-order' },
     { dir: '@linxin666/dsh-client-ui-skin-center', re: /id: "skin-center",(\s*\n\s*)order: 120,/, to: 'id: "skin-center",$1order: 14.5,', label: 'skin-center-order' },
   ]
@@ -1851,6 +1852,13 @@ function patchVisionRouter() {
 //       v8 修订(2026-09-06): 通用设置追加第五卡「归档会话管理」(sub:archive-manager,
 //       section 由 dsh-plugin 注册);already 指纹加 sub:archive-manager,旧 v7 补丁态
 //       经 bak 恢复重打升级。
+//       v9 修订(2026-09-06,批次122): 通用设置追加第六卡「其它」(sub:other,与既有五卡
+//       同级)——「提示音」「放入文件」移出基础设置迁入该子页。槽运行时 list 槽仅支持
+//       only(单 id)无 except,GS 内按条目过滤不可行 → 换槽方案:children 声明扩
+//       settings.general.other.item(同规格 list/root),两插件注册迁槽(见 [K10]);
+//       GeneralSection 三形态(basics/other/入口卡),SEL 路由 sub:other → show:"other"+
+//       only:"general"。already 指纹加 sub:other,旧 v8 补丁态经 bak 恢复重打升级;
+//       [K9-G] 的 SEL 锚点随 v9 文本同步更新。
 //       重放器语义:rewriteFresh(哨兵 + 上游漂移刷新);锚点不适配的旧缓存安全跳过不判失败。
 function patchSettingsNest() {
   const results = []
@@ -1901,9 +1909,9 @@ function patchSettingsNest() {
 
   // K2a/b/c 通用设置核心包
   const ZH_OLD = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置"\n\t\t};'
-  const ZH_NEW = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观、提示音、文件放入等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。"\n\t\t};'
+  const ZH_NEW = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。",\n\t\t\t"sub.other": "其它",\n\t\t\t"sub.other.desc": "提示音、文件放入等其它偏好。"\n\t\t};'
   const EN_OLD = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General"\n\t\t};'
-  const EN_NEW = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance, sounds, file drop and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good."\n\t\t};'
+  const EN_NEW = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good.",\n\t\t\t"sub.other": "Other",\n\t\t\t"sub.other.desc": "Notification sound, file drop and other preferences."\n\t\t};'
   // [K2c v7 2026-09-03] 0.1.2-alpha.5 字典形态:zh/en 字典在 "general.nav" 之后新增
   // connection.* 六键,旧锚点("general.nav" 紧贴字典收尾 })失配 → 整文件被判
   // 「锚点不适配,安全跳过」(skipped:true 静默放行) → HIDE_TOP 从未生效 →
@@ -1911,11 +1919,11 @@ function patchSettingsNest() {
   // 处置:新增 alpha 字典锚点变体,以 "connection.error" 行为右边界,sub 键插入其间。
   // 旧版(≤0.1.1,general.nav 收尾)仍走 legacy 变体,双形态共存。
   const ZH_OLD2 = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"connection.error": "连接异常",'
-  const ZH_NEW2 = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观、提示音、文件放入等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。",\n\t\t\t"connection.error": "连接异常",'
+  const ZH_NEW2 = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。",\n\t\t\t"sub.other": "其它",\n\t\t\t"sub.other.desc": "提示音、文件放入等其它偏好。",\n\t\t\t"connection.error": "连接异常",'
   const EN_OLD2 = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"connection.error": "Disconnected",'
-  const EN_NEW2 = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance, sounds, file drop and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good.",\n\t\t\t"connection.error": "Disconnected",'
+  const EN_NEW2 = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good.",\n\t\t\t"sub.other": "Other",\n\t\t\t"sub.other.desc": "Notification sound, file drop and other preferences.",\n\t\t\t"connection.error": "Disconnected",'
   const GS_OLD = 'function GeneralSection({ renderSlot }) {\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: renderSlot("settings.general.item", {})\n\t\t\t});\n\t\t}'
-  const GS_NEW = 'function GeneralSection({ renderSlot, select, t, show }) {\n\t\t\t// [K2c v6 2026-09-01] 通用设置双形态:show==="basics" 渲染原通用设置内容(基础设置子页);否则渲染二级入口卡\n\t\t\tif (show === "basics") {\n\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\t\tchildren: renderSlot("settings.general.item", {})\n\t\t\t\t});\n\t\t\t}\n\t\t\tconst entries = select === void 0 || t === void 0 ? [] : [\n\t\t\t\t["sub:basics", t("sub.basics"), t("sub.basics.desc")],\n\t\t\t\t["sub:agency-agents", t("sub.experts"), t("sub.experts.desc")],\n\t\t\t\t["sub:config-manager", t("sub.backup"), t("sub.backup.desc")],\n\t\t\t\t["sub:vision-router", t("sub.vision"), t("sub.vision.desc")],\n\t\t\t\t["sub:archive-manager", t("sub.archive"), t("sub.archive.desc")]\n\t\t\t];\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenHead",\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadTitle",\n\t\t\t\t\t\tchildren: t("general.nav")\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadDesc",\n\t\t\t\t\t\tchildren: t("general.page.desc")\n\t\t\t\t\t})]\n\t\t\t\t}), (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenSubGrid",\n\t\t\t\t\tchildren: entries.map(([id, label, desc]) => (0, react_jsx_runtime.jsx)("button", {\n\t\t\t\t\t\ttype: "button",\n\t\t\t\t\t\tclassName: "sGenSubCard",\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tselect(id);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardTitle",\n\t\t\t\t\t\t\tchildren: label\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardDesc",\n\t\t\t\t\t\t\tchildren: desc\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardGo",\n\t\t\t\t\t\t\tchildren: "›"\n\t\t\t\t\t\t})]\n\t\t\t\t\t}, id))\n\t\t\t\t})]\n\t\t\t});\n\t\t}'
+  const GS_NEW = 'function GeneralSection({ renderSlot, select, t, show }) {\n\t\t\t// [K2c v6 2026-09-01] 通用设置双形态:show==="basics" 渲染原通用设置内容(基础设置子页);否则渲染二级入口卡\n\t\t\t// [K2c v9 2026-09-06] 三形态:basics=常规项(settings.general.item 槽);other=其它页\n\t\t\t// (提示音/文件放入,settings.general.other.item 槽,条目经 [K10] 迁槽);默认=二级入口卡。\n\t\t\tif (show === "basics" || show === "other") {\n\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\t\tchildren: renderSlot(show === "other" ? "settings.general.other.item" : "settings.general.item", {})\n\t\t\t\t});\n\t\t\t}\n\t\t\tconst entries = select === void 0 || t === void 0 ? [] : [\n\t\t\t\t["sub:basics", t("sub.basics"), t("sub.basics.desc")],\n\t\t\t\t["sub:agency-agents", t("sub.experts"), t("sub.experts.desc")],\n\t\t\t\t["sub:config-manager", t("sub.backup"), t("sub.backup.desc")],\n\t\t\t\t["sub:vision-router", t("sub.vision"), t("sub.vision.desc")],\n\t\t\t\t["sub:archive-manager", t("sub.archive"), t("sub.archive.desc")],\n\t\t\t\t["sub:other", t("sub.other"), t("sub.other.desc")]\n\t\t\t];\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenHead",\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadTitle",\n\t\t\t\t\t\tchildren: t("general.nav")\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadDesc",\n\t\t\t\t\t\tchildren: t("general.page.desc")\n\t\t\t\t\t})]\n\t\t\t\t}), (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenSubGrid",\n\t\t\t\t\tchildren: entries.map(([id, label, desc]) => (0, react_jsx_runtime.jsx)("button", {\n\t\t\t\t\t\ttype: "button",\n\t\t\t\t\t\tclassName: "sGenSubCard",\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tselect(id);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardTitle",\n\t\t\t\t\t\t\tchildren: label\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardDesc",\n\t\t\t\t\t\t\tchildren: desc\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardGo",\n\t\t\t\t\t\t\tchildren: "›"\n\t\t\t\t\t\t})]\n\t\t\t\t\t}, id))\n\t\t\t\t})]\n\t\t\t});\n\t\t}'
   // [K2d 2026-08-28] 用户需求:导航里四个二级子页行整体去除——通用页入口卡为唯一入口。
   // 行保留在 DOM(childRows 仍注入,active/跳转链路依赖 rows 结构),仅 display:none
   // (与 skin-center/pet 隐藏同款"内容保留可激活"模式)。
@@ -1927,19 +1935,24 @@ function patchSettingsNest() {
   // navCell 同款)+ 14px 标题/12px 描述左列、chevron 右列跨行居中(grid 三区布局,DOM 零改);
   // hover 边框/标题/箭头转 Claude 橙 #d97757 + 箭头右移 3px,全过渡 Claude 曲线 .3s
   // (cubic-bezier(.32,.72,0,1));reduced-motion 全关。
-  const CSSNEST_INJECT = '\t\tconst cssNest = "button[data-dsh-sub=\\"true\\"]{display:none!important}.sGenHead{display:flex;flex-direction:column;gap:2px;width:100%}.sGenHeadTitle{font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-primary)}.sGenHeadDesc{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}.sGenSubGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:30px 0 6px;width:100%}.sGenSubCard{box-sizing:border-box;display:grid;grid-template-columns:1fr auto;column-gap:12px;align-items:center;width:100%;min-height:64px;text-align:left;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:11px 14px;cursor:pointer;color:var(--dsw-alias-label-primary);font-family:inherit;transition:border-color .3s cubic-bezier(.32,.72,0,1),background-color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover{border-color:#d97757;background:var(--dsw-specific-sidebar-nav-item-hover)}.sGenSubCard:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px}.sGenSubCardTitle{grid-column:1;grid-row:1;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);transition:color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardTitle{color:#d97757}.sGenSubCardDesc{grid-column:1;grid-row:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)}.sGenSubCardGo{grid-column:2;grid-row:1/3;justify-self:end;color:var(--dsw-alias-label-tertiary);font-size:16px;line-height:1;transition:transform .3s cubic-bezier(.32,.72,0,1),color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardGo{transform:translateX(3px);color:#d97757}@media (prefers-reduced-motion:reduce){.sGenSubCard,.sGenSubCardTitle,.sGenSubCardGo{transition:none!important}.sGenSubCard:hover .sGenSubCardGo{transform:none}}";\n\t\tconst tagIdNest = "@deepseek-ai/dsh-client-ui-settings-general/nesting.module.css";\n\t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagIdNest) + "]") === null) {\n\t\t\tconst tag = document.createElement("style");\n\t\t\ttag.dataset.plugin = "@deepseek-ai/dsh-client-ui-settings-general";\n\t\t\ttag.dataset.pluginCss = tagIdNest;\n\t\t\ttag.textContent = cssNest;\n\t\t\tdocument.head.appendChild(tag);\n\t\t}\n'
+  const CSSNEST_INJECT = '\t\tconst cssNest = "[data-slot=\\"settings.general.other.item\\"]>:last-child{border-bottom:none!important}button[data-dsh-sub=\\"true\\"]{display:none!important}.sGenHead{display:flex;flex-direction:column;gap:2px;width:100%}.sGenHeadTitle{font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-primary)}.sGenHeadDesc{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}.sGenSubGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:30px 0 6px;width:100%}.sGenSubCard{box-sizing:border-box;display:grid;grid-template-columns:1fr auto;column-gap:12px;align-items:center;width:100%;min-height:64px;text-align:left;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:11px 14px;cursor:pointer;color:var(--dsw-alias-label-primary);font-family:inherit;transition:border-color .3s cubic-bezier(.32,.72,0,1),background-color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover{border-color:#d97757;background:var(--dsw-specific-sidebar-nav-item-hover)}.sGenSubCard:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px}.sGenSubCardTitle{grid-column:1;grid-row:1;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);transition:color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardTitle{color:#d97757}.sGenSubCardDesc{grid-column:1;grid-row:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)}.sGenSubCardGo{grid-column:2;grid-row:1/3;justify-self:end;color:var(--dsw-alias-label-tertiary);font-size:16px;line-height:1;transition:transform .3s cubic-bezier(.32,.72,0,1),color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardGo{transform:translateX(3px);color:#d97757}@media (prefers-reduced-motion:reduce){.sGenSubCard,.sGenSubCardTitle,.sGenSubCardGo{transition:none!important}.sGenSubCard:hover .sGenSubCardGo{transform:none}}";\n\t\tconst tagIdNest = "@deepseek-ai/dsh-client-ui-settings-general/nesting.module.css";\n\t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagIdNest) + "]") === null) {\n\t\t\tconst tag = document.createElement("style");\n\t\t\ttag.dataset.plugin = "@deepseek-ai/dsh-client-ui-settings-general";\n\t\t\ttag.dataset.pluginCss = tagIdNest;\n\t\t\ttag.textContent = cssNest;\n\t\t\tdocument.head.appendChild(tag);\n\t\t}\n'
   const ROOTVAR_ANCHOR = '\t\tvar SettingsRoot_module_css_default = {'
   const GENREG_OLD = 'label: () => t("general.nav"),\n\t\t\t\tlocale: NS,\n\t\t\t\tchildren: { "settings.general.item": {'
   const GENREG_NEW = 'label: () => t("general.nav"),\n\t\t\t\tlocale: NS,\n\t\t\t\tinject: () => ({ t }),\n\t\t\t\tchildren: { "settings.general.item": {'
   const BASICS_REG_OLD = '\t\t\t}, GeneralSection));'
   const BASICS_REG_NEW = '\t\t\t}, GeneralSection));'
+  // [K10 v9 配套] general section children 声明扩槽:settings.general.other.item(与
+  // settings.general.item 同规格 list/root)。两插件 inject 等待声明后自动落位,声明缺失
+  // 时 renderSlot 拿不到任何条目(K2d skin 槽同教训)。缩进无关正则(rc.x 缩进漂移免疫)。
+  const GENSLOT_RE = /children: \{ "settings\.general\.item": \{\r?\n\t+kind: "list",\r?\n\t+scope: "root"\r?\n\t+\} \}/
+  const GENSLOT_NEW = 'children: { "settings.general.item": {\n\t\t\t\t\tkind: "list",\n\t\t\t\t\tscope: "root"\n\t\t\t\t}, "settings.general.other.item": {\n\t\t\t\t\tkind: "list",\n\t\t\t\t\tscope: "root"\n\t\t\t\t} }'
   // rc.x 缩进漂移(rc.2=内部8tab / rc.5=7tab):整块用缩进无关正则捕获,重打为固定7tab形态
   const ROWS_RE = /rows = ctx\.slots\.entries\("settings\.section"\)\.map\(\(e\) => \(\{\n\t+\/\* v8 ignore next[^\n]*?\*\/\n\t+id: e\.options\.id \?\? "",\n\t+order: e\.options\.order \?\? 0,\n\t+label: \(0, _deepseek_ai_dsh_client_ui_slots\.resolveSlotLabel\)\(e\.options\.label\) \?\? ""\n\t+\}\)\)\.sort\(\(a, b\) => a\.order - b\.order\);/
-  const ROWS_NEW = 'rows = (() => {\n\t\t\t\t\t\t\t// [K2a v4] 二级页面:三个顶层入口从导航隐藏(仅经 general 下子行可达);\n\t\t\t\t\t\t\t// 基础设置子行复用 general 条目(sub:basics + show 标记),无独立账本条目。\n\t\t\t\t\t\t\tconst HIDE_TOP = ["agency-agents", "config-manager", "vision-router", "archive-manager"];\n\t\t\t\t\t\t\tconst CHILD_IDS = ["basics", "agency-agents", "config-manager", "vision-router", "archive-manager"];\n\t\t\t\t\t\t\tconst all = ctx.slots.entries("settings.section");\n\t\t\t\t\t\t\tconst flat = all.filter((e) => !HIDE_TOP.includes(e.options.id)).map((e) => ({\n\t\t\t\t\t\t\t\tid: e.options.id ?? "",\n\t\t\t\t\t\t\t\torder: e.options.order ?? 0,\n\t\t\t\t\t\t\t\tlabel: (0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? ""\n\t\t\t\t\t\t\t})).sort((a, b) => a.order - b.order);\n\t\t\t\t\t\t\tconst childRows = CHILD_IDS.map((id) => {\n\t\t\t\t\t\t\t\tif (id === "basics") return { id: "sub:basics", order: 0, label: t("sub.basics"), child: true };\n\t\t\t\t\t\t\t\tconst e = all.find((cand) => cand.options.id === id);\n\t\t\t\t\t\t\t\treturn { id: "sub:" + id, order: 0, label: e ? ((0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? "") : id, child: true };\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tconst top = [];\n\t\t\t\t\t\t\tlet attached = false;\n\t\t\t\t\t\t\tfor (const row of flat) {\n\t\t\t\t\t\t\t\ttop.push(row);\n\t\t\t\t\t\t\t\tif (!attached && row.id === "general") {\n\t\t\t\t\t\t\t\t\tfor (const child of childRows) top.push(child);\n\t\t\t\t\t\t\t\t\tattached = true;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tif (!attached && childRows.length > 0) for (const child of childRows) top.push(child);\n\t\t\t\t\t\t\treturn top;\n\t\t\t\t\t\t})();'
+  const ROWS_NEW = 'rows = (() => {\n\t\t\t\t\t\t\t// [K2a v4] 二级页面:三个顶层入口从导航隐藏(仅经 general 下子行可达);\n\t\t\t\t\t\t\t// 基础设置子行复用 general 条目(sub:basics + show 标记),无独立账本条目。\n\t\t\t\t\t\t\t// [v9] 其它子行同款复用(sub:other → general + show:"other")。\n\t\t\t\t\t\t\tconst HIDE_TOP = ["agency-agents", "config-manager", "vision-router", "archive-manager"];\n\t\t\t\t\t\t\tconst CHILD_IDS = ["basics", "agency-agents", "config-manager", "vision-router", "archive-manager", "other"];\n\t\t\t\t\t\t\tconst all = ctx.slots.entries("settings.section");\n\t\t\t\t\t\t\tconst flat = all.filter((e) => !HIDE_TOP.includes(e.options.id)).map((e) => ({\n\t\t\t\t\t\t\t\tid: e.options.id ?? "",\n\t\t\t\t\t\t\t\torder: e.options.order ?? 0,\n\t\t\t\t\t\t\t\tlabel: (0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? ""\n\t\t\t\t\t\t\t})).sort((a, b) => a.order - b.order);\n\t\t\t\t\t\t\tconst childRows = CHILD_IDS.map((id) => {\n\t\t\t\t\t\t\t\tif (id === "basics") return { id: "sub:basics", order: 0, label: t("sub.basics"), child: true };\n\t\t\t\t\t\t\t\tif (id === "other") return { id: "sub:other", order: 0, label: t("sub.other"), child: true };\n\t\t\t\t\t\t\t\tconst e = all.find((cand) => cand.options.id === id);\n\t\t\t\t\t\t\t\treturn { id: "sub:" + id, order: 0, label: e ? ((0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? "") : id, child: true };\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tconst top = [];\n\t\t\t\t\t\t\tlet attached = false;\n\t\t\t\t\t\t\tfor (const row of flat) {\n\t\t\t\t\t\t\t\ttop.push(row);\n\t\t\t\t\t\t\t\tif (!attached && row.id === "general") {\n\t\t\t\t\t\t\t\t\tfor (const child of childRows) top.push(child);\n\t\t\t\t\t\t\t\t\tattached = true;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tif (!attached && childRows.length > 0) for (const child of childRows) top.push(child);\n\t\t\t\t\t\t\treturn top;\n\t\t\t\t\t\t})();'
   const NAVCELL_OLD = 'className: clsx(SettingsRoot_module_css_default.navCell, row.id === active && SettingsRoot_module_css_default.active),'
   const NAVCELL_NEW = 'className: clsx(SettingsRoot_module_css_default.navCell, row.id === active && SettingsRoot_module_css_default.active),\n\t\t\t\t\t\t\t\t"data-dsh-sub": row.child === true ? "true" : void 0,'
   const SEL_OLD = 'renderSlot("settings.section", { close: onClose }, { only: active })'
-  const SEL_NEW = 'renderSlot("settings.section", { close: onClose, select: onSelect, show: active === "sub:basics" ? "basics" : void 0 }, { only: active === "sub:basics" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active })'
+  const SEL_NEW = 'renderSlot("settings.section", { close: onClose, select: onSelect, show: active === "sub:basics" ? "basics" : active === "sub:other" ? "other" : void 0 }, { only: active === "sub:basics" || active === "sub:other" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active })'
 
   const roots = []
   const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
@@ -1969,7 +1982,7 @@ function patchSettingsNest() {
     const dictLegacy = head.includes(ZH_OLD) && head.includes(GS_OLD)
     const dictAlpha = head.includes(ZH_OLD2) && head.includes(GS_OLD)
     if (!dictLegacy && !dictAlpha) {
-      if (head.includes('sGenSubGrid') && head.includes('sub:basics') && head.includes('sub:archive-manager')) {
+      if (head.includes('sGenSubGrid') && head.includes('sub:basics') && head.includes('sub:archive-manager') && head.includes('sub:other')) {
         results.push({ file: label, ok: true, already: true, version: ver })
         continue
       }
@@ -2001,6 +2014,7 @@ function patchSettingsNest() {
       c = rep(c, GS_OLD, GS_NEW, 1, 'general-section')
       c = rep(c, ROOTVAR_ANCHOR, CSSNEST_INJECT + ROOTVAR_ANCHOR, 1, 'nest-css')
       c = rep(c, GENREG_OLD, GENREG_NEW, 1, 'general-inject-t')
+      c = rex(c, GENSLOT_RE, GENSLOT_NEW, 1, 'gen-other-slot-decl')
       c = rep(c, BASICS_REG_OLD, BASICS_REG_NEW, 1, 'basics-entry')
       c = rex(c, ROWS_RE, ROWS_NEW, 1, 'rows-nest')
       c = rep(c, NAVCELL_OLD, NAVCELL_NEW, 1, 'nav-sub-attr')
@@ -2008,6 +2022,38 @@ function patchSettingsNest() {
       return c
     }
     results.push({ ...rewriteFresh(p, '.bak-nest-skin', apply, failures, PATCH_MARK), version: ver })
+  }
+  return results
+}
+
+// ---- [K10] 提示音/放入文件迁槽 settings.general.other.item(2026-09-06,批次122;K v9 配套) ----
+//       用户需求:「提示音」「放入文件」移出基础设置,通用设置下新增同级「其它」入口承载。
+//       槽运行时 list 槽仅支持 only(单 id)无 except,GS 内按条目过滤不可行 → 直接换槽:
+//       dsh-notify-sound / dsh-file-drop 两插件 lib 的 settings.general.item 注册改写为
+//       settings.general.other.item;槽声明由 K v9 的 gen-other-slot-decl 扩入 general
+//       section children,GS other 形态消费——基础设置页天然不再出现两区块。
+//       注意:两插件目录是 profile junction 回工作区源码,补丁直接落 git 树(已修改属预期,
+//       .bak-gen-other 可还原);插件上游更新走 rewriteFresh 漂移重打。
+const K10_MARK = '/*dsh-local-patch:k10-general-other*/'
+function patchGeneralOtherSlot() {
+  const results = []
+  for (const name of ['dsh-notify-sound', 'dsh-file-drop']) {
+    const p = path.join(PLUGINS, name, 'lib', 'client.js')
+    if (!fs.existsSync(p)) { results.push({ file: name + '/client.js', missing: true }); continue }
+    const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, name, 'package.json'), 'utf8')).version
+    const { rep, failures } = makeCtx(name + '/client.js')
+    const apply = (c) => {
+      c = rep(c,
+        'ctx.slots.inject("settings.general.item", () => ctx.slots.register({',
+        'ctx.slots.inject("settings.general.other.item", () => ctx.slots.register({',
+        1, 'k10-inject-slot')
+      c = rep(c,
+        'name: "settings.general.item",',
+        'name: "settings.general.other.item",',
+        1, 'k10-entry-name')
+      return c
+    }
+    results.push({ ...rewriteFresh(p, '.bak-gen-other', apply, failures, K10_MARK), version: ver })
   }
   return results
 }
@@ -2175,6 +2221,14 @@ function patchPluginSettingsItemId() {
           'function collectPortalTargets(nodes) {',
           'function collectPortalTargets(nodes) {\n    if (nodes == null || typeof nodes[Symbol.iterator] !== "function")\n        return [];',
           1, 'collect-portal-iterable-guard')
+        // [2026-09-06] settings.plugin.item 卡片(inject 回调)访问 ctx.settingsScope,但
+        // exports.inject 未声明 → cordis 守卫抛 cannot get property "settingsScope"
+        // without inject,槽位错误边界每次渲染整块卸载 settings.section(设置页闪崩/闪现)。
+        // 修法 = 批次 88 vision-router 同款:exports.inject 补声明服务名(lib+src 双侧)。
+        c = rep(c,
+          "exports.inject = ['slots', 'sessions', 'conversation'];",
+          "exports.inject = ['slots', 'sessions', 'conversation', 'settingsScope'];",
+          1, 'settings-scope-inject')
       }
       return c
     }
@@ -2198,6 +2252,10 @@ function patchPluginSettingsItemId() {
         'function collectPortalTargets(nodes: readonly RewindNodeLike[]): readonly RewindPortalTarget[] {',
         'function collectPortalTargets(nodes: readonly RewindNodeLike[]): readonly RewindPortalTarget[] {\n  if (nodes == null || typeof nodes[Symbol.iterator] !== "function") return []',
         1, 'collect-portal-iterable-guard-src')
+      c = reps(c,
+        "export const inject = ['slots', 'sessions', 'conversation']",
+        "export const inject = ['slots', 'sessions', 'conversation', 'settingsScope']",
+        1, 'settings-scope-inject-src')
       return c
     }
     results.push({ ...rewrite(srcTsx, '.bak-nodes-src', applySrc, fsr), version: verSr })
@@ -2692,13 +2750,14 @@ function patchSkinSubpages() {
         'if (!attached && row.id === "general") {\n\t\t\t\t\t\t\t\t\tfor (const child of childRows) top.push(child);\n\t\t\t\t\t\t\t\t\tattached = true;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tif (!skinAttached && row.id === "skin") {\n\t\t\t\t\t\t\t\t\tfor (const child of skinRows) top.push(child);\n\t\t\t\t\t\t\t\t\tskinAttached = true;\n\t\t\t\t\t\t\t\t}',
         1, 'k9-rows-skinattach')
       // SEL 路由:sub:skin-* → only "skin" + show 透传(子页在 SkinTab 内分流)
+      // [v9] K v9 起 SEL 文本已含 sub:other 分支,本锚点随之更新(锚的是 K v9 产物)。
       c = rep(c,
-        'show: active === "sub:basics" ? "basics" : void 0',
-        'show: active === "sub:basics" ? "basics" : active === "sub:skin-assets" ? "skin-assets" : active === "sub:skin-suit" ? "skin-suit" : void 0',
+        'show: active === "sub:basics" ? "basics" : active === "sub:other" ? "other" : void 0',
+        'show: active === "sub:basics" ? "basics" : active === "sub:other" ? "other" : active === "sub:skin-assets" ? "skin-assets" : active === "sub:skin-suit" ? "skin-suit" : void 0',
         1, 'k9-sel-show')
       c = rep(c,
-        '{ only: active === "sub:basics" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active }',
-        '{ only: active === "sub:basics" ? "general" : active.indexOf("sub:skin-") === 0 ? "skin" : active.indexOf("sub:") === 0 ? active.slice(4) : active }',
+        '{ only: active === "sub:basics" || active === "sub:other" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active }',
+        '{ only: active === "sub:basics" || active === "sub:other" ? "general" : active.indexOf("sub:skin-") === 0 ? "skin" : active.indexOf("sub:") === 0 ? active.slice(4) : active }',
         1, 'k9-sel-only')
       return c
     }
@@ -2894,7 +2953,7 @@ function patchUnarchiveRpcAlpha5() {
 // ---- 入口 ----
 function replayAll(log = () => {}) {
   const out = { ok: true, items: [] }
-  for (const r of [...patchBetterSidebar(), ...patchNodeNav(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchSkinSubpages(), ...patchUnarchiveRpcAlpha5(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchMnemonProjection(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchConversationPlusQuickActions()]) {
+  for (const r of [...patchBetterSidebar(), ...patchNodeNav(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchGeneralOtherSlot(), ...patchSkinSubpages(), ...patchUnarchiveRpcAlpha5(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchMnemonProjection(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchConversationPlusQuickActions()]) {
     if (r.missing) { log(`[patches] ${r.file}: 未安装,跳过`); continue }
     out.items.push(r)
     if (r.ok) log(`[patches] ${r.file}@${r.version}: ${r.skipped ? '锚点不适配,安全跳过' : r.already ? '已是补丁态' : '已恢复本地定制'}`)
