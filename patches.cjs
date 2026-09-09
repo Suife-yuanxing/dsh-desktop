@@ -218,6 +218,32 @@ function patchBetterSidebar() {
         c = rep(c, 'padding-right: 78px;', 'padding-right: 54px;', 1, 'layout-collapsedHeader')
         const VARS = `:root {\\n  --dsh-bsr-slide-duration: 300ms;\\n  --dsh-bsr-slide-ease: cubic-bezier(0.32, 0.72, 0, 1);\\n  --dsh-bsr-gap: 8px;\\n}\\n\\nbody[data-dsh-sidebar-collapsed] {\\n  --dsh-bsr-gap: 0px;\\n}\\n\\n`
         c = rex(c, /(#root \{\\n  margin-right: calc\(var\(--dsh-sidebar-width, 0px\) \+ var\(--dsh-bsr-gap, 0px\) \* 2\);)/, VARS + '$1', 1, 'layout-vars')
+      } else if (c.includes('#root [data-dsh-frame],')) {
+        // 0.18+ 布局推送模型重构(问题122): #root margin-right 单规则 → AppFrame 三栏 grid
+        // 的 frame padding-right 模型 + 中列改 [data-dsh-center-col] 标签锚定(上游以标签替换
+        // has() 结构选择器,规避流式期间全文档选择器重评估)。等价迁移四件:
+        // ① frame padding 加 gap 呼吸距(旧 layout-root 的 gap*2 语义,面板固定 right:12px
+        //    下留 4px 内容呼吸)并剥掉 padding-right 布局属性 transition(批次 109 纪律:
+        //    开合=一次瞬时重排,面板仍 transform 滑入 GPU 合成);
+        // ② details 拖拽柄 transform 与 padding 同步含 gap——柄从 border-box 实测定位,
+        //    不同步会落在面板(固定 right:12px)覆盖区内不可见;
+        // ③ 中列 margin-bottom 布局属性 transition 照旧剥离(与 0.15- 同规);
+        // ④ collapsed 头部 78→54px 与 VARS 令牌注入照旧(A6 随后统一迁移 body→#root 属性面)。
+        c = rep(c,
+          'padding-right: var(--dsh-sidebar-width, 0px);\\n  transition: padding-right var(--ds-transition-duration-slow) var(--ds-ease-in-out);',
+          'padding-right: calc(var(--dsh-sidebar-width, 0px) + var(--dsh-bsr-gap, 0px) * 2);',
+          1, 'layout-frame')
+        c = rep(c,
+          'transform: translateX(calc(0px - var(--dsh-sidebar-width, 0px)));',
+          'transform: translateX(calc(0px - (var(--dsh-sidebar-width, 0px) + var(--dsh-bsr-gap, 0px) * 2)));',
+          1, 'layout-details')
+        c = rex(c, /\\n {2}transition: margin-bottom [^;]*;/, '', 1, 'layout-centerCol')
+        c = rep(c, 'padding-right: 78px;', 'padding-right: 54px;', 1, 'layout-collapsedHeader')
+        const VARS18 = `:root {\\n  --dsh-bsr-slide-duration: 300ms;\\n  --dsh-bsr-slide-ease: cubic-bezier(0.32, 0.72, 0, 1);\\n  --dsh-bsr-gap: 8px;\\n}\\n\\nbody[data-dsh-sidebar-collapsed] {\\n  --dsh-bsr-gap: 0px;\\n}\\n\\n`
+        c = rep(c,
+          '#root [data-dsh-frame],\\n#root > [data-slot=\\"root\\"] > div {\\n  box-sizing: border-box;',
+          VARS18 + '#root [data-dsh-frame],\\n#root > [data-slot=\\"root\\"] > div {\\n  box-sizing: border-box;',
+          1, 'layout-vars')
       } else if (isFull) {
         failures.push(`[bsr/${f}] layout.css anchor missing`)
       }
@@ -489,7 +515,13 @@ function patchEgoBrowserSettings() {
   if (current.includes(MARK)) return [{ file: 'dsh-ego-browser/lib/index.js', version: ver, ok: true, already: true }]
   const UPSTREAM_ANCHOR = 'import { settingsNamespace } from "@deepseek-ai/dsh-settings";'
   if (!current.includes(UPSTREAM_ANCHOR)) {
-    return [{ file: 'dsh-ego-browser/lib/index.js', version: ver, ok: false, failures: ['[ego-browser] index.js 非官方原版亦非已适配形态(上游新版/半态?),保留原样不写盘'] }]
+    // 2026-09-09 容错:上游 0.8.1→0.8.3 自行移除了 settingsNamespace 顶层导入(不再引用
+    // @deepseek-ai/dsh-settings),alpha.5 兼容由上游自己解决——无引用即无崩加载面,
+    // 守护退化为安全跳过;仅当文件仍引用 dsh-settings(陌生半态)时才 FAIL 保留原样。
+    if (current.includes('@deepseek-ai/dsh-settings')) {
+      return [{ file: 'dsh-ego-browser/lib/index.js', version: ver, ok: false, failures: ['[ego-browser] index.js 非官方原版亦非已适配形态(上游新版/半态?),保留原样不写盘'] }]
+    }
+    return [{ file: 'dsh-ego-browser/lib/index.js', version: ver, ok: true, skipped: true }]
   }
   let c = current
   c = rep(c,
@@ -1273,11 +1305,10 @@ function patchSettingsInfoArch() {
       results.push({ ...rewrite(mp, '.bak-order', apply, failures), version: ver })
     }
   }
-  // C4/C7: 单文件 order 改写(宠物 130→18 / 皮肤中心 120→14.5)。
-  // C3 的 web-ui-settings(webui-order)条目已移除:dsh-web-ui 家族聚合包卸载后该包
-  // 永久 missing,壳内「Web UI 插件」tab(dshvt b20)也已整体摘除,见批次 R81。
+  // C3/C4/C7: 单文件 order 改写(Web UI 插件 110→17 / 宠物 130→18 / 皮肤中心 120→14.5)
   // C7 浮点 order 已验证:registry 排序为 a.order - b.order 数值比较(scoped-slots.tsx:839),14.5 落在 皮肤14 与 插件15 之间。
   const orderSpecs = [
+    { dir: '@linxin666/dsh-client-ui-web-ui-settings', re: /id: "web-ui-plugins",(\s*\n\s*)order: 110,/, to: 'id: "web-ui-plugins",$1order: 17,', label: 'webui-order' },
     { dir: '@linxin666/dsh-pet', re: /id: "pet",(\s*\n\s*)order: 130,/, to: 'id: "pet",$1order: 18,', label: 'pet-order' },
     { dir: '@linxin666/dsh-client-ui-skin-center', re: /id: "skin-center",(\s*\n\s*)order: 120,/, to: 'id: "skin-center",$1order: 14.5,', label: 'skin-center-order' },
   ]
@@ -1472,11 +1503,30 @@ function patchPresets() {
   const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
   if (fs.existsSync(npxRoot)) {
     for (const h of fs.readdirSync(npxRoot)) {
+      // 旧版布局(dsh/config/agent-presets,≤rc.2):存在才扫
       const root = path.join(npxRoot, h, 'node_modules', '@deepseek-ai', 'dsh', 'config', 'agent-presets')
-      if (!fs.existsSync(root)) continue
-      for (const name of fs.readdirSync(root)) {
-        const f = path.join(root, name, 'agent.cordis.yml')
-        if (fs.existsSync(f)) files.push(f)
+      if (fs.existsSync(root)) {
+        for (const name of fs.readdirSync(root)) {
+          const f = path.join(root, name, 'agent.cordis.yml')
+          if (fs.existsSync(f)) files.push(f)
+        }
+      }
+      // [J2 2026-09-06] pnpm 布局种子(0.1.2-alpha.5 起)内置预设已迁至独立包
+      // dsh-agent-presets/presets/*,旧路径 dsh/config/agent-presets 不复存在,
+      // 旧扫描对新种子整体落空 → standard/cordis/minimal/ptc 自带 persona 行
+      // 在 agent 作用域顶掉部署级人设(问题54 同根因复发:全局人设"时有时无")。
+      // 按包名前缀扫 .pnpm 全部哈希副本,兼容官方种子更新与多版本并存。
+      // 注意:必须与旧路径互不 continue,两种布局可能各自存在或同时缺失。
+      const pnpmRoot = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmRoot)) continue
+      for (const d of fs.readdirSync(pnpmRoot)) {
+        if (!d.startsWith('@deepseek-ai+dsh-agent-pres')) continue
+        const pRoot = path.join(pnpmRoot, d, 'node_modules', '@deepseek-ai', 'dsh-agent-presets', 'presets')
+        if (!fs.existsSync(pRoot)) continue
+        for (const name of fs.readdirSync(pRoot)) {
+          const f = path.join(pRoot, name, 'agent.cordis.yml')
+          if (fs.existsSync(f)) files.push(f)
+        }
       }
     }
   }
@@ -1839,6 +1889,42 @@ function patchVisionRouter() {
   return [{ ...rewrite(p, '.bak-alpha5', apply, failures), version: ver }]
 }
 
+// ---- [V2] dsh-vision-router 查看原图浮层 portal(手册 v0.5.2 批次④复发,2026-09-08) ----
+//       症状: 会话内联图点击展开后,PresentedImage 灯箱 position:fixed 就地渲染被会话流
+//       祖先 content-visibility:auto / contain:style paint 困在单条消息盒内 —— 遮罩只盖
+//       一条消息、大图溢出被裁(用户截图实证)。修复 = 浮层 ReactDOM.createPortal(document.body),
+//       与官方 ImageLightbox 同法。v2.1.0 结构要点: createPresentation 定义在 patchLoader/
+//       factory 之外,factory 作用域的 ReactDOM 必须经调用点显式传入 createPresentation,
+//       否则其参数恒 undefined、门控静默走 fallback(旧版 3 锚点脚本对该版本即静默空操作)。
+//       幂等: createPresentation(React, ReactDOM) 标记;.bak-portal 基底=pristine。
+function patchVisionRouterPortal() {
+  const p = path.join(PLUGINS, 'dsh-vision-router', 'lib', 'client-presentation-boundary-main.js')
+  if (!fs.existsSync(p)) return [{ file: 'dsh-vision-router/presentation-boundary', missing: true }]
+  const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-vision-router', 'package.json'), 'utf8')).version
+  const { rep, failures } = makeCtx('vision-router/presentation-boundary')
+  const apply = (c) => {
+    if (c.includes('createPresentation(React, ReactDOM)')) return c
+    c = rep(c,
+      '  function createPresentation(React) {',
+      '  function createPresentation(React, ReactDOM) {',
+      1, 'portal-sig')
+    c = rep(c,
+      '            factory: function(require) {\n              var React = require(\'react\');\n              var primitives;',
+      '            factory: function(require) {\n              var React = require(\'react\');\n              var ReactDOM;\n              try { ReactDOM = require(\'react-dom\'); } catch (_) { ReactDOM = undefined; }\n              if (!ReactDOM || typeof ReactDOM.createPortal !== \'function\') {\n                try { ReactDOM = require(\'react-dom/client\'); } catch (_) { ReactDOM = undefined; }\n              }\n              var primitives;',
+      1, 'portal-factory')
+    c = rep(c,
+      '              var presentation = createPresentation(React);',
+      '              var presentation = createPresentation(React, ReactDOM);',
+      1, 'portal-callsite')
+    c = rep(c,
+      '      );\n      return React.createElement(React.Fragment, null, thumb, overlay);',
+      '      );\n      // Chat flow ancestors carry content-visibility/contain(paint), which make\n      // them the containing block for position:fixed descendants — an in-place\n      // overlay gets trapped inside one message\'s box. Portal to document.body,\n      // the same containment escape the stock ImageLightbox uses.\n      var layer = ReactDOM && typeof ReactDOM.createPortal === \'function\'\n        ? ReactDOM.createPortal(overlay, document.body)\n        : overlay;\n      return React.createElement(React.Fragment, null, thumb, layer);',
+      1, 'portal-overlay')
+    return c
+  }
+  return [{ ...rewrite(p, '.bak-portal', apply, failures), version: ver }]
+}
+
 // ---- [K] 设置页合并(2026-08-27,问题110;v2 同日修订:通用设置二级页签方案) ----
 //       K1 joi 换装迁址 settings.general.item → settings.skin.item(执行体并入 patchJoiTheme 链)。
 //       K2 通用设置页(核心包 dsh-client-ui-settings-general;遍历全部 npx 缓存 + devlink 层):
@@ -1852,13 +1938,6 @@ function patchVisionRouter() {
 //       v8 修订(2026-09-06): 通用设置追加第五卡「归档会话管理」(sub:archive-manager,
 //       section 由 dsh-plugin 注册);already 指纹加 sub:archive-manager,旧 v7 补丁态
 //       经 bak 恢复重打升级。
-//       v9 修订(2026-09-06,批次122): 通用设置追加第六卡「其它」(sub:other,与既有五卡
-//       同级)——「提示音」「放入文件」移出基础设置迁入该子页。槽运行时 list 槽仅支持
-//       only(单 id)无 except,GS 内按条目过滤不可行 → 换槽方案:children 声明扩
-//       settings.general.other.item(同规格 list/root),两插件注册迁槽(见 [K10]);
-//       GeneralSection 三形态(basics/other/入口卡),SEL 路由 sub:other → show:"other"+
-//       only:"general"。already 指纹加 sub:other,旧 v8 补丁态经 bak 恢复重打升级;
-//       [K9-G] 的 SEL 锚点随 v9 文本同步更新。
 //       重放器语义:rewriteFresh(哨兵 + 上游漂移刷新);锚点不适配的旧缓存安全跳过不判失败。
 function patchSettingsNest() {
   const results = []
@@ -1909,9 +1988,9 @@ function patchSettingsNest() {
 
   // K2a/b/c 通用设置核心包
   const ZH_OLD = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置"\n\t\t};'
-  const ZH_NEW = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。",\n\t\t\t"sub.other": "其它",\n\t\t\t"sub.other.desc": "提示音、文件放入等其它偏好。"\n\t\t};'
+  const ZH_NEW = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观、提示音、文件放入等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。"\n\t\t};'
   const EN_OLD = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General"\n\t\t};'
-  const EN_NEW = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good.",\n\t\t\t"sub.other": "Other",\n\t\t\t"sub.other.desc": "Notification sound, file drop and other preferences."\n\t\t};'
+  const EN_NEW = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance, sounds, file drop and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good."\n\t\t};'
   // [K2c v7 2026-09-03] 0.1.2-alpha.5 字典形态:zh/en 字典在 "general.nav" 之后新增
   // connection.* 六键,旧锚点("general.nav" 紧贴字典收尾 })失配 → 整文件被判
   // 「锚点不适配,安全跳过」(skipped:true 静默放行) → HIDE_TOP 从未生效 →
@@ -1919,11 +1998,11 @@ function patchSettingsNest() {
   // 处置:新增 alpha 字典锚点变体,以 "connection.error" 行为右边界,sub 键插入其间。
   // 旧版(≤0.1.1,general.nav 收尾)仍走 legacy 变体,双形态共存。
   const ZH_OLD2 = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"connection.error": "连接异常",'
-  const ZH_NEW2 = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。",\n\t\t\t"sub.other": "其它",\n\t\t\t"sub.other.desc": "提示音、文件放入等其它偏好。",\n\t\t\t"connection.error": "连接异常",'
+  const ZH_NEW2 = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观、提示音、文件放入等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。",\n\t\t\t"connection.error": "连接异常",'
   const EN_OLD2 = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"connection.error": "Disconnected",'
-  const EN_NEW2 = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good.",\n\t\t\t"sub.other": "Other",\n\t\t\t"sub.other.desc": "Notification sound, file drop and other preferences.",\n\t\t\t"connection.error": "Disconnected",'
+  const EN_NEW2 = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance, sounds, file drop and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good.",\n\t\t\t"connection.error": "Disconnected",'
   const GS_OLD = 'function GeneralSection({ renderSlot }) {\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: renderSlot("settings.general.item", {})\n\t\t\t});\n\t\t}'
-  const GS_NEW = 'function GeneralSection({ renderSlot, select, t, show }) {\n\t\t\t// [K2c v6 2026-09-01] 通用设置双形态:show==="basics" 渲染原通用设置内容(基础设置子页);否则渲染二级入口卡\n\t\t\t// [K2c v9 2026-09-06] 三形态:basics=常规项(settings.general.item 槽);other=其它页\n\t\t\t// (提示音/文件放入,settings.general.other.item 槽,条目经 [K10] 迁槽);默认=二级入口卡。\n\t\t\tif (show === "basics" || show === "other") {\n\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\t\tchildren: renderSlot(show === "other" ? "settings.general.other.item" : "settings.general.item", {})\n\t\t\t\t});\n\t\t\t}\n\t\t\tconst entries = select === void 0 || t === void 0 ? [] : [\n\t\t\t\t["sub:basics", t("sub.basics"), t("sub.basics.desc")],\n\t\t\t\t["sub:agency-agents", t("sub.experts"), t("sub.experts.desc")],\n\t\t\t\t["sub:config-manager", t("sub.backup"), t("sub.backup.desc")],\n\t\t\t\t["sub:vision-router", t("sub.vision"), t("sub.vision.desc")],\n\t\t\t\t["sub:archive-manager", t("sub.archive"), t("sub.archive.desc")],\n\t\t\t\t["sub:other", t("sub.other"), t("sub.other.desc")]\n\t\t\t];\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenHead",\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadTitle",\n\t\t\t\t\t\tchildren: t("general.nav")\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadDesc",\n\t\t\t\t\t\tchildren: t("general.page.desc")\n\t\t\t\t\t})]\n\t\t\t\t}), (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenSubGrid",\n\t\t\t\t\tchildren: entries.map(([id, label, desc]) => (0, react_jsx_runtime.jsx)("button", {\n\t\t\t\t\t\ttype: "button",\n\t\t\t\t\t\tclassName: "sGenSubCard",\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tselect(id);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardTitle",\n\t\t\t\t\t\t\tchildren: label\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardDesc",\n\t\t\t\t\t\t\tchildren: desc\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardGo",\n\t\t\t\t\t\t\tchildren: "›"\n\t\t\t\t\t\t})]\n\t\t\t\t\t}, id))\n\t\t\t\t})]\n\t\t\t});\n\t\t}'
+  const GS_NEW = 'function GeneralSection({ renderSlot, select, t, show }) {\n\t\t\t// [K2c v6 2026-09-01] 通用设置双形态:show==="basics" 渲染原通用设置内容(基础设置子页);否则渲染二级入口卡\n\t\t\tif (show === "basics") {\n\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\t\tchildren: renderSlot("settings.general.item", {})\n\t\t\t\t});\n\t\t\t}\n\t\t\tconst entries = select === void 0 || t === void 0 ? [] : [\n\t\t\t\t["sub:basics", t("sub.basics"), t("sub.basics.desc")],\n\t\t\t\t["sub:agency-agents", t("sub.experts"), t("sub.experts.desc")],\n\t\t\t\t["sub:config-manager", t("sub.backup"), t("sub.backup.desc")],\n\t\t\t\t["sub:vision-router", t("sub.vision"), t("sub.vision.desc")],\n\t\t\t\t["sub:archive-manager", t("sub.archive"), t("sub.archive.desc")]\n\t\t\t];\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenHead",\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadTitle",\n\t\t\t\t\t\tchildren: t("general.nav")\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadDesc",\n\t\t\t\t\t\tchildren: t("general.page.desc")\n\t\t\t\t\t})]\n\t\t\t\t}), (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenSubGrid",\n\t\t\t\t\tchildren: entries.map(([id, label, desc]) => (0, react_jsx_runtime.jsx)("button", {\n\t\t\t\t\t\ttype: "button",\n\t\t\t\t\t\tclassName: "sGenSubCard",\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tselect(id);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardTitle",\n\t\t\t\t\t\t\tchildren: label\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardDesc",\n\t\t\t\t\t\t\tchildren: desc\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardGo",\n\t\t\t\t\t\t\tchildren: "›"\n\t\t\t\t\t\t})]\n\t\t\t\t\t}, id))\n\t\t\t\t})]\n\t\t\t});\n\t\t}'
   // [K2d 2026-08-28] 用户需求:导航里四个二级子页行整体去除——通用页入口卡为唯一入口。
   // 行保留在 DOM(childRows 仍注入,active/跳转链路依赖 rows 结构),仅 display:none
   // (与 skin-center/pet 隐藏同款"内容保留可激活"模式)。
@@ -1935,24 +2014,19 @@ function patchSettingsNest() {
   // navCell 同款)+ 14px 标题/12px 描述左列、chevron 右列跨行居中(grid 三区布局,DOM 零改);
   // hover 边框/标题/箭头转 Claude 橙 #d97757 + 箭头右移 3px,全过渡 Claude 曲线 .3s
   // (cubic-bezier(.32,.72,0,1));reduced-motion 全关。
-  const CSSNEST_INJECT = '\t\tconst cssNest = "[data-slot=\\"settings.general.other.item\\"]>:last-child{border-bottom:none!important}button[data-dsh-sub=\\"true\\"]{display:none!important}.sGenHead{display:flex;flex-direction:column;gap:2px;width:100%}.sGenHeadTitle{font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-primary)}.sGenHeadDesc{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}.sGenSubGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:30px 0 6px;width:100%}.sGenSubCard{box-sizing:border-box;display:grid;grid-template-columns:1fr auto;column-gap:12px;align-items:center;width:100%;min-height:64px;text-align:left;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:11px 14px;cursor:pointer;color:var(--dsw-alias-label-primary);font-family:inherit;transition:border-color .3s cubic-bezier(.32,.72,0,1),background-color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover{border-color:#d97757;background:var(--dsw-specific-sidebar-nav-item-hover)}.sGenSubCard:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px}.sGenSubCardTitle{grid-column:1;grid-row:1;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);transition:color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardTitle{color:#d97757}.sGenSubCardDesc{grid-column:1;grid-row:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)}.sGenSubCardGo{grid-column:2;grid-row:1/3;justify-self:end;color:var(--dsw-alias-label-tertiary);font-size:16px;line-height:1;transition:transform .3s cubic-bezier(.32,.72,0,1),color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardGo{transform:translateX(3px);color:#d97757}@media (prefers-reduced-motion:reduce){.sGenSubCard,.sGenSubCardTitle,.sGenSubCardGo{transition:none!important}.sGenSubCard:hover .sGenSubCardGo{transform:none}}";\n\t\tconst tagIdNest = "@deepseek-ai/dsh-client-ui-settings-general/nesting.module.css";\n\t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagIdNest) + "]") === null) {\n\t\t\tconst tag = document.createElement("style");\n\t\t\ttag.dataset.plugin = "@deepseek-ai/dsh-client-ui-settings-general";\n\t\t\ttag.dataset.pluginCss = tagIdNest;\n\t\t\ttag.textContent = cssNest;\n\t\t\tdocument.head.appendChild(tag);\n\t\t}\n'
+  const CSSNEST_INJECT = '\t\tconst cssNest = "button[data-dsh-sub=\\"true\\"]{display:none!important}.sGenHead{display:flex;flex-direction:column;gap:2px;width:100%}.sGenHeadTitle{font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-primary)}.sGenHeadDesc{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}.sGenSubGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:30px 0 6px;width:100%}.sGenSubCard{box-sizing:border-box;display:grid;grid-template-columns:1fr auto;column-gap:12px;align-items:center;width:100%;min-height:64px;text-align:left;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:11px 14px;cursor:pointer;color:var(--dsw-alias-label-primary);font-family:inherit;transition:border-color .3s cubic-bezier(.32,.72,0,1),background-color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover{border-color:#d97757;background:var(--dsw-specific-sidebar-nav-item-hover)}.sGenSubCard:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px}.sGenSubCardTitle{grid-column:1;grid-row:1;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);transition:color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardTitle{color:#d97757}.sGenSubCardDesc{grid-column:1;grid-row:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)}.sGenSubCardGo{grid-column:2;grid-row:1/3;justify-self:end;color:var(--dsw-alias-label-tertiary);font-size:16px;line-height:1;transition:transform .3s cubic-bezier(.32,.72,0,1),color .3s cubic-bezier(.32,.72,0,1)}.sGenSubCard:hover .sGenSubCardGo{transform:translateX(3px);color:#d97757}@media (prefers-reduced-motion:reduce){.sGenSubCard,.sGenSubCardTitle,.sGenSubCardGo{transition:none!important}.sGenSubCard:hover .sGenSubCardGo{transform:none}}";\n\t\tconst tagIdNest = "@deepseek-ai/dsh-client-ui-settings-general/nesting.module.css";\n\t\tif (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagIdNest) + "]") === null) {\n\t\t\tconst tag = document.createElement("style");\n\t\t\ttag.dataset.plugin = "@deepseek-ai/dsh-client-ui-settings-general";\n\t\t\ttag.dataset.pluginCss = tagIdNest;\n\t\t\ttag.textContent = cssNest;\n\t\t\tdocument.head.appendChild(tag);\n\t\t}\n'
   const ROOTVAR_ANCHOR = '\t\tvar SettingsRoot_module_css_default = {'
   const GENREG_OLD = 'label: () => t("general.nav"),\n\t\t\t\tlocale: NS,\n\t\t\t\tchildren: { "settings.general.item": {'
   const GENREG_NEW = 'label: () => t("general.nav"),\n\t\t\t\tlocale: NS,\n\t\t\t\tinject: () => ({ t }),\n\t\t\t\tchildren: { "settings.general.item": {'
   const BASICS_REG_OLD = '\t\t\t}, GeneralSection));'
   const BASICS_REG_NEW = '\t\t\t}, GeneralSection));'
-  // [K10 v9 配套] general section children 声明扩槽:settings.general.other.item(与
-  // settings.general.item 同规格 list/root)。两插件 inject 等待声明后自动落位,声明缺失
-  // 时 renderSlot 拿不到任何条目(K2d skin 槽同教训)。缩进无关正则(rc.x 缩进漂移免疫)。
-  const GENSLOT_RE = /children: \{ "settings\.general\.item": \{\r?\n\t+kind: "list",\r?\n\t+scope: "root"\r?\n\t+\} \}/
-  const GENSLOT_NEW = 'children: { "settings.general.item": {\n\t\t\t\t\tkind: "list",\n\t\t\t\t\tscope: "root"\n\t\t\t\t}, "settings.general.other.item": {\n\t\t\t\t\tkind: "list",\n\t\t\t\t\tscope: "root"\n\t\t\t\t} }'
   // rc.x 缩进漂移(rc.2=内部8tab / rc.5=7tab):整块用缩进无关正则捕获,重打为固定7tab形态
   const ROWS_RE = /rows = ctx\.slots\.entries\("settings\.section"\)\.map\(\(e\) => \(\{\n\t+\/\* v8 ignore next[^\n]*?\*\/\n\t+id: e\.options\.id \?\? "",\n\t+order: e\.options\.order \?\? 0,\n\t+label: \(0, _deepseek_ai_dsh_client_ui_slots\.resolveSlotLabel\)\(e\.options\.label\) \?\? ""\n\t+\}\)\)\.sort\(\(a, b\) => a\.order - b\.order\);/
-  const ROWS_NEW = 'rows = (() => {\n\t\t\t\t\t\t\t// [K2a v4] 二级页面:三个顶层入口从导航隐藏(仅经 general 下子行可达);\n\t\t\t\t\t\t\t// 基础设置子行复用 general 条目(sub:basics + show 标记),无独立账本条目。\n\t\t\t\t\t\t\t// [v9] 其它子行同款复用(sub:other → general + show:"other")。\n\t\t\t\t\t\t\tconst HIDE_TOP = ["agency-agents", "config-manager", "vision-router", "archive-manager"];\n\t\t\t\t\t\t\tconst CHILD_IDS = ["basics", "agency-agents", "config-manager", "vision-router", "archive-manager", "other"];\n\t\t\t\t\t\t\tconst all = ctx.slots.entries("settings.section");\n\t\t\t\t\t\t\tconst flat = all.filter((e) => !HIDE_TOP.includes(e.options.id)).map((e) => ({\n\t\t\t\t\t\t\t\tid: e.options.id ?? "",\n\t\t\t\t\t\t\t\torder: e.options.order ?? 0,\n\t\t\t\t\t\t\t\tlabel: (0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? ""\n\t\t\t\t\t\t\t})).sort((a, b) => a.order - b.order);\n\t\t\t\t\t\t\tconst childRows = CHILD_IDS.map((id) => {\n\t\t\t\t\t\t\t\tif (id === "basics") return { id: "sub:basics", order: 0, label: t("sub.basics"), child: true };\n\t\t\t\t\t\t\t\tif (id === "other") return { id: "sub:other", order: 0, label: t("sub.other"), child: true };\n\t\t\t\t\t\t\t\tconst e = all.find((cand) => cand.options.id === id);\n\t\t\t\t\t\t\t\treturn { id: "sub:" + id, order: 0, label: e ? ((0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? "") : id, child: true };\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tconst top = [];\n\t\t\t\t\t\t\tlet attached = false;\n\t\t\t\t\t\t\tfor (const row of flat) {\n\t\t\t\t\t\t\t\ttop.push(row);\n\t\t\t\t\t\t\t\tif (!attached && row.id === "general") {\n\t\t\t\t\t\t\t\t\tfor (const child of childRows) top.push(child);\n\t\t\t\t\t\t\t\t\tattached = true;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tif (!attached && childRows.length > 0) for (const child of childRows) top.push(child);\n\t\t\t\t\t\t\treturn top;\n\t\t\t\t\t\t})();'
+  const ROWS_NEW = 'rows = (() => {\n\t\t\t\t\t\t\t// [K2a v4] 二级页面:三个顶层入口从导航隐藏(仅经 general 下子行可达);\n\t\t\t\t\t\t\t// 基础设置子行复用 general 条目(sub:basics + show 标记),无独立账本条目。\n\t\t\t\t\t\t\tconst HIDE_TOP = ["agency-agents", "config-manager", "vision-router", "archive-manager"];\n\t\t\t\t\t\t\tconst CHILD_IDS = ["basics", "agency-agents", "config-manager", "vision-router", "archive-manager"];\n\t\t\t\t\t\t\tconst all = ctx.slots.entries("settings.section");\n\t\t\t\t\t\t\tconst flat = all.filter((e) => !HIDE_TOP.includes(e.options.id)).map((e) => ({\n\t\t\t\t\t\t\t\tid: e.options.id ?? "",\n\t\t\t\t\t\t\t\torder: e.options.order ?? 0,\n\t\t\t\t\t\t\t\tlabel: (0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? ""\n\t\t\t\t\t\t\t})).sort((a, b) => a.order - b.order);\n\t\t\t\t\t\t\tconst childRows = CHILD_IDS.map((id) => {\n\t\t\t\t\t\t\t\tif (id === "basics") return { id: "sub:basics", order: 0, label: t("sub.basics"), child: true };\n\t\t\t\t\t\t\t\tconst e = all.find((cand) => cand.options.id === id);\n\t\t\t\t\t\t\t\treturn { id: "sub:" + id, order: 0, label: e ? ((0, _deepseek_ai_dsh_client_ui_slots.resolveSlotLabel)(e.options.label) ?? "") : id, child: true };\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\tconst top = [];\n\t\t\t\t\t\t\tlet attached = false;\n\t\t\t\t\t\t\tfor (const row of flat) {\n\t\t\t\t\t\t\t\ttop.push(row);\n\t\t\t\t\t\t\t\tif (!attached && row.id === "general") {\n\t\t\t\t\t\t\t\t\tfor (const child of childRows) top.push(child);\n\t\t\t\t\t\t\t\t\tattached = true;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tif (!attached && childRows.length > 0) for (const child of childRows) top.push(child);\n\t\t\t\t\t\t\treturn top;\n\t\t\t\t\t\t})();'
   const NAVCELL_OLD = 'className: clsx(SettingsRoot_module_css_default.navCell, row.id === active && SettingsRoot_module_css_default.active),'
   const NAVCELL_NEW = 'className: clsx(SettingsRoot_module_css_default.navCell, row.id === active && SettingsRoot_module_css_default.active),\n\t\t\t\t\t\t\t\t"data-dsh-sub": row.child === true ? "true" : void 0,'
   const SEL_OLD = 'renderSlot("settings.section", { close: onClose }, { only: active })'
-  const SEL_NEW = 'renderSlot("settings.section", { close: onClose, select: onSelect, show: active === "sub:basics" ? "basics" : active === "sub:other" ? "other" : void 0 }, { only: active === "sub:basics" || active === "sub:other" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active })'
+  const SEL_NEW = 'renderSlot("settings.section", { close: onClose, select: onSelect, show: active === "sub:basics" ? "basics" : void 0 }, { only: active === "sub:basics" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active })'
 
   const roots = []
   const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
@@ -1982,7 +2056,7 @@ function patchSettingsNest() {
     const dictLegacy = head.includes(ZH_OLD) && head.includes(GS_OLD)
     const dictAlpha = head.includes(ZH_OLD2) && head.includes(GS_OLD)
     if (!dictLegacy && !dictAlpha) {
-      if (head.includes('sGenSubGrid') && head.includes('sub:basics') && head.includes('sub:archive-manager') && head.includes('sub:other')) {
+      if (head.includes('sGenSubGrid') && head.includes('sub:basics') && head.includes('sub:archive-manager')) {
         results.push({ file: label, ok: true, already: true, version: ver })
         continue
       }
@@ -2014,7 +2088,6 @@ function patchSettingsNest() {
       c = rep(c, GS_OLD, GS_NEW, 1, 'general-section')
       c = rep(c, ROOTVAR_ANCHOR, CSSNEST_INJECT + ROOTVAR_ANCHOR, 1, 'nest-css')
       c = rep(c, GENREG_OLD, GENREG_NEW, 1, 'general-inject-t')
-      c = rex(c, GENSLOT_RE, GENSLOT_NEW, 1, 'gen-other-slot-decl')
       c = rep(c, BASICS_REG_OLD, BASICS_REG_NEW, 1, 'basics-entry')
       c = rex(c, ROWS_RE, ROWS_NEW, 1, 'rows-nest')
       c = rep(c, NAVCELL_OLD, NAVCELL_NEW, 1, 'nav-sub-attr')
@@ -2022,38 +2095,6 @@ function patchSettingsNest() {
       return c
     }
     results.push({ ...rewriteFresh(p, '.bak-nest-skin', apply, failures, PATCH_MARK), version: ver })
-  }
-  return results
-}
-
-// ---- [K10] 提示音/放入文件迁槽 settings.general.other.item(2026-09-06,批次122;K v9 配套) ----
-//       用户需求:「提示音」「放入文件」移出基础设置,通用设置下新增同级「其它」入口承载。
-//       槽运行时 list 槽仅支持 only(单 id)无 except,GS 内按条目过滤不可行 → 直接换槽:
-//       dsh-notify-sound / dsh-file-drop 两插件 lib 的 settings.general.item 注册改写为
-//       settings.general.other.item;槽声明由 K v9 的 gen-other-slot-decl 扩入 general
-//       section children,GS other 形态消费——基础设置页天然不再出现两区块。
-//       注意:两插件目录是 profile junction 回工作区源码,补丁直接落 git 树(已修改属预期,
-//       .bak-gen-other 可还原);插件上游更新走 rewriteFresh 漂移重打。
-const K10_MARK = '/*dsh-local-patch:k10-general-other*/'
-function patchGeneralOtherSlot() {
-  const results = []
-  for (const name of ['dsh-notify-sound', 'dsh-file-drop']) {
-    const p = path.join(PLUGINS, name, 'lib', 'client.js')
-    if (!fs.existsSync(p)) { results.push({ file: name + '/client.js', missing: true }); continue }
-    const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, name, 'package.json'), 'utf8')).version
-    const { rep, failures } = makeCtx(name + '/client.js')
-    const apply = (c) => {
-      c = rep(c,
-        'ctx.slots.inject("settings.general.item", () => ctx.slots.register({',
-        'ctx.slots.inject("settings.general.other.item", () => ctx.slots.register({',
-        1, 'k10-inject-slot')
-      c = rep(c,
-        'name: "settings.general.item",',
-        'name: "settings.general.other.item",',
-        1, 'k10-entry-name')
-      return c
-    }
-    results.push({ ...rewriteFresh(p, '.bak-gen-other', apply, failures, K10_MARK), version: ver })
   }
   return results
 }
@@ -2209,26 +2250,25 @@ function patchPluginSettingsItemId() {
         // 缓存——不稳定快照在 store 密集发射(会话打开/恢复水合)时无限重渲染,
         // Minified React error #185(maximum update depth),同一槽位错误边界再次整摘。
         // ② selectRewindNodes 内容记忆化:元素逐位全等时复用上次数组引用。
-        c = rep(c,
-          'function RewindMessagePortals({ sessionId, openRestoredSession, useSession }) {',
-          'var rewindNodeCache = null;\nfunction selectRewindNodes(snapshot) {\n    const next = snapshot.chat && snapshot.chat.nodes ? Array.from(snapshot.chat.nodes.values()) : (snapshot.nodes ?? []);\n    if (rewindNodeCache && rewindNodeCache.length === next.length && rewindNodeCache.every((value, index) => value === next[index]))\n        return rewindNodeCache;\n    rewindNodeCache = next;\n    return next;\n}\nfunction RewindMessagePortals({ sessionId, openRestoredSession, useSession }) {',
-          1, 'nodes-stable-selector-helper')
-        c = rep(c,
-          'const nodes = useSession(snapshot => snapshot.chat?.nodes.values() ?? snapshot.nodes);',
-          'const nodes = useSession(selectRewindNodes);',
-          1, 'nodes-selector-fallback')
-        c = rep(c,
-          'function collectPortalTargets(nodes) {',
-          'function collectPortalTargets(nodes) {\n    if (nodes == null || typeof nodes[Symbol.iterator] !== "function")\n        return [];',
-          1, 'collect-portal-iterable-guard')
-        // [2026-09-06] settings.plugin.item 卡片(inject 回调)访问 ctx.settingsScope,但
-        // exports.inject 未声明 → cordis 守卫抛 cannot get property "settingsScope"
-        // without inject,槽位错误边界每次渲染整块卸载 settings.section(设置页闪崩/闪现)。
-        // 修法 = 批次 88 vision-router 同款:exports.inject 补声明服务名(lib+src 双侧)。
-        c = rep(c,
-          "exports.inject = ['slots', 'sessions', 'conversation'];",
-          "exports.inject = ['slots', 'sessions', 'conversation', 'settingsScope'];",
-          1, 'settings-scope-inject')
+        // 2026-09-09 退役判定:上游 0.2.2 重构建(市场同版本号重发)已自带等价修复——
+        // RewindMessagePortals 签名增 useChat(DSH 0.1.2 chat 投影迁移)、readSnapshot =
+        // useChat ?? useSession 双通道、nodes 走 useMemo(collectChatNodes) 记忆化、
+        // targets 走 samePortalTargets 内容等值复用。旧形态锚点才打,新形态跳过
+        // (list-slot-id 与形态无关照打)。
+        if (c.includes('const nodes = useSession(snapshot => snapshot.chat?.nodes.values() ?? snapshot.nodes);')) {
+          c = rep(c,
+            'function RewindMessagePortals({ sessionId, openRestoredSession, useSession }) {',
+            'var rewindNodeCache = null;\nfunction selectRewindNodes(snapshot) {\n    const next = snapshot.chat && snapshot.chat.nodes ? Array.from(snapshot.chat.nodes.values()) : (snapshot.nodes ?? []);\n    if (rewindNodeCache && rewindNodeCache.length === next.length && rewindNodeCache.every((value, index) => value === next[index]))\n        return rewindNodeCache;\n    rewindNodeCache = next;\n    return next;\n}\nfunction RewindMessagePortals({ sessionId, openRestoredSession, useSession }) {',
+            1, 'nodes-stable-selector-helper')
+          c = rep(c,
+            'const nodes = useSession(snapshot => snapshot.chat?.nodes.values() ?? snapshot.nodes);',
+            'const nodes = useSession(selectRewindNodes);',
+            1, 'nodes-selector-fallback')
+          c = rep(c,
+            'function collectPortalTargets(nodes) {',
+            'function collectPortalTargets(nodes) {\n    if (nodes == null || typeof nodes[Symbol.iterator] !== "function")\n        return [];',
+            1, 'collect-portal-iterable-guard')
+        }
       }
       return c
     }
@@ -2238,6 +2278,12 @@ function patchPluginSettingsItemId() {
   const srcTsx = path.join(PLUGINS, '@anionex', 'dsh-turn-rewind', 'src', 'client', 'index.tsx')
   if (fs.existsSync(srcTsx)) {
     const verSr = JSON.parse(fs.readFileSync(path.join(PLUGINS, '@anionex', 'dsh-turn-rewind', 'package.json'), 'utf8')).version
+    // 2026-09-09 与 lib 侧同款退役判定:0.2.2 重构建 src 已自带 useChat 双通道修复,
+    // 旧形态锚点不在场即整组跳过(不打标记不写盘,保持源码 pristine)。
+    const srcCur = fs.readFileSync(srcTsx, 'utf8')
+    if (!srcCur.includes('snapshot => snapshot.chat?.nodes.values() ?? snapshot.nodes')) {
+      results.push({ file: 'dsh-turn-rewind/src/client/index.tsx', version: verSr, ok: true, skipped: true })
+    } else {
     const { rep: reps, failures: fsr } = makeCtx('dsh-turn-rewind/src/client/index.tsx')
     const applySrc = (c) => {
       c = reps(c,
@@ -2252,13 +2298,10 @@ function patchPluginSettingsItemId() {
         'function collectPortalTargets(nodes: readonly RewindNodeLike[]): readonly RewindPortalTarget[] {',
         'function collectPortalTargets(nodes: readonly RewindNodeLike[]): readonly RewindPortalTarget[] {\n  if (nodes == null || typeof nodes[Symbol.iterator] !== "function") return []',
         1, 'collect-portal-iterable-guard-src')
-      c = reps(c,
-        "export const inject = ['slots', 'sessions', 'conversation']",
-        "export const inject = ['slots', 'sessions', 'conversation', 'settingsScope']",
-        1, 'settings-scope-inject-src')
       return c
     }
     results.push({ ...rewrite(srcTsx, '.bak-nodes-src', applySrc, fsr), version: verSr })
+    }
   }
   return results
 }
@@ -2681,7 +2724,7 @@ function patchHeroNoWorkspaceInert() {
 //       二段补丁——以当前已打 K8 的文件为基底,独立 .bak-k9-skin + 独立哨兵;上游漂移时
 //       K8 链先漂移重打,K9 锚点失配 FAIL 保盘等手工对位(不做 pristine 恢复,避免回退上游适配)。
 const K9_MARK = '/*dsh-local-patch:k9-skin-subpages*/'
-const K9_CSS = '.dshSkinEntries{display:flex;flex-direction:column;gap:10px;width:100%} .dshSkinEntry{box-sizing:border-box;display:grid;grid-template-columns:1fr auto;column-gap:12px;align-items:center;width:100%;min-height:64px;text-align:left;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:11px 14px;cursor:pointer;color:var(--dsw-alias-label-primary);font-family:inherit;transition:border-color .3s cubic-bezier(.32,.72,0,1),background-color .3s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover{border-color:#d97757;background:var(--dsw-specific-sidebar-nav-item-hover)} .dshSkinEntry:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px} .dshSkinEntryTitle{grid-column:1;grid-row:1;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);transition:color .3s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover .dshSkinEntryTitle{color:#d97757} .dshSkinEntryDesc{grid-column:1;grid-row:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)} .dshSkinEntryGo{grid-column:2;grid-row:1/3;justify-self:end;color:var(--dsw-alias-label-tertiary);font-size:16px;line-height:1;transition:transform .3s cubic-bezier(.32,.72,0,1),color .3s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover .dshSkinEntryGo{transform:translateX(3px);color:#d97757} .dshSkinBack{align-self:flex-start;display:inline-flex;align-items:center;margin:0 0 6px -6px;padding:4px 10px;background:transparent;border:none;border-radius:8px;color:var(--dsw-alias-label-secondary);font-size:13px;font-family:inherit;cursor:pointer;transition:color .3s cubic-bezier(.32,.72,0,1),background-color .3s cubic-bezier(.32,.72,0,1)} .dshSkinBack:hover{color:#d97757;background:var(--dsw-specific-sidebar-nav-item-hover)} @media (prefers-reduced-motion:reduce){.dshSkinEntry,.dshSkinEntryTitle,.dshSkinEntryGo,.dshSkinBack{transition:none!important}.dshSkinEntry:hover .dshSkinEntryGo{transform:none}}'
+const K9_CSS = '.dshSkinEntries{display:flex;flex-direction:column;gap:10px;width:100%;height:100%} .dshSkinEntry{box-sizing:border-box;flex:1 1 0;display:grid;grid-template-columns:1fr auto;column-gap:12px;align-items:center;width:100%;min-height:64px;text-align:left;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:11px 14px;cursor:pointer;color:var(--dsw-alias-label-primary);font-family:inherit;transition:border-color .3s cubic-bezier(.32,.72,0,1),background-color .3s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover{border-color:#d97757;background:var(--dsw-specific-sidebar-nav-item-hover)} .dshSkinEntry:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px} .dshSkinEntryTitle{grid-column:1;grid-row:1;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);transition:color .3s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover .dshSkinEntryTitle{color:#d97757} .dshSkinEntryDesc{grid-column:1;grid-row:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)} .dshSkinEntryGo{grid-column:2;grid-row:1/3;justify-self:end;color:var(--dsw-alias-label-tertiary);font-size:16px;line-height:1;transition:transform .3s cubic-bezier(.32,.72,0,1),color .3s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover .dshSkinEntryGo{transform:translateX(3px);color:#d97757} .dshSkinBack{align-self:flex-start;display:inline-flex;align-items:center;margin:0 0 6px -6px;padding:4px 10px;background:transparent;border:none;border-radius:8px;color:var(--dsw-alias-label-secondary);font-size:13px;font-family:inherit;cursor:pointer;transition:color .3s cubic-bezier(.32,.72,0,1),background-color .3s cubic-bezier(.32,.72,0,1)} .dshSkinBack:hover{color:#d97757;background:var(--dsw-specific-sidebar-nav-item-hover)} @media (prefers-reduced-motion:reduce){.dshSkinEntry,.dshSkinEntryTitle,.dshSkinEntryGo,.dshSkinBack{transition:none!important}.dshSkinEntry:hover .dshSkinEntryGo{transform:none}}'
 function patchSkinSubpages() {
   const results = []
   // K9-1..5 dshvt 皮肤页(独立二段补丁,哨兵 K9_MARK,基底 = 当前 K8 态)
@@ -2743,21 +2786,20 @@ function patchSkinSubpages() {
       // 导航行:skin 行下挂两个隐藏子行(data-dsh-sub 已有 CSS 隐藏;入口卡 select 可达)
       c = rep(c,
         'let attached = false;',
-        'let attached = false;\n\t\t\t\t\t\t\tconst SKIN_SUBS = [["skin-assets", "自定义资产"], ["skin-suit", "换装"]];\n\t\t\t\t\t\t\tconst skinRows = SKIN_SUBS.map((s) => ({ id: "sub:skin-" + s[0], order: 0, label: s[1], child: true }));\n\t\t\t\t\t\t\tlet skinAttached = false;',
+        'let attached = false;\n\t\t\t\t\t\t\tconst SKIN_SUBS = [["assets", "自定义资产"], ["suit", "换装"]];\n\t\t\t\t\t\t\tconst skinRows = SKIN_SUBS.map((s) => ({ id: "sub:skin-" + s[0], order: 0, label: s[1], child: true }));\n\t\t\t\t\t\t\tlet skinAttached = false;',
         1, 'k9-rows-skinchildren')
       c = rep(c,
         'if (!attached && row.id === "general") {\n\t\t\t\t\t\t\t\t\tfor (const child of childRows) top.push(child);\n\t\t\t\t\t\t\t\t\tattached = true;\n\t\t\t\t\t\t\t\t}',
         'if (!attached && row.id === "general") {\n\t\t\t\t\t\t\t\t\tfor (const child of childRows) top.push(child);\n\t\t\t\t\t\t\t\t\tattached = true;\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\tif (!skinAttached && row.id === "skin") {\n\t\t\t\t\t\t\t\t\tfor (const child of skinRows) top.push(child);\n\t\t\t\t\t\t\t\t\tskinAttached = true;\n\t\t\t\t\t\t\t\t}',
         1, 'k9-rows-skinattach')
       // SEL 路由:sub:skin-* → only "skin" + show 透传(子页在 SkinTab 内分流)
-      // [v9] K v9 起 SEL 文本已含 sub:other 分支,本锚点随之更新(锚的是 K v9 产物)。
       c = rep(c,
-        'show: active === "sub:basics" ? "basics" : active === "sub:other" ? "other" : void 0',
-        'show: active === "sub:basics" ? "basics" : active === "sub:other" ? "other" : active === "sub:skin-assets" ? "skin-assets" : active === "sub:skin-suit" ? "skin-suit" : void 0',
+        'show: active === "sub:basics" ? "basics" : void 0',
+        'show: active === "sub:basics" ? "basics" : active === "sub:skin-assets" ? "skin-assets" : active === "sub:skin-suit" ? "skin-suit" : void 0',
         1, 'k9-sel-show')
       c = rep(c,
-        '{ only: active === "sub:basics" || active === "sub:other" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active }',
-        '{ only: active === "sub:basics" || active === "sub:other" ? "general" : active.indexOf("sub:skin-") === 0 ? "skin" : active.indexOf("sub:") === 0 ? active.slice(4) : active }',
+        '{ only: active === "sub:basics" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active }',
+        '{ only: active === "sub:basics" ? "general" : active.indexOf("sub:skin-") === 0 ? "skin" : active.indexOf("sub:") === 0 ? active.slice(4) : active }',
         1, 'k9-sel-only')
       return c
     }
@@ -2766,194 +2808,103 @@ function patchSkinSubpages() {
   return results
 }
 
-// ---- [R81] unarchive RPC alpha.5 typert 运行时适配(2026-09-06,归档会话管理配套) ----
-//       上游 fork 已补全链路(workspace 注册表/apiproxy/client-runtime,提交 bbf8960056/
-//       077813903c/3fc1c34700),注册表本体经 profile junction 已指向仓库构建。但 official
-//       轨(0.1.2-alpha.5)的工作区 RPC 走生成式 typert 面,按 /plugins 与 host 模块解析
-//       按文件加载,与 rc.5 的 apiproxy 管道不同:需对三个文件做镜像插入,页面
-//       ctx.workspaces.unarchiveSession 才能端到端可用 ——
-//         a) dsh-api-remotes/lib/client.js: 生成清单 + schema(workspace/unarchiveSession);
-//         b) dsh-api-workspace-controller/lib/client.js: Model + Controller 透传;
-//         c) dsh-api-workspace-controller/lib/index.js: host 面 commands + TypertRemoteService
-//            装饰器注册(Remote("unarchiveSession") + __esDecorate + facade)。
-//       语义与上游一致:幂等、幽灵 id 可清、记账槽不动。锚点失配安全跳过(rc.x 栈无此形态);
-//       独立 .bak-u5 + 哨兵,漂移走恢复重打。宿主侧(c)在壳重启后生效,客户端侧(a/b)随
-//       /plugins rev 刷新。
-const U5_MARK = '/*dsh-local-patch:unarchive-rpc-alpha5*/'
-function patchUnarchiveRpcAlpha5() {
+// ---- [K10] 皮肤二级页打磨(2026-09-06,用户需求):① 壳端返回胶囊(installSectionBackButtons)
+//       感知父分区——由激活子行的最近非子级前驱行取 data-section-id 与文案,皮肤子页显示
+//       「‹ 返回皮肤」并跳皮肤分区,K2f 通用子页维持「返回通用设置」不变;② 子页页头去重——
+//       移除 K9 本地返回链接(胶囊承担),换装子页不再重复渲染标题(joi 槽自带);③ 主页四卡
+//       统一视觉语言——右栏入口卡 hover 抬升+圆形箭头 chip+按压反馈,左栏效果卡(dshEffCard)
+//       同边框/圆角/内距语言,vt_page 改 stretch 让双栏等高,右栏补「个性化」分组标题与
+//       左栏「当前效果」对齐。
+const K10_MARK = '/*dsh-local-patch:k10-skin-subpages*/'
+const K10_CSS = '.dshSkinEntries{display:flex;flex-direction:column;gap:10px;width:100%;flex:1 1 auto;min-height:0} .dshSkinEntry{box-sizing:border-box;flex:1 1 0;display:grid;grid-template-columns:1fr auto;column-gap:12px;align-items:center;width:100%;min-height:64px;text-align:left;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:12px 16px;cursor:pointer;color:var(--dsw-alias-label-primary);font-family:inherit;transition:border-color .25s cubic-bezier(.32,.72,0,1),background-color .25s cubic-bezier(.32,.72,0,1),box-shadow .25s cubic-bezier(.32,.72,0,1),transform .25s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover{border-color:rgba(217,119,87,.55);background:var(--dsw-specific-sidebar-nav-item-hover);box-shadow:0 6px 18px rgba(0,0,0,.07);transform:translateY(-1px)} .dshSkinEntry:active{transform:translateY(0);box-shadow:0 2px 6px rgba(0,0,0,.05);transition-duration:.12s} .dshSkinEntry:focus-visible{outline:2px solid rgba(217,119,87,.5);outline-offset:2px} .dshSkinEntryTitle{grid-column:1;grid-row:1;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);transition:color .25s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover .dshSkinEntryTitle{color:#d97757} .dshSkinEntryDesc{grid-column:1;grid-row:2;margin-top:2px;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)} .dshSkinEntryGo{grid-column:2;grid-row:1/3;justify-self:end;align-self:center;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1;transition:background-color .25s cubic-bezier(.32,.72,0,1),border-color .25s cubic-bezier(.32,.72,0,1),color .25s cubic-bezier(.32,.72,0,1),transform .25s cubic-bezier(.32,.72,0,1)} .dshSkinEntry:hover .dshSkinEntryGo{background:#d97757;border-color:#d97757;color:#fff;transform:translateX(3px)} .dshSkinEntry:active .dshSkinEntryGo{transform:translateX(1px)} .dshEffCard{box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:12px 16px;min-height:72px;transition:border-color .25s cubic-bezier(.32,.72,0,1),box-shadow .25s cubic-bezier(.32,.72,0,1)} .dshEffCard:hover{border-color:rgba(217,119,87,.4);box-shadow:0 4px 14px rgba(0,0,0,.05)} .vt_page{align-items:stretch} @media (prefers-reduced-motion:reduce){.dshSkinEntry,.dshSkinEntryTitle,.dshSkinEntryGo,.dshEffCard{transition:none!important}.dshSkinEntry:hover{transform:none}.dshSkinEntry:hover .dshSkinEntryGo{transform:none}}'
+function patchSkinSubpagesK10() {
   const results = []
-  const roots = []
-  const profileNm = path.join(os.homedir(), '.dsh', 'profiles', 'node_modules')
-  roots.push(profileNm)
-  const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
-  if (fs.existsSync(npxCache)) {
-    for (const h of fs.readdirSync(npxCache)) {
-      roots.push(path.join(npxCache, h, 'node_modules'))
-      roots.push(path.join(npxCache, h, 'node_modules', '.pnpm', 'node_modules'))
-    }
+  const p = path.join(PLUGINS, 'dsh-desktop-version-tab', 'lib', 'client.js')
+  if (!fs.existsSync(p)) {
+    results.push({ file: 'dshvt/client.js@k10', missing: true })
+    return results
   }
-  const FILES = ['dsh-api-remotes/lib/client.js', 'dsh-api-workspace-controller/lib/client.js', 'dsh-api-workspace-controller/lib/index.js']
-  // trim 匹配的行级拼接:第 occ 次出现的 startTrim 行起 blockLen 行之后插入 insertLines。
-  function spliceAfter(lines, startTrim, occ, blockLen, insertLines) {
-    let seen = 0
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].trim() !== startTrim) continue
-      if (++seen < occ) continue
-      return lines.slice(0, i + blockLen).concat(insertLines, lines.slice(i + blockLen))
-    }
-    return null
+  const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-desktop-version-tab', 'package.json'), 'utf8')).version
+  const { rep, failures } = makeCtx('dshvt/client.js@k10')
+  const apply = (c) => {
+    // K10-1 返回胶囊感知父分区(通用子页行为不变,皮肤子页 → 「‹ 返回皮肤」)
+    c = rep(c,
+      'var target = "";\n\t\t\tif (subActive && document.querySelector(\'button[data-section-id="general"]\')) target = "general";\n\t\t\tif (!target) { if (bar) bar.remove(); return; }\n\t\t\tvar label = "返回通用设置";',
+      'var target = "", label = "";\n\t\t\tif (subActive) {\n\t\t\t\tvar dshParent = subActive.previousElementSibling;\n\t\t\t\twhile (dshParent && dshParent.getAttribute && dshParent.getAttribute("data-dsh-sub") === "true") dshParent = dshParent.previousElementSibling;\n\t\t\t\tif (dshParent && dshParent.getAttribute && dshParent.getAttribute("data-section-id")) {\n\t\t\t\t\ttarget = dshParent.getAttribute("data-section-id");\n\t\t\t\t\tlabel = "返回" + (dshParent.textContent || "").trim();\n\t\t\t\t}\n\t\t\t}\n\t\t\tif (!target) { if (bar) bar.remove(); return; }',
+      1, 'k10-backpill-parent')
+    // K10-2 子页页头去重:本地返回链接移除(胶囊承担);换装子页不再重复标题(joi 槽自带)
+    c = rep(c,
+      '\t\t// [K9] 二级页面:自定义资产 / 换装(show 由设置壳 sub:skin-* 路由透传;返回走\n\t\t// 「‹ 返回皮肤」或左侧导航「皮肤」行)。\n\t\tif (dshShow === "skin-assets" || dshShow === "skin-suit") {\n\t\t\tvar dshBack = function () { if (dshSelect) dshSelect("skin"); };\n\t\t\tvar dshSubHead = h("div", { className: "vt_head" },\n\t\t\t\th("button", { type: "button", className: "dshSkinBack", onClick: dshBack }, "‹ 返回皮肤"),\n\t\t\t\th("h2", { className: "vt_h2" }, dshShow === "skin-assets" ? "自定义资产" : "换装"),\n\t\t\t\th("p", { className: "vt_intro" }, dshShow === "skin-assets"\n\t\t\t\t\t? "导入 jpg/png/gif 或 mp4/webm 等作为界面背景;点击资产行可设为背景或删除。"\n\t\t\t\t\t: "选一套衣装,房间会跟着换;也可以回到 DeepSeek 原生外观。"));',
+      '\t\t// [K10 2026-09-06] 子页页头:返回由壳端返回胶囊承担(installSectionBackButtons,\n\t\t// 皮肤子页显示「‹ 返回皮肤」);换装子页不再重复渲染标题(joi 槽自带标题与说明)。\n\t\tif (dshShow === "skin-assets" || dshShow === "skin-suit") {\n\t\t\tvar dshSubHead = dshShow === "skin-assets" ? h("div", { className: "vt_head" },\n\t\t\t\th("h2", { className: "vt_h2" }, "自定义资产"),\n\t\t\t\th("p", { className: "vt_intro" }, "导入 jpg/png/gif 或 mp4/webm 等作为界面背景;点击资产行可设为背景或删除。")) : null;',
+      1, 'k10-subhead-dedupe')
+    // K10-3 主页右栏补分组标题(与左栏「当前效果」列对齐)
+    c = rep(c,
+      'h("div", { className: "vt_group" }, dshEntries),',
+      'h("div", { className: "vt_group" }, h("div", { className: "vt_groupTitle" }, "个性化"), dshEntries),',
+      1, 'k10-entries-title')
+    // K10-4 效果卡标记(dshEffCard:与入口卡统一边框/圆角/内距/hover 语言)
+    c = rep(c,
+      'var bgRow = h("div", { className: "cm_row" },',
+      'var bgRow = h("div", { className: "cm_row dshEffCard" },',
+      1, 'k10-bgrow-class')
+    c = rep(c,
+      'var glassRow = h("div", { className: "cm_row" + (glassDisabled ? " cm_rowOff" : "") },',
+      'var glassRow = h("div", { className: "cm_row dshEffCard" + (glassDisabled ? " cm_rowOff" : "") },',
+      1, 'k10-glassrow-class')
+    // K10-5 样式整体升级(原位替换 K9 注入的样式字面量;.dshSkinBack 随链接移除)
+    c = rep(c, JSON.stringify(K9_CSS), JSON.stringify(K10_CSS), 1, 'k10-css-swap')
+    return c
   }
-  // 在 startTrim 命中行的前一行(opener,须为 "{")之前插入 insertLines。
-  function spliceBeforeOpener(lines, startTrim, insertLines) {
-    for (let i = 1; i < lines.length; i++) {
-      if (lines[i].trim() !== startTrim) continue
-      if (lines[i - 1].trim() !== '{') return null
-      return lines.slice(0, i - 1).concat(insertLines, lines.slice(i - 1))
-    }
-    return null
-  }
-  for (const root of roots) {
-    for (const rel of FILES) {
-      const p = path.join(root, '@deepseek-ai', ...rel.split('/'))
-      if (!fs.existsSync(p)) continue
-      const label = 'u5/' + rel + '@' + root.split(path.sep).slice(-2).join('/')
-      const head = fs.readFileSync(p, 'utf8')
-      if (head.includes(U5_MARK)) { results.push({ file: label, ok: true, already: true, version: 'alpha5' }); continue }
-      // alpha.5 typert 面的各文件特征串;rc.x 旧架构无此形态 → 安全跳过不判失败。
-      const GATE = {
-        'dsh-api-remotes/lib/client.js': '#workspace/archiveSession',
-        'dsh-api-workspace-controller/lib/client.js': 'this.remote.archiveSession',
-        'dsh-api-workspace-controller/lib/index.js': 'workspaceRegistry.archiveSession',
-      }[rel]
-      if (!head.includes(GATE)) { results.push({ file: label, ok: true, skipped: true, version: '?' }); continue }
-      const eol = head.includes('\r\n') ? '\r\n' : '\n'
-      const lines = head.split(/\r?\n/)
-      let out = null
-      try {
-        if (rel === 'dsh-api-remotes/lib/client.js') {
-          out = spliceAfter(lines, 'const _deepseek_ai_dsh_api_workspace_controller_workspace_archiveSession_result$schema = object({ "archivedSessionIds": array(intersection(string(), unknown())).readonly() });', 1, 1, [
-            '\t\tconst _deepseek_ai_dsh_api_workspace_controller_workspace_unarchiveSession_parameter_0$schema = object({ "sessionId": intersection(string(), unknown()).readonly() });',
-            '\t\tconst _deepseek_ai_dsh_api_workspace_controller_workspace_unarchiveSession_result$schema = object({ "archivedSessionIds": array(intersection(string(), unknown())).readonly() });',
-          ])
-          if (!out) throw new Error('schema anchor miss')
-          const entry = [
-            '\t\t\t\t{',
-            '\t\t\t\t\tid: "@deepseek-ai/dsh-api-workspace-controller#workspace/unarchiveSession",',
-            '\t\t\t\t\tservice: "workspaceController",',
-            '\t\t\t\t\tnamespace: "workspace",',
-            '\t\t\t\t\tmethod: "unarchiveSession",',
-            '\t\t\t\t\tinvocation: { kind: "direct" },',
-            '\t\t\t\t\tparameters: [{',
-            '\t\t\t\t\t\tname: "request",',
-            '\t\t\t\t\t\twire: "request",',
-            '\t\t\t\t\t\tsource: "json",',
-            '\t\t\t\t\t\tcodec: {',
-            '\t\t\t\t\t\t\tmode: "strict",',
-            '\t\t\t\t\t\t\ttypeSymbol: "@deepseek-ai/dsh-api-workspace-controller/types#WorkspaceUnarchiveSessionRequest",',
-            '\t\t\t\t\t\t\tschema: _deepseek_ai_dsh_api_workspace_controller_workspace_unarchiveSession_parameter_0$schema',
-            '\t\t\t\t\t\t}',
-            '\t\t\t\t\t}],',
-            '\t\t\t\t\tresult: {',
-            '\t\t\t\t\t\tmode: "strict",',
-            '\t\t\t\t\t\ttypeSymbol: "@deepseek-ai/dsh-api-workspace-controller/types#WorkspaceUnarchiveValue",',
-            '\t\t\t\t\t\tschema: _deepseek_ai_dsh_api_workspace_controller_workspace_unarchiveSession_result$schema',
-            '\t\t\t\t\t},',
-            '\t\t\t\t\tsourceLocation: {',
-            '\t\t\t\t\t\t"file": "packages/api/workspace-controller/src/index.ts",',
-            '\t\t\t\t\t\t"line": 108,',
-            '\t\t\t\t\t\t"column": 3',
-            '\t\t\t\t\t}',
-            '\t\t\t\t},',
-          ]
-          out = spliceBeforeOpener(out, 'id: "@deepseek-ai/dsh-api-workspace-controller#workspace/create",', entry)
-          if (!out) throw new Error('manifest anchor miss')
-        } else if (rel === 'dsh-api-workspace-controller/lib/client.js') {
-          out = spliceAfter(lines, 'async archiveSession(sessionId) {', 1, 5, [
-            '\t\t\t/**',
-            '\t\t\t* Unarchive one Session and install the returned complete archive set.',
-            '\t\t\t* @param sessionId - Session to unarchive.',
-            '\t\t\t* @returns generated Remote result.',
-            '\t\t\t*/',
-            '\t\t\tasync unarchiveSession(sessionId) {',
-            '\t\t\t\tconst result = await this.remote.unarchiveSession({ sessionId });',
-            '\t\t\t\tif (result.ok) this.installArchived(result.value.archivedSessionIds);',
-            '\t\t\t\treturn result;',
-            '\t\t\t}',
-          ])
-          if (!out) throw new Error('model anchor miss')
-          out = spliceAfter(out, 'async archiveSession(sessionId) {', 2, 4, [
-            '\t\t\tasync unarchiveSession(sessionId) {',
-            '\t\t\t\tconst result = await this.model.unarchiveSession(sessionId);',
-            '\t\t\t\tif (!result.ok) throw commandError("session unarchive", result.error);',
-            '\t\t\t}',
-          ])
-          if (!out) throw new Error('controller anchor miss')
-        } else {
-          out = spliceAfter(lines, 'async archiveSession(request) {', 1, 9, [
-            '\t/**',
-            '\t* Remove one known Session from the registry-global archive set.',
-            '\t* @param request - Session identity to unarchive.',
-            '\t* @returns the complete resulting archive set.',
-            '\t*/',
-            '\tasync unarchiveSession(request) {',
-            '\t\ttry {',
-            '\t\t\tawait this.ctx.workspaceRegistry.unarchiveSession(request.sessionId);',
-            '\t\t} catch (error) {',
-            '\t\t\tif (!(error instanceof WorkspaceUnknownSessionError)) throw error;',
-            '\t\t\tthrow new RemoteError("session/not-found", error.message, { sessionId: request.sessionId }, { cause: error });',
-            '\t\t}',
-            '\t\treturn { archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds] };',
-            '\t}',
-          ])
-          if (!out) throw new Error('commands anchor miss')
-          out = spliceAfter(out, 'let _archiveSession_decorators;', 1, 1, ['\tlet _unarchiveSession_decorators;'])
-          if (!out) throw new Error('decorator decl anchor miss')
-          out = spliceAfter(out, '_archiveSession_decorators = [Remote("archiveSession")];', 1, 1, ['\t\t\t_unarchiveSession_decorators = [Remote("unarchiveSession")];'])
-          if (!out) throw new Error('decorator assign anchor miss')
-          out = spliceAfter(out, '__esDecorate(this, null, _archiveSession_decorators, {', 1, 11, [
-            '\t\t\t__esDecorate(this, null, _unarchiveSession_decorators, {',
-            '\t\t\t\tkind: "method",',
-            '\t\t\t\tname: "unarchiveSession",',
-            '\t\t\t\tstatic: false,',
-            '\t\t\t\tprivate: false,',
-            '\t\t\t\taccess: {',
-            '\t\t\t\t\thas: (obj) => "unarchiveSession" in obj,',
-            '\t\t\t\t\tget: (obj) => obj.unarchiveSession',
-            '\t\t\t\t},',
-            '\t\t\t\tmetadata: _metadata',
-            '\t\t\t}, null, _instanceExtraInitializers);',
-          ])
-          if (!out) throw new Error('esDecorate anchor miss')
-          out = spliceAfter(out, 'archiveSession(request) {', 1, 3, [
-            '\t\t/**',
-            '\t\t* Restore one archived Session to Workspace grouping surfaces.',
-            '\t\t* @param request - Session identity to unarchive.',
-            '\t\t* @returns the complete resulting archive set.',
-            '\t\t*/',
-            '\t\tunarchiveSession(request) {',
-            '\t\t\treturn this.commands.unarchiveSession(request);',
-            '\t\t}',
-          ])
-          if (!out) throw new Error('facade anchor miss')
-        }
-      } catch (e) {
-        results.push({ file: label, ok: false, failures: [label + ': ' + e.message] })
-        continue
-      }
-      const bak = p + '.bak-u5'
-      if (!fs.existsSync(bak)) fs.copyFileSync(p, bak)
-      fs.writeFileSync(p, out.join(eol) + eol + U5_MARK + eol, 'utf8')
-      results.push({ file: label, ok: true, version: 'alpha5' })
-    }
-  }
-  if (!results.length) results.push({ file: 'u5/typert-surface', missing: true })
+  // 哨兵快速通道要求独立哨兵:live 文件已带 K9_MARK,改用 K10_MARK + .bak-k10-skin 二段基底
+  results.push({ ...rewriteFresh(p, '.bak-k10-skin', apply, failures, K10_MARK), version: ver })
   return results
 }
 
 // ---- 入口 ----
+const K11_MARK = '/*dsh-local-patch:k11-skin-subpage-ids*/'
+function patchSkinSubpagesK11() {
+  const results = []
+  const genRoots = []
+  const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxCache)) {
+    for (const h of fs.readdirSync(npxCache)) {
+      genRoots.push(path.join(npxCache, h, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+    }
+  }
+  genRoots.push(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+  for (const p of genRoots) {
+    if (!fs.existsSync(p)) continue
+    const ver = (() => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch { return '?' } })()
+    const label = 'general-k11/' + path.dirname(path.dirname(p)).split(path.sep).slice(-2).join('/') + '/client.js'
+    const { rep, failures } = makeCtx(label)
+    const apply = (c) => {
+      // K11 SKIN_SUBS 值去前缀(批次111 K9 双前缀回归的落盘补遗):线上七副本仍持
+      // 14:36 初打的旧值 ["skin-assets",...],与 id 拼成 sub:skin-skin-* 双前缀 →
+      // SEL show 恒 void 0、入口卡/子行点击停在皮肤主页。修法=与批次111相同的
+      // 值替换;独立哨兵 K11_MARK 防与 K9 重放相互踩踏。
+      // 2026-09-09 容错:K9/nest 家族与 K11 做同款值替换(rc.1 seed junction 副本实证
+      // 被 K9 先行改值,K11 每次重放空 FAIL)。旧值不在场=新值在场(K9 已达标/上游
+      // 自带修复)→ 无事可做返回原样;新旧值皆无=陌生形态,FAIL 保留原样。
+      const OLD = '[["skin-assets", "自定义资产"], ["skin-suit", "换装"]]'
+      if (!c.includes(OLD)) {
+        if (!c.includes('[["assets", "自定义资产"], ["suit", "换装"]]')) {
+          failures.push('k11-skinsubs: 旧值新值均不在场(上游新版?),保留原样')
+        }
+        return c
+      }
+      c = rep(c,
+        OLD,
+        '[["assets", "自定义资产"], ["suit", "换装"]]',
+        1, 'k11-skinsubs-deprefix')
+      return c
+    }
+    results.push({ ...rewriteFresh(p, '.bak-k11-gen', apply, failures, K11_MARK), version: ver })
+  }
+  return results
+}
 function replayAll(log = () => {}) {
   const out = { ok: true, items: [] }
-  for (const r of [...patchBetterSidebar(), ...patchNodeNav(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchGeneralOtherSlot(), ...patchSkinSubpages(), ...patchUnarchiveRpcAlpha5(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchMnemonProjection(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchConversationPlusQuickActions()]) {
+  for (const r of [...patchBetterSidebar(), ...patchNodeNav(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchVisionRouterPortal(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchSkinSubpages(), ...patchSkinSubpagesK10(), ...patchSkinSubpagesK11(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchMnemonProjection(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchConversationPlusQuickActions()]) {
     if (r.missing) { log(`[patches] ${r.file}: 未安装,跳过`); continue }
     out.items.push(r)
     if (r.ok) log(`[patches] ${r.file}@${r.version}: ${r.skipped ? '锚点不适配,安全跳过' : r.already ? '已是补丁态' : '已恢复本地定制'}`)
