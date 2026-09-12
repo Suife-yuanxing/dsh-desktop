@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-v0.3*/
+# 版本化重打包输出目录（dist-0.5.16 / dist-0.5.16-r102 等，v0.5.0 起 directories.output 覆盖产出）
+dist-[0-9]*/
 dev-shots/
 *.log
 

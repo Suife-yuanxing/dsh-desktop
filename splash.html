@@ -16,13 +16,17 @@
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; }
+  /* [T12 启动页拖动] 无边框窗此前完全不可移动。body 设 drag(app-region 可继承),
+     整窗任意空白处(含底图注/右上版本号)按住即可拖动;鲸鱼画布与字标显式 no-drag——
+     drag 区不向页面派发鼠标事件,不排除会废掉 T10 粒子力场/点击爆发与 T11 字标流光。 */
   body {
     background: var(--ink);
     font-family: Bahnschrift, "Segoe UI", "Microsoft YaHei", sans-serif;
     -webkit-font-smoothing: antialiased;
-    -webkit-app-region: no-drag;
+    -webkit-app-region: drag;
     color: var(--fg);
   }
+  #whaleParticles, #wordmark { -webkit-app-region: no-drag; }
 
   /* z-0 流动渐变层(对应官网 #gradient-canvas:就绪后 1.5s 淡入) */
   #gradient { position: fixed; inset: 0; display: block; opacity: 0; }

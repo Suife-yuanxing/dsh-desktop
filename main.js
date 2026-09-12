@@ -6,12 +6,25 @@
 //        服务就绪即揭窗,而页面还要走 401 信任页→白底加载页→应用挂载→主题落位(实测 10s+),
 //        用户直面长白屏。改为 #root 挂载+主题在位才揭窗,主题迟到宽限 4s,硬兜底 20s;
 //        等待期关渲染节流;splash 增「正在加载界面…」阶段,'ready' 移至揭窗节拍触发
+// v0.5.18 [q197 2026-09-12 启动提速] ①信任 URL 捕获重载改条件触发:printUrl 行要等 dsh
+//        插件树加载完才打印(实测晚于端口就绪 6-10s),而信任签名密钥持久、cookie 按
+//        authority 长期有效——裸 URL 首载通常已认证并在挂载,原无条件整页重载把在途挂载
+//        作废(实测揭窗 13-16.6s,重载占 ~8s)。改探针甄别:仅 401 文本页才重载种 cookie。
+//        ②spawn 路径补丁重放去重:boot 与 startDsh 原各全量重放一次,startDsh 增 skipReplay。
+//        ③启动分段计时日志(whenReady/重放耗时)。
+// v0.5.18 [启动页拖动] splash 全窗 -webkit-app-region: drag(无边框窗此前不可移动),
+//        鲸鱼画布/字标 no-drag 保住 T10/T11 粒子与流光交互。
+// v0.5.17 [插件兼容预检] dsh 更新前评估已启用插件的 peerDependencies/engines.dsh 声明与新版将
+//        携带的 @deepseek-ai/dsh* 子包版本(引擎 dsh-plugin-compat.cjs;npx 缓存树(三层并集,
+//        兼容 npm 扁平与 pnpm 虚拟仓库)/packument 双源),范围无交集列清单交用户确认后才放行
+//        (Web UI 内联确认块 + 壳设置窗二次对话框);检查失败/声明缺失一律放行,绝不挡更新
 // v0.5.0 联合工作区里程碑:dsh 运行时双轨切换(official npx/缓存路径 ↔ local 本地构建 bin.js)
 // v0.5.1 双轨切换进设置(壳设置窗口 Ctrl+, + Web UI 更新区;切换失败自动回滚)+ 联合工作区灰度开关(仅本地轨可写)
 // v0.5.2 便携版 local 轨修复:默认探测补 PORTABLE_EXECUTABLE_DIR 锚点(0.5.1 打包态探测恒 null
 //        ⇒ local 恒回退官方、联邦开关置灰)+ DSH_LOCAL_DIR 环境变量覆盖
 // dsh 运行时经 npx 调用(PATH→注册表),版本锁与 dshRuntime 存于 ~/.dsh/desktop-config.json,插件化零破坏。
 const { app, BrowserWindow, Tray, Menu, dialog, Notification, shell, ipcMain, net: electronNet, session } = require('electron')
+const SHELL_T0 = Date.now() // [q197] 启动分段计时锚点:模块加载→whenReady→spawn→就绪→揭窗
 const { spawn, spawnSync } = require('node:child_process')
 const net = require('node:net')
 const http = require('node:http')
@@ -46,12 +59,31 @@ function loadFreshReplayer() {
 // [问题99] 补丁守护:周期性幂等重放,覆盖「壳运行期间外部覆盖产物」的窗口
 // (市场安装/更新/卸载、CLI pnpm 对账、手工操作)。哨兵快速通道保证已补丁态零写盘;
 // 日志只在 ok 状态翻转与 FAIL 明细时输出,避免刷屏。unref 不阻碍进程退出。
+// [P1/E1 2026-09-10] mtime 预检:每轮先比对指示文件(patches.cjs + profile 包账本/
+// 锁文件/守护行)的 mtime+size 快照,全部未变 → 跳过本轮重放——省 ~200 个目标文件
+// 的 readFileSync(含数 MB 级 bundle 副本)与 282KB 重放器重解析。市场装卸/pnpm
+// 对账/补丁链更新都会先触碰指示文件,检测能力不受损;每 10 轮(~7.5 分钟)强制
+// 全量重放兜底,覆盖「同版本重装/手工改 lib 产物」等不触碰指示文件的罕见路径;
+// 重放失败不更新快照,下一轮立即全量重试。stat 失败(X)视同变化走全量。
 function startPatchGuardian(intervalMs = 45_000) {
   let lastOk = null
+  let lastSig = null
+  let tickCount = 0
+  const indicator = (p) => { try { const s = fs.statSync(p); return `${s.mtimeMs}:${s.size}` } catch { return 'X' } }
+  const guardianSignature = () => [
+    indicator(path.join(os.homedir(), '.dsh', 'patches.cjs')),
+    indicator(path.join(DSH_HOME, 'profiles', 'web', 'package.json')),
+    indicator(path.join(DSH_HOME, 'profiles', 'web', 'pnpm-lock.yaml')),
+    indicator(path.join(DSH_HOME, 'profiles', 'web', 'cordis.patch.yml')),
+  ].join('|')
   const timer = setInterval(() => {
     try {
+      tickCount += 1
+      const sig = guardianSignature()
+      if (lastOk === true && lastSig === sig && tickCount % 10 !== 0) return
       // [q194 2026-09-04] 守护每次重读最新重放器(否则 require 缓存旧链会把新补丁覆盖回去)
       const r = loadFreshReplayer()(() => {})
+      if (r.ok) lastSig = sig
       if (r.ok !== lastOk) {
         log(`[patch-guardian] 状态翻转 ok=${r.ok}(外部覆盖后自动重放恢复或存在失配)`)
         lastOk = r.ok
@@ -156,6 +188,31 @@ function log(msg) {
     fs.mkdirSync(LOG_DIR, { recursive: true })
     fs.appendFileSync(LOG_FILE, line + '\n')
   } catch { /* 日志失败不阻塞主流程 */ }
+}
+
+// [P3/T4-1 2026-09-12] [dsh] 子进程 stdout/stderr 日志合批:async 追加保序。
+// 原 log() 每次调用 appendFileSync 同步落盘;会话进行时核心服务若频繁打印,
+// 主进程同步 IO 尖峰会拖慢全部窗口的输入响应(主进程负责 OS 级与输入分发,
+// P3 方案 §三.R1/§四.A5)。合批 500ms 单次异步追加,行内容与行序不变;
+// 关键行(启动 URL 捕获等)仍走同步 log() 立即落盘,两类行之间时序可能交错(可接受)。
+let dshLogBuf = []
+let dshLogTimer = null
+let dshLogDirReady = false
+let dshLogChain = Promise.resolve()
+function dshLog(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}`
+  console.log(line)
+  dshLogBuf.push(line)
+  if (dshLogTimer) return
+  dshLogTimer = setTimeout(() => {
+    dshLogTimer = null
+    const text = dshLogBuf.join('\n') + '\n'
+    dshLogBuf = []
+    try {
+      if (!dshLogDirReady) { fs.mkdirSync(LOG_DIR, { recursive: true }); dshLogDirReady = true }
+    } catch { return }
+    dshLogChain = dshLogChain.then(() => fs.appendFile(LOG_FILE, text)).catch(() => {})
+  }, 500)
 }
 
 function stage(name) {
@@ -446,15 +503,20 @@ function preheatDshFiles() {
 function schedulePreheat() { setTimeout(preheatDshFiles, 5_000) }
 function startPreheatLoop() { schedulePreheat(); const t = setInterval(preheatDshFiles, 600_000); if (t.unref) t.unref() }
 
-function startDsh() {
+function startDsh({ skipReplay = false } = {}) {
   // [问题88] 每次启动 dsh 前重放本地补丁守护:市场更新/外部整写可能在壳运行期改掉
   // profile patch 禁用行(如 web-ui-better-sidebar 去重守护,问题53/70),服务级重启
   // (托盘重启、自动恢复)不经过 boot() 的重放,会带着坏 patch 直接 crash loop。
   // 此处重放幂等(.bak 链自愈),自动恢复迭代时还能当场修复被改写的守护行。
-  try {
-    const r = loadFreshReplayer()((l) => log(l))
-    if (!r.ok) log('补丁重放存在 FAIL(不阻断启动,详见上方日志)')
-  } catch (e) { log(`补丁重放异常: ${e.message}`) }  // [v0.5.0] 双轨解析:'local' 直跑本地构建 bin.js;'official'(含能力探测失败折返)
+  // [q197] boot 的 spawn 路径刚在数行之前全量重放过,传 skipReplay 跳过这份重复
+  // (2×372KB 重放器重解析+全量目标扫描);托盘重启/自动恢复/版本切换仍走默认重放。
+  if (!skipReplay) {
+    try {
+      const r = loadFreshReplayer()((l) => log(l))
+      if (!r.ok) log('补丁重放存在 FAIL(不阻断启动,详见上方日志)')
+    } catch (e) { log(`补丁重放异常: ${e.message}`) }
+  }
+  // [v0.5.0] 双轨解析:'local' 直跑本地构建 bin.js;'official'(含能力探测失败折返)
   // 保持 npx 快速路径既有语义原样——环境注入/版本锁旁路/补丁重放均不变。
   const runtime = resolveDshRuntime(cfg)
   if (runtime.fallback) log('[dshRuntime] 本次按 official 启动(上方 breadcrumb 已留痕)')
@@ -519,15 +581,19 @@ function startDsh() {
     if (m && dshWebUrl !== m[1]) {
       dshWebUrl = m[1]
       log('已捕获 dsh Web 信任 URL(浏览器信任栅栏)')
-      // printUrl 行在 bind 后 ~0.5s 才打印,而就绪判定(401 即算就绪)先于它成立,
-      // 就绪路径的窗口加载可能装到无 token 的 401 页 → 捕获到(新)token 后统一重载,
-      // 首载种下信任 cookie。800ms 防抖合并同屏多次触发。
+      // [q197] printUrl 行要等 dsh 插件树加载完才打印(web-app 的 announceReady 挂在
+      // loader.await 之后,实测晚于端口就绪 6-10s;旧注释「bind 后 ~0.5s」与实测不符),
+      // 就绪路径的窗口早已先装载裸 URL。信任签名密钥持久落盘、cookie 按 authority 长期
+      // 有效——裸 URL 首载通常已通过 cookie 认证并开始挂载;此时无条件整页重载会把在途
+      // 挂载作废,白吃一轮完整导航(实测揭窗 13-16.6s,其中 ~8s 是重载重启)。改为探针
+      // 甄别:窗口仍停在 401 纯文本页(cookie 失效/首装)才统一重载种 cookie;已在装载
+      // 应用的窗口跳过,token URL 留作后续新窗口与失效自愈。800ms 防抖保持不变。
       clearTimeout(dshUrlReloadTimer)
-      dshUrlReloadTimer = setTimeout(() => loadUrlAll(dshWebUrl), 800)
+      dshUrlReloadTimer = setTimeout(() => reloadWindowsNeedingTrustUrl(), 800)
     }
-    log(`[dsh] ${String(d).trim()}`)
+    dshLog(`[dsh] ${String(d).trim()}`)
   })
-  dshChild.stderr.on('data', (d) => log(`[dsh-err] ${String(d).trim()}`))
+  dshChild.stderr.on('data', (d) => dshLog(`[dsh-err] ${String(d).trim()}`))
   dshChild.on('exit', (code) => {
     // [问题75] 身份守卫:被 killDshTree 杀掉的旧实例 exit 事件会延迟到达,
     // 若无条件置空 dshChild 并拉起 recovery,会把切换/重启刚拉起的新进程
@@ -846,7 +912,11 @@ function resolveDirectSession() {
   return directSessionPromise
 }
 
-async function fetchDshVersionsViaHttp() {
+let dshPackumentMemo = { at: 0, value: null }
+// [v0.5.17] 拉取 @deepseek-ai/dsh 完整 packument(HTTP 三级降级,5 分钟记忆):
+// 版本清单与「目标版本依赖元数据」(插件兼容性预检)共用,一次更新流程不重复拉全量。
+async function fetchDshPackument() {
+  if (dshPackumentMemo.value && Date.now() - dshPackumentMemo.at < 300_000) return dshPackumentMemo.value
   const sources = [
     { name: '官方源', url: `${DSH_REGISTRY}/@deepseek-ai%2Fdsh` },
     { name: '镜像', url: `${DSH_REGISTRY_MIRROR}/@deepseek-ai%2Fdsh` },
@@ -861,15 +931,20 @@ async function fetchDshVersionsViaHttp() {
       const res = await electronNet.fetch(s.url, init)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      const list = data && data.versions ? Object.keys(data.versions) : []
-      if (!list.length) throw new Error('versions 清单为空')
+      if (!data || !data.versions || !Object.keys(data.versions).length) throw new Error('versions 清单为空')
       if (s.name !== '官方源') log(`dsh 版本查询:官方源不可达,已改从${s.name}获取(请检查官方源连通性/系统代理)`)
-      return list
+      dshPackumentMemo = { at: Date.now(), value: data }
+      return data
     } catch (e) {
       log(`dsh 版本查询失败(${s.name}): ${e.message}`)
     }
   }
   return null
+}
+
+async function fetchDshVersionsViaHttp() {
+  const data = await fetchDshPackument()
+  return data ? Object.keys(data.versions) : null
 }
 
 // 版本清单统一入口:HTTP 双源优先,npm view 子进程兜底(前两级都不可达时仍可查)。
@@ -1125,7 +1200,7 @@ async function applyDshVersion(newVersion) {
   return false
 }
 
-// dsh 运行时更新:npm 最新版 vs 版本锁;发现新版→确认→写锁→重启 dsh
+// dsh 运行时更新:npm 最新版 vs 版本锁;发现新版→确认→插件兼容性预检(不兼容二次确认)→写锁→重启 dsh
 async function checkDshUpdate(manual) {
   if (cfg.dshVersion === 'latest') {
     if (manual) notify('dsh 更新', '当前跟踪 latest,每次启动自动使用最新版。')
@@ -1162,6 +1237,27 @@ async function checkDshUpdate(manual) {
     return
   }
   if (response !== 0) return
+  // [v0.5.17] 插件兼容性门控:有不兼容声明时二次确认,等待用户放行(取消即终止)
+  const compat = await dshCompat.assessPluginsForDshUpdate(latest)
+  if (compat.error) {
+    log(`插件兼容性检查跳过: ${compat.error}`)
+  } else if (compat.incompatible.length) {
+    const listText = compat.incompatible.slice(0, 8).map((i) => `• ${i.name}${i.version ? '@' + i.version : ''} — ${i.reason}`).join('\n')
+      + (compat.incompatible.length > 8 ? `\n• …等共 ${compat.incompatible.length} 个` : '')
+    const { response: confirmCompat } = await dialog.showMessageBox(dialogParent() ?? new BrowserWindow({ show: false }), {
+      type: 'warning',
+      title: '插件兼容性提醒',
+      message: `新版 dsh ${latest} 与 ${compat.incompatible.length} 个已启用插件的依赖声明不兼容`,
+      detail: `${listText}\n\n更新后这些插件可能无法工作,可先在插件管理中禁用它们或等待插件更新。仍要继续更新吗?`,
+      buttons: ['仍要更新并重启服务', '取消'],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    if (confirmCompat !== 0) {
+      log(`用户取消与新版 ${latest} 不兼容状态下的 dsh 更新`)
+      return
+    }
+  }
   const probe = await probeDshVersion(latest)
   if (!probe.ok) {
     notify('dsh 更新', `新版本 ${latest} 验证失败(${probe.error}),已保持 ${cfg.dshVersion}。`)
@@ -1244,6 +1340,25 @@ async function checkShellUpdate() {
   }
 }
 
+// ---------- [v0.5.17] dsh 更新前插件兼容性预检(引擎在 dsh-plugin-compat.cjs) ----------
+// 更新 dsh 前评估已启用第三方插件的 peerDependencies / engines.dsh 声明,对照目标
+// 版本将携带的 @deepseek-ai/dsh* 子包版本;范围无交集者列清单交用户确认后才继续
+// (警告后放行,非硬阻断;检查失败一律放行不挡更新)。禁用集 = home 层 + profile
+// 层 patch 的管理行;判定口径与数据源见模块头注释。
+const { createCompatChecker } = require('./dsh-plugin-compat.cjs')
+const dshCompat = createCompatChecker({
+  dshHome: DSH_HOME,
+  fetchPackument: fetchDshPackument,
+  readDisabledAllIds: () => {
+    const ids = new Set(readDisabledPlugins())
+    for (const e of parsePatchFile(path.join(DSH_HOME, 'profiles', 'web', 'cordis.patch.yml')).entries) {
+      if (e.managed && e.disabled === true && e.id) ids.add(e.id)
+    }
+    return ids
+  },
+  log,
+})
+
 // ---------- 更新 tab(Web UI 经壳 API 驱动,无弹窗版检查/应用) ----------
 
 /** 语义化版本比较:a > b 返 true(逐段数字比,前缀相同短者小;非数字段退化为字符串比)。 */
@@ -1315,8 +1430,11 @@ async function updatesCheckPayload() {
   return out
 }
 
-/** 应用 dsh 最新版(异步,前端轮询 /state 的 switching/restarting)。 */
-async function applyDshLatest() {
+/** 应用 dsh 最新版(异步,前端轮询 /state 的 switching/restarting)。
+ *  [v0.5.17] 插件兼容性门控:首发请求不带 confirmCompat 时,若检测到已启用插件
+ *  与目标版本声明不兼容,返 needsCompatConfirm + 不兼容清单,前端确认后回带
+ *  { confirmCompat:true, target } 再继续(target 回带防两次点击间最新版漂移)。 */
+async function applyDshLatest(body = {}) {
   if (switching || restarting) return { ok: false, error: '已有切换或重启在进行' }
   // [问题75] 目标版本取全量清单最高公开版(latest 标签不含 rc 新版)
   const latest = await resolveNewestPublicDsh()
@@ -1324,6 +1442,22 @@ async function applyDshLatest() {
   if (latest === cfg.dshVersion) return { ok: true, note: '已是最新版' }
   // [问题126] 全序防降级:当前为 alpha 预发布时,公开版最新可能反而更低
   if (cmpDshRank(cfg.dshVersion, latest) >= 0) return { ok: true, note: '已是最新版' }
+  if (!(body && body.confirmCompat && body.target === latest)) {
+    const compat = await dshCompat.assessPluginsForDshUpdate(latest)
+    if (compat.error) {
+      log(`插件兼容性检查跳过: ${compat.error}`)
+    } else if (compat.incompatible.length) {
+      log(`dsh 更新 ${latest}:${compat.incompatible.length} 个已启用插件声明不兼容,等待用户确认`)
+      return {
+        ok: true,
+        needsCompatConfirm: true,
+        target: latest,
+        checked: compat.checked,
+        unknown: compat.unknown,
+        incompatible: compat.incompatible.map((i) => ({ name: i.name, version: i.version, reason: i.reason })),
+      }
+    }
+  }
   switchDshVersion(latest) // 内部自带预检+回滚+switching 互斥
   return { ok: true, accepted: true }
 }
@@ -1943,6 +2077,27 @@ function loadUrlAll(url) {
   }
 }
 
+// [q197] 页面甄别探针:app=#root 在位(已在装载 dsh 应用,含「Loading plugins」加载页),
+// unauth=当前文档是 401 纯文本响应(信任栅栏对未认证请求的落点)。仅 401 页才值得为
+// 种信任 cookie 整页重载;#root 已在位的页面重载纯亏(在途挂载作废重来)。
+const DSH_PAGE_STATE_JS = "(function(){try{return{app:!!document.querySelector('#root'),unauth:document.contentType==='text/plain'}}catch(e){return{app:false,unauth:false}}})()"
+
+// 捕获信任 URL 后的条件重载:只重载仍停在 401/陈旧页的窗口;全部在途挂载则整体跳过。
+async function reloadWindowsNeedingTrustUrl() {
+  if (!dshWebUrl) return
+  let needs = false
+  for (const win of mainWindows) {
+    if (win.isDestroyed()) continue
+    try {
+      const st = await win.webContents.executeJavaScript(DSH_PAGE_STATE_JS, false)
+      if (st && st.app && !st.unauth) continue
+    } catch { /* 导航中/执行失败:按需重载 */ }
+    needs = true
+  }
+  if (needs) loadUrlAll(dshWebUrl)
+  else log('信任 cookie 已生效,窗口在途挂载,跳过 token URL 重载')
+}
+
 function loadErrorPageAll(reason) {
   let shown = false
   for (const win of mainWindows) {
@@ -1999,9 +2154,7 @@ const PROTECTED_ENTRY_IDS = new Set([
  * disabled 为 true/false 字面量);其余条目(用户手写的 insert/config 等)原样保留。
  * @returns {{ entries: Array<{ start: number, end: number, id: string|null, disabled: boolean|null, managed: boolean }>, lines: string[], valid: boolean }}
  */
-function parseHomePatch() {
-  let text = ''
-  try { text = fs.readFileSync(HOME_PATCH_FILE, 'utf8') } catch { /* 不存在视作空 */ }
+function parsePatchText(text) {
   // CRLF 免疫:剥离行尾 \r,写回时统一 LF(下游 indexOf/正则均按精确行匹配)
   const lines = text.split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l))
   const entries = []
@@ -2035,6 +2188,17 @@ function parseHomePatch() {
   }
   finish()
   return { entries, lines, valid }
+}
+
+/** [v0.5.17] 按路径解析 patch 文件(home 层之外还有 profile 层 cordis.patch.yml)。 */
+function parsePatchFile(file) {
+  let text = ''
+  try { text = fs.readFileSync(file, 'utf8') } catch { /* 不存在视作空 */ }
+  return parsePatchText(text)
+}
+
+function parseHomePatch() {
+  return parsePatchFile(HOME_PATCH_FILE)
 }
 
 /** 读当前用户禁用集(home patch 中 disabled: true 的管理行 id)。 */
@@ -2971,13 +3135,28 @@ function listArchivedSessions() {
     const p = JSON.parse(fs.readFileSync(path.join(DSH_HOME, 'storages', 'session_projcache.json'), 'utf8'))
     proj = (p && p.tables && p.tables.sessions) || {}
   } catch { /* 无投影缓存:标题回退 id */ }
+  // [批次155 2026-09-12] 0.1.5 起投影分片化(storages/session_projcache/sessions/<id>.json),
+  // 旧版单文件不再增长 —— 只读旧表时新归档行的标题/时间全部退化成 id 前缀(活体实证:
+  // 「识别」行显示为 496a7d87)。逐 id 先读分片(record.rows/record.identity 与旧表同构),
+  // 分片缺席再回退旧表。
+  const shardDir = path.join(DSH_HOME, 'storages', 'session_projcache', 'sessions')
+  const shardRow = (sid, bare) => {
+    for (const name of [sid, bare]) {
+      try {
+        const j = JSON.parse(fs.readFileSync(path.join(shardDir, `${name}.json`), 'utf8'))
+        const rec = (j && j.record) || j
+        if (rec && rec.rows) return rec
+      } catch { /* 分片缺席:回退旧表 */ }
+    }
+    return null
+  }
   const sessionsRoot = path.join(DSH_HOME, 'sessions')
   const sessions = []
   let totalBytes = 0
   for (const id of ids) {
     if (typeof id !== 'string' || !SESSION_ID_RE.test(id)) continue
     const bare = id.replace(/^session-/, '')
-    const row = proj[id] || proj[bare] || {}
+    const row = shardRow(id, bare) || proj[id] || proj[bare] || {}
     let bytes = 0
     let projectKey = ''
     try {
@@ -3348,7 +3527,12 @@ function startShellApi() {
         return send(200, await updatesCheckPayload())
       }
       if (req.method === 'POST' && url.pathname === '/updates/apply-dsh') {
-        return send(200, await applyDshLatest())
+        // [v0.5.17] 带体:插件兼容性确认往返(confirmCompat/target)随请求传入
+        let applyBody = ''
+        for await (const chunk of req) applyBody += chunk
+        let payload = {}
+        try { payload = JSON.parse(applyBody || '{}') } catch { payload = {} }
+        return send(200, await applyDshLatest(payload))
       }
       if (req.method === 'POST' && url.pathname === '/updates/apply-shell') {
         if (canShellSelfUpdate && autoUpdater) {
@@ -3730,13 +3914,17 @@ async function boot() {
   }
   // 本地补丁自动重放:插件经 pnpm 更新覆盖 node_modules 后,壳启动即恢复全部本地定制
   // (better-sidebar 浮动卡片/底部面板剔除 + node-nav 左侧圆点导航),失败仅告警不阻断启动。
+  // [q197] 这份是 spawn 路径的唯一次重放(原 boot 与 startDsh 各重放一次);耗时入日志,
+  // 下一轮提速以此为准。startDsh 由调用方传 skipReplay,托盘重启/自动恢复语义不变。
+  const replayT0 = Date.now()
   try {
     const r = loadFreshReplayer()((l) => log(l))
     if (!r.ok) notify('DeepSeek Harness', '本地插件补丁重放失败,详见日志(桌面日志目录)。')
   } catch (e) { log(`补丁重放异常: ${e.message}`) }
+  log(`补丁重放耗时 ${Date.now() - replayT0}ms`)
   startPatchGuardian()
   stage('spawn')
-  if (!startDsh()) {
+  if (!startDsh({ skipReplay: true })) {
     closeSplash()
     const win = [...mainWindows][0]
     if (win) { win.loadFile('error.html', { query: { reason: 'no-npx' } }); win.show() }
@@ -3780,6 +3968,39 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.whenReady().then(() => {
+    // [q197] 启动分段计时:此前 05:52 启动在「重放前」有 ~3.9s 无日志盲区,先量出
+    // whenReady 相对模块加载的耗时,把 Electron ready + 窗口/托盘/菜单创建纳入观测。
+    log(`壳 whenReady(自模块加载 ${((Date.now() - SHELL_T0) / 1000).toFixed(2)}s)`)
+    // ---------- [R102 批次169 2026-09-12] 侧边卡片浏览器直连:剥离子帧防嵌入响应头 ----------
+    // 主人需求:「优化侧边卡片在浏览某些网站时提示的拒绝了嵌入请求,改为直接访问」。
+    // X-Frame-Options / CSP frame-ancestors 由 Chromium 网络层按响应头强制,iframe/JS 层无解,
+    // better-sidebar 的「拒绝嵌入」面板与「仍然加载」都绕不过。壳层对**子帧**(resourceType =
+    // subFrame,页面内 iframe 的文档响应)剥离这两类头后,iframe 直连任意站点真实源站——子资源、
+    // 站内跳转、相对路径全部原生可用,优于 /browse 一次性代理(不重写相对 URL,仅能看单页)。
+    // 仅动 subFrame:主帧(壳内 dsh Web UI 自己)的响应头原样保留;iframe 沙箱(better-sidebar
+    // 不给 allow-same-origin)照旧隔离 GUI。配套 client 侧补丁 [R102](patches.cjs)不再采信
+    // better-sidebar 探针的 blocked 判定——探针走 dsh 服务端 fetch 读上游原始头,对壳剥离不可见。
+    // 生效条件:改 main.js 必须重新打包(§二)+ 重启壳;旧壳期间被拒站点显示 Chromium 空白拒绝框。
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      if (details.resourceType !== 'subFrame' || !details.responseHeaders) return callback({})
+      const headers = details.responseHeaders
+      for (const name of Object.keys(headers)) {
+        const lower = name.toLowerCase()
+        if (lower === 'x-frame-options') { delete headers[name]; continue }
+        if (lower === 'content-security-policy') {
+          const kept = headers[name]
+            .map((value) => value
+              .split(';')
+              .map((directive) => directive.trim())
+              .filter((directive) => directive && !/^frame-ancestors\b/i.test(directive))
+              .join('; '))
+            .filter((value) => value)
+          if (kept.length) headers[name] = kept
+          else delete headers[name]
+        }
+      }
+      callback({ responseHeaders: headers })
+    })
     createSplash()
     createMainWindow()
     setupAppMenu()

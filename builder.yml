@@ -11,6 +11,7 @@ directories:
 files:
   - main.js
   - patches.cjs
+  - dsh-plugin-compat.cjs
   - preload.js
   - error.html
   - splash.html

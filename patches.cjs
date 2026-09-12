@@ -11,6 +11,12 @@
 //       A3 Claude 动效: :root --dsh-bsr-slide-duration 300ms / --dsh-bsr-slide-ease; #root/#centerCol 共用曲线
 //          (0.14.0 布局模板 transition 改多行展开式并新增 width:calc,锚点放宽为跨行通配)
 //       A4 对称 gap: --dsh-bsr-gap 8px(collapsed 0), #root margin-right = calc(width + gap*2)
+//       A5 aionui 原生 explorer/preview 列剔除(浮动卡片为唯一右侧表面)
+//       A6 布局推送变量/属性收窄 #root(卡片内大文件开合卡顿根治,geo-root-scope 标记)
+//       A7 产物行让位(2026-09-10): conversation.chat.turnTail 链 priority -1 → 1 ——
+//          上游 0.1.5 原生右栏上线后,「点击模型产物」应走 ui-deliverables 行(priority 0)
+//          的 chat.openFile → ctx.sidebarRight.openResource → 原生侧栏文本预览 tab,
+//          而不是被 better-sidebar 劫持进它自己的编辑器面板(旧侧边栏)。
 //       v3 关键改进: CSS 采用「整条规则正则替换」(匹配 .P_rule{...} 边界,重写全文),
 //       规则内部属性漂移(z-index 50→40 / 背景变量 / transition 展开式)不再导致补丁失败。
 //
@@ -64,8 +70,13 @@ const YAML_MARK = '#dsh-local-patch:v2026-08-23'
 // ---- 通用: 计数式字符串替换 / 计数式正则替换 ----
 function makeCtx(file) {
   const failures = []
+  // [批次144 2026-09-10] 机会性锚点清单:repOpt 未命中的标签(上游已自行解决/代码已迁移)
+  // 不算失败,调用方可在结果对象里带出留痕。存在意义 = **不让过时锚点连坐**同一次 apply
+  // 里仍然有效的修复(apply 是全趟原子的:任一 failures → 整份不写盘)。
+  const optional = []
   return {
     failures,
+    optional,
     rep(c, from, to, expected, label) {
       // [R50 2026-08-29] EOL 自适应:锚点按 \n 书写,但 Windows 重装/更新的 npm 包
       // 产物可能是 CRLF(node-nav 0.2.3 / turn-review 宿主更新后 matched 0 的根因)。
@@ -97,9 +108,24 @@ function makeCtx(file) {
       const out = fromC ? c.split(fromC).join(toC) : c
       return out.split(fromN).join(toN)
     },
+    // [批次144 2026-09-10] 机会性计数替换:命中 1 次 → 正常替换;命中 0 次 → **不算失败**
+    // (记入 optional 清单,属「上游已自行解决 / 代码已迁移」的预期形态);命中 >1 次 → 才算失配。
+    // 用法纪律:一个家族里「功能当下必需」的锚点用 rep(缺了就说明上游变了、要人工研判),
+    // 「历史遗留 / 上游可能自解」的锚点用 repOpt —— 否则一处过时锚点会把同趟 apply 里
+    // 仍然有效的修复一起拖死(joi-theme 批次 144 实证)。
+    repOpt(c, from, to, label) {
+      const fromN = from.replace(/\r\n/g, '\n')
+      const toN = to.replace(/\r\n/g, '\n')
+      const fromC = fromN.includes('\n') ? fromN.split('\n').join('\r\n') : null
+      const toC = fromC ? toN.split('\n').join('\r\n') : null
+      const n = c.split(fromN).length - 1 + (fromC ? c.split(fromC).length - 1 : 0)
+      if (n === 0) { optional.push(label); return c }
+      if (n > 1) { failures.push(`[${file}] ${label}(repOpt): matched ${n} > 1`); return c }
+      const out = fromC ? c.split(fromC).join(toC) : c
+      return out.split(fromN).join(toN)
+    },
     // 可选正则替换:0.12.3 新增的 title-bar-strip 兼容规则存在则中和,不存在(未来版本移除)则跳过
-    rexOpt(c, re, to, label) {
-      const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')
+    rexOpt(c, re, to, label) {      const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')
       const hits = [...c.matchAll(g)]
       if (hits.length > 1) { failures.push(`[${file}] ${label}(rexOpt): matched ${hits.length} > 1`); return c }
       return hits.length === 1 ? c.replace(g, to) : c
@@ -125,6 +151,28 @@ function patchBetterSidebar() {
   for (const f of ['client.js', 'client-registry.js', 'client-terminal.js', 'client-editor.js']) {
     const p = path.join(dir, 'lib', f)
     if (!fs.existsSync(p)) continue
+    // [R93 2026-09-11] 能力判据(上游 0.19.0「退役插件自绘右侧面板」):
+    //   v0.19.0 起 better-sidebar 不再自绘浮动侧边卡片 —— 右列交给 DSH 原生右侧栏
+    //   (插件的 7 个 tab 类型注册成原生 tab;文件打开统一走 ctx.sidebarRight.openResource,
+    //   并注册 editor tab 类型以 extension 优先级认领 dsh-resource://file/**),插件自己只
+    //   保留底部工作台,开合按钮进 DSH 会话头 utilities 槽。上游 README 原话:
+    //   「🧩 退役插件自绘右侧面板与自由窗口(#605)」。
+    //   本家族(A1 底面板剔除 / A2 卡片几何 / A3 动效 / A4 gap / A5 aionui 列隐藏 /
+    //   A6 布局收窄 / A7 产物行让位)全部锚定那个已不存在的 UI ⇒ 24 条锚点整族失配。
+    //   判据 = 该产物是否还带「浮动卡片面」的两个稳定特征:CSS 模块面板规则 + 入口簇。
+    //   不满足即 skipped(不算 FAIL、不写盘);上游若回退到自绘面板的版本,本家族自动恢复。
+    {
+      const probe = fs.readFileSync(p, 'utf8')
+      if (!/\.\w+_panel\{[^}]*position:(?:fixed|absolute)/.test(probe) || !probe.includes('toggleCluster')) {
+        results.push({
+          file: 'bsr/' + f,
+          ok: true,
+          skipped: true,
+          reason: '上游已退役自绘右侧面板(0.19.0+ 浮动卡片不存在),A 链无需守护',
+        })
+        continue
+      }
+    }
     const isFull = FULL.includes(f)
     const { rep, repAll, rex, rexOpt, rexAll, failures } = makeCtx(`bsr/${f}`)
 
@@ -136,6 +184,24 @@ function patchBetterSidebar() {
           c = rex(c, /id: "better-sidebar",(\s*\n\s*)order: 100,/, 'id: "better-sidebar",$1order: 21,', 1, 'settings-order')
         }
         c = rep(c, 'if (!narrow || sessionId === void 0) return;', 'if (sessionId === void 0) return;', 1, 'migrate-gate')
+        // A7 产物行让位(2026-09-10,用户需求「修复点击模型产物时会调用旧侧边栏」):
+        // better-sidebar 以 priority -1 抢占 conversation.chat.turnTail 链 —— 助手回合末尾的
+        // 产物行(「本次产出」+ 文件 chip)由它的 SidebarProducedFiles 渲染,**点击走
+        // openSidebarFile() → 它自己的编辑器面板(旧侧边栏)**。0.1.5 上游原生右栏
+        // (dsh-client-ui-sidebar-right/dockkit + sidebar-documentpreview)上线后,产物行应回到
+        // ui-deliverables(默认 priority 0)的行:其 chip 调 chat.openFile →
+        // ctx.sidebarRight.openResource(dsh-resource://file/session/<id>/<path>) → 新原生侧栏的
+        // 文本预览 tab(dsh-client-ui-chat lib/client.js:8319-8325 实证)。
+        // slots 核心排序:条目按 priority 升序,「lowest renders」,链式取首个 select 非空者
+        // (dsh-client-ui-slots lib/index.js:96 + dsh-client-ui-renderer lib/client.js:831-848)。
+        // 把 priority 降到 1 = 上游条目在场时上游胜出;上游条目缺席(未来移除该注册)才回退旧行,
+        // 属优雅降级。**副作用**:产物行 chip 的「在文件夹中显示」手势随之回到上游语义
+        // (仅 produced>6 时出现,走 present.open / reveal),better-sidebar 的 explorer 高亮
+        // 不再参与。反悔办法=把本行 priority 改回 -1 重放(哨兵态需先从 .bak-repatch 还原)。
+        c = rep(c,
+          '\t\t\t\tpriority: -1,\n\t\t\t\tregistrant: "dsh-better-sidebar",',
+          '\t\t\t\tpriority: 1,\n\t\t\t\tregistrant: "dsh-better-sidebar",',
+          1, 'turntail-yield')
         // height0: bottom push 高度恒 0(A1 底部面板已剔除)。0.15- = 单行 height 三元;
         // 0.17+ 上游重构为 layoutPushSize + bottomPush 行(writeGeometry(width, bottomPush)),分别短路
         if (c.includes('const bottomPush = ')) {
@@ -316,6 +382,465 @@ function patchBetterSidebar() {
   return results.map((r) => ({ ...r, version: ver }))
 }
 
+// ---- [R92] dsh-better-sidebar 交付卡片「打开」改道侧边卡片(2026-09-11,用户需求) ----
+// 症状: 聊天区「交付文件」卡片(present 产出的文件卡)点「打开」或点卡片本体,落进 0.1.5 原生
+//       右侧栏的文本预览 tab,而不是 better-sidebar 的编辑器(用户要的是后者)。
+// 根因: 上游 0.1.5 把聊天区文件打开漏斗整体换了 —— 旧漏斗 remote.session.openWorkspacePath
+//       已被 dsh-client-ui-chat 弃用(实证 chat/lib/client.js:8319-8325),现在走
+//       ctx.sidebarRight.openResource("dsh-resource://file/session/<id>/<path>") →
+//       dsh-client-ui-sidebar-right 按 patterns ["dsh-resource://file/**"] 认领 →
+//       原生右侧栏 documentpreview tab。better-sidebar 的 openpath-intercept 只影子了旧漏斗
+//       (src/client/openpath-intercept.ts 的整个前提是 alpha 主机),故在 0.1.5 上已成死代码。
+// 修法: ① document 捕获相监听交付卡片手势(上游卡片自带稳定标记 [data-presented-file];
+//          排除带 aria-haspopup=menu 的「更多文件操作」按钮,让「用默认应用打开 / 在文件
+//          资源管理器中显示」仍走上游原生通道)→ 置一次性武装位;
+//       ② ctx.inject(["sidebarRight"]) 影子实例的 openResource(自有数据属性遮蔽原型方法,
+//          与 wrapOpenWorkspacePath 同款可还原姿势): 武装位仍在时解析
+//          dsh-resource://file/session/<id>/<path> 并调 openSidebarFile 落进编辑器;
+//          其余一律回落上游原方法。
+// 作用域: **只锁交付卡片** ——「本轮文件改动」chip 仍走原生右侧栏(保留 R85 时代 A7 的产物行
+//       让位成果: 产物行渲染与落点都不动)。上游若删掉 data-presented-file 标记,监听永不命中,
+//       行为自动回落成现状(不会坏)。
+// 开关: 复用既有 pref interceptOpenPath + editor tab 启用开关 + 未挂起(与 better-sidebar
+//       自己的 takeoverEnabled 判据同源);另需 ctx.get("betterSidebar") 在场,否则不吞手势。
+// 载体纪律: 本文件已被 [A] 的 rewrite 家族占用(.bak-repatch 基底;current 已带 PATCH_MARK →
+//       rewrite 哨兵快速通道会整体跳过 [A],故新家族**不得折进 [A] 的 apply**,也不得再走
+//       rewrite),按 patchBlankSessionDup / patchSessionFormatV0Lenient 同款自实现 MARK 家族:
+//       直接读 current、命中自有 MARK 即幂等 already、失败不写盘。无 .bak 基底(市场包整体
+//       覆盖式更新,陈旧基底只会误导;幂等靠「自有 MARK + 上游锚点」)。
+//       重放顺序: 必须排在 patchBetterSidebar() 之后 —— [A] 走 rewrite 重建整份文件时会抹掉
+//       本家族的注入,靠 replayAll 的先后把它补回来。
+// 生效面: 客户端产物 —— 刷新页面即生效(无需重启 dsh)。
+const PRESENTED_REDIRECT_MARK = '/* [dsh-desktop] R92 presented-card-redirect */'
+function patchPresentedCardRedirect() {
+  const ANCHOR = '}, "dsh-better-sidebar: open-path interception");'
+  const INJECT = [
+    '\t\t\t\tctx.effect(() => {',
+    '\t\t\t\t\ttry {',
+    '\t\t\t\t\t\t' + PRESENTED_REDIRECT_MARK,
+    '\t\t\t\t\t\t// [R92] 交付卡片手势 → 侧边卡片编辑器;作用域与开关见本家族文件头注释',
+    '\t\t\t\t\t\tconst CARD_SELECTOR = "[data-presented-file]";',
+    '\t\t\t\t\t\tconst FILE_RESOURCE_PREFIX = "dsh-resource://file/";',
+    '\t\t\t\t\t\tlet cardGesture = false;',
+    '\t\t\t\t\t\tconst parseFileAddress = (address) => {',
+    '\t\t\t\t\t\t\tif (typeof address !== "string" || !address.startsWith(FILE_RESOURCE_PREFIX)) return null;',
+    '\t\t\t\t\t\t\tconst rest = address.slice(FILE_RESOURCE_PREFIX.length);',
+    '\t\t\t\t\t\t\tif (!rest.startsWith("session/")) return null;',
+    '\t\t\t\t\t\t\tconst body = rest.slice(8);',
+    '\t\t\t\t\t\t\tconst slash = body.indexOf("/");',
+    '\t\t\t\t\t\t\tif (slash <= 0) return null;',
+    '\t\t\t\t\t\t\ttry {',
+    '\t\t\t\t\t\t\t\treturn {',
+    '\t\t\t\t\t\t\t\t\tsessionId: decodeURIComponent(body.slice(0, slash)),',
+    '\t\t\t\t\t\t\t\t\tpath: decodeURIComponent(body.slice(slash + 1))',
+    '\t\t\t\t\t\t\t\t};',
+    '\t\t\t\t\t\t\t} catch (error) {',
+    '\t\t\t\t\t\t\t\treturn null;',
+    '\t\t\t\t\t\t\t}',
+    '\t\t\t\t\t\t};',
+    '\t\t\t\t\t\tconst onCardGesture = (event) => {',
+    '\t\t\t\t\t\t\tconst target = event.target;',
+    '\t\t\t\t\t\t\tif (!(target instanceof Element)) return;',
+    '\t\t\t\t\t\t\tif (target.closest(CARD_SELECTOR) === null) return;',
+    '\t\t\t\t\t\t\tconst button = target.closest("button");',
+    '\t\t\t\t\t\t\tif (button !== null && button.getAttribute("aria-haspopup") === "menu") return;',
+    '\t\t\t\t\t\t\tcardGesture = true;',
+    '\t\t\t\t\t\t\twindow.setTimeout(() => { cardGesture = false; }, 0);',
+    '\t\t\t\t\t\t};',
+    '\t\t\t\t\t\tdocument.addEventListener("click", onCardGesture, true);',
+    '\t\t\t\t\t\tconst fiber = ctx.inject(["sidebarRight"], (fctx) => {',
+    '\t\t\t\t\t\t\tfctx.effect(() => {',
+    '\t\t\t\t\t\t\t\tconst service = fctx.get("sidebarRight");',
+    '\t\t\t\t\t\t\t\tif (service === void 0 || service === null) return () => {};',
+    '\t\t\t\t\t\t\t\tconst KEY = "openResource";',
+    '\t\t\t\t\t\t\t\tconst descriptor = Object.getOwnPropertyDescriptor(service, KEY);',
+    '\t\t\t\t\t\t\t\tconst original = service[KEY];',
+    '\t\t\t\t\t\t\t\tif (typeof original !== "function") return () => {};',
+    '\t\t\t\t\t\t\t\tconst wrapped = function(address, options) {',
+    '\t\t\t\t\t\t\t\t\tconst armed = cardGesture;',
+    '\t\t\t\t\t\t\t\t\tcardGesture = false;',
+    '\t\t\t\t\t\t\t\t\tif (armed) {',
+    '\t\t\t\t\t\t\t\t\t\tconst parsed = parseFileAddress(address);',
+    '\t\t\t\t\t\t\t\t\t\tconst prefs = sidebarStore.getPrefs();',
+    '\t\t\t\t\t\t\t\t\t\tif (parsed !== null && !sidebarStore.getSuspended() && prefs.interceptOpenPath !== false && prefs.tabsEnabled["editor"] !== false && ctx.get("betterSidebar") !== void 0) {',
+    '\t\t\t\t\t\t\t\t\t\t\topenSidebarFile(ctx, sidebarStore, parsed.sessionId, parsed.path);',
+    '\t\t\t\t\t\t\t\t\t\t\treturn void 0;',
+    '\t\t\t\t\t\t\t\t\t\t}',
+    '\t\t\t\t\t\t\t\t\t}',
+    '\t\t\t\t\t\t\t\t\treturn original.call(this, address, options);',
+    '\t\t\t\t\t\t\t\t};',
+    '\t\t\t\t\t\t\t\ttry {',
+    '\t\t\t\t\t\t\t\t\tObject.defineProperty(service, KEY, { configurable: true, enumerable: false, writable: true, value: wrapped });',
+    '\t\t\t\t\t\t\t\t} catch (error) {',
+    '\t\t\t\t\t\t\t\t\treturn () => {};',
+    '\t\t\t\t\t\t\t\t}',
+    '\t\t\t\t\t\t\t\treturn () => {',
+    '\t\t\t\t\t\t\t\t\tif (descriptor !== void 0) Object.defineProperty(service, KEY, descriptor);',
+    '\t\t\t\t\t\t\t\t\telse Reflect.deleteProperty(service, KEY);',
+    '\t\t\t\t\t\t\t\t};',
+    '\t\t\t\t\t\t\t}, "dsh-better-sidebar: presented-card open redirect");',
+    '\t\t\t\t\t\t});',
+    '\t\t\t\t\t\treturn () => {',
+    '\t\t\t\t\t\t\tfiber.dispose();',
+    '\t\t\t\t\t\t\tdocument.removeEventListener("click", onCardGesture, true);',
+    '\t\t\t\t\t\t};',
+    '\t\t\t\t\t} catch (error) {',
+    '\t\t\t\t\t\tfail("interception", error);',
+    '\t\t\t\t\t\treturn () => {};',
+    '\t\t\t\t\t}',
+    '\t\t\t\t}, "dsh-better-sidebar: presented-card interception");',
+  ].join('\n')
+  const TO = ANCHOR + '\n' + INJECT
+  const results = []
+  // 只完整产物带该 apply 段(terminal/editor 天然 no-op,与 [A] 的 isFull 判据一致)
+  for (const f of ['client.js', 'client-registry.js']) {
+    const file = 'bsr/' + f
+    const p = path.join(PLUGINS, 'dsh-better-sidebar', 'lib', f)
+    if (!fs.existsSync(p)) continue
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(PRESENTED_REDIRECT_MARK)) { results.push({ file, ok: true, already: true }); continue }
+    // [R93 2026-09-11] 能力判据(上游 0.19.0 已自解):v0.19.0 整块退役了 openpath-intercept
+    // —— 旧漏斗 remote.session.openWorkspacePath 的影子被删掉(该串在 0.19.0 产物里 x0),
+    // 而插件改为**原生**接管:客户端把聊天区文件打开统一走 ctx.sidebarRight.openResource
+    // (dsh-resource://file/…),再注册自己的 editor tab 类型以 extension 优先级认领该地址
+    // (压过内置文本预览,并接管内置「文件」页)。⇒ 本家族要达成的目标(卡片「打开」落进
+    // better-sidebar 编辑器)已由上游原生提供,属「上游已解」,退化为 skipped:不写盘、
+    // 不计 FAIL;上游若回退旧漏斗形态,本家族自动恢复守护。
+    if (!current.includes('dsh-better-sidebar: open-path interception')) {
+      results.push({ file, ok: true, skipped: true, reason: '上游已原生接管聊天区文件打开(0.19.0+),R92 无需守护' })
+      continue
+    }
+    const { rep, failures } = makeCtx(file)
+    const c = rep(current, ANCHOR, TO, 1, 'presented-card-intercept')
+    if (failures.length) { results.push({ file, ok: false, failures: [...failures] }); continue }
+    fs.writeFileSync(p, c, 'utf8')
+    results.push({ file, ok: true, already: false })
+  }
+  if (!results.length) results.push({ file: 'dsh-better-sidebar', missing: true })
+  return results.map((r) => ({ ...r, version: 'local' }))
+}
+
+// ---- [R94] 交付文件「正文提及」改道侧边卡片(2026-09-11,用户需求) ----
+// 主诉:「修复点击会话中的文件时不是打开侧边卡片而是打开应用选择器」。
+// 现象: 收尾消息正文里那个带下划线的文件名 chip(模型按系统提示把改动文件写成 inline code,
+//       渲染层再按 fileMentions 把能解析成本轮文件的 token 变成可点按钮)点下去,弹出的是
+//       Windows「选择一个应用以打开此 .md 文件」(本机 .md 无默认关联),而不是侧边卡片 ——
+//       同一个文件在交付卡片里点「打开」落侧边卡片、在正文里点却弹系统对话框。
+// 根因(0.1.5-rc.1 实证): dsh-client-ui-deliverables 客户端 chatFileMentions.forClosing 对两类
+//       路径分派了**不同**开法 ——
+//         produced (本轮 write/edit 产物) → owner.openFile(path) → chat.openFile
+//           → ctx.sidebarRight.openResource("dsh-resource://file/session/<sid>/<path>") → 侧边卡片 ✓
+//         presented(present 声明的交付文件) → opener.open(sessionId, seq, index)
+//           → POST /api/present.open → host sessionController.openWorkspacePath
+//           → openPath → **宿主桌面默认应用**(.md 无关联即弹应用选择器)×
+//       交付卡片本体与其「打开」按钮走的是 onPreview → openFile(同一条侧边卡片链),
+//       所以跑偏的只有「正文提及」这一处。
+// 修法: 正文提及的两类路径**统一** owner.openFile(path);aria-label 同步从 presented.open
+//       (「在默认程序中打开 X」)改回 produced.open(「打开 X」),不再与真实行为不符。
+//       **不夺显式手势**: 交付卡片「…」菜单里的「用默认应用打开 / 在文件资源管理器中显示」
+//       原样保留(那是本插件唯一的系统打开入口,用户主动选才走)。
+// 载体纪律: 目标是**核心包**客户端产物(与 [D]/[Q] 同款,落在 npx 缓存的 pnpm-seed 里:不随
+//       市场包更新漂移,随 dsh 大版本升级漂移 —— 换 seed 后锚点失配即 FAIL 待人工对位)。
+//       ① 自有 MARK 幂等;② 直接读 current、失败不写盘;③ 历史多份 seed 并存:只认「带
+//       /api/present.open 的现代形态」,旧形态(0.1.0-rc.5 / 0.1.1 / 0.1.2 时代,连 present.open
+//       链都没有)静默 skipped 不算 FAIL;④ 提升层 junction 与 .pnpm 实体是同一份文件,分路径
+//       重复命中由 MARK 幂等吸收。
+// 生效面: 客户端产物 —— dsh-client-hmr 每 500ms 轮询产物 mtime,改盘后**就地热重载**该模块
+//       (实测无需重启 dsh;不生效再刷新页面)。
+const PRESENTED_MENTION_MARK = '/* [dsh-desktop] R94 presented-mention-sidebar */'
+function patchPresentedMentionSidebar() {
+  const FROM = '\t\t\t\t\tconst file = deliveries.get(path);\n' +
+    '\t\t\t\t\tif (file === void 0) owner.openFile(path);\n' +
+    '\t\t\t\t\telse opener.open(sessionId, file.seq, file.index);\n' +
+    '\t\t\t\t}, (path) => t(deliveries.has(path) ? "presented.open" : "produced.open", { name: path }));'
+  const TO = '\t\t\t\t\t' + PRESENTED_MENTION_MARK + '\n' +
+    '\t\t\t\t\t// [R94] 正文提及的交付文件与产物统一走 openFile(→ sidebarRight.openResource → 侧边卡片);\n' +
+    '\t\t\t\t\t//       系统默认应用那条链仍留在交付卡片「…」菜单里(显式手势不夺,见本家族文件头)\n' +
+    '\t\t\t\t\towner.openFile(path);\n' +
+    '\t\t\t\t}, (path) => t("produced.open", { name: path }));'
+  const patchFile = (p, label) => {
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(PRESENTED_MENTION_MARK)) return { file: label, ok: true, already: true }
+    // 旧形态副本(0.1.0-rc.5 / 0.1.1 / 0.1.2 时代)连 present.open 这条链都没有 → 非活体,静默跳过
+    if (!current.includes('/api/present.open')) return { file: label, ok: true, skipped: true, reason: '旧形态(无 present.open 链),非活体副本' }
+    const { rep, failures } = makeCtx(label)
+    const c = rep(current, FROM, TO, 1, 'presented-mention-openFile')
+    if (failures.length) return { file: label, ok: false, failures: [...failures] }
+    fs.writeFileSync(p, c, 'utf8')
+    return { file: label, ok: true, already: false }
+  }
+  const results = []
+  const seen = new Set()
+  const add = (p, label) => {
+    if (typeof p !== 'string' || !p || seen.has(p)) return
+    seen.add(p)
+    if (!fs.existsSync(p)) return
+    let ver = 'local'
+    try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+    results.push({ ...patchFile(p, label), version: ver })
+  }
+  const REL = ['@deepseek-ai', 'dsh-client-ui-deliverables', 'lib', 'client.js']
+  // O: npx 缓存三层布局(提升层 .pnpm/node_modules、平铺层 node_modules、.pnpm 实体层)
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', ...REL), 'deliverables/client.js@hoist@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', ...REL), 'deliverables/client.js@flat@' + h.slice(0, 6))
+      const pnpmDir = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmDir)) continue
+      for (const d of fs.readdirSync(pnpmDir)) {
+        if (!d.startsWith('@deepseek-ai+dsh-client-ui-')) continue
+        add(path.join(pnpmDir, d, 'node_modules', ...REL), 'deliverables/client.js@pnpm@' + d.slice(-8))
+      }
+    }
+  }
+  // L: 本地 monorepo 构建产物(存在则并入;旧形态会被 skipped 掉)
+  for (const lp of ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-deliverables\\lib\\client.js',
+    path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-deliverables', 'lib', 'client.js')]) {
+    add(lp, 'deliverables/client.js@L')
+  }
+  if (!results.length) results.push({ file: 'ui-deliverables/client.js', missing: true })
+  return results
+}
+
+// ---- [R95] ui-commands 贡献形状容错(2026-09-11,用户需求后半场) ----
+// 症状: 敲 "/" 打开菜单,**系统自带命令整组不见**,只剩「技能」一组(100+ 条)。
+// 根因(活体取证): 控制台 `[ui-input-trigger] source "command" candidates failed:
+//       TypeError: contribution.description is not a function` —— 客户端 `/` 菜单按
+//       **source** 分组(`input-trigger` 的 seedGroups → MenuView,组标题取 `slash.menu`
+//       字典的 source 名: command→「指令」/ skill→「技能」)。而 `ui-commands` 的
+//       `candidates()` 里对每个客户端贡献做 `description: contribution.description()`
+//       —— **按函数调用**。本机 `dsh-file-drop` 的 `/file` 贡献把 description 写成了
+//       字符串(旧形状)⇒ 该 source 整批抛错 ⇒「指令」组渲染为空(被 MenuView 的
+//       `group.status === "ready" && items.length === 0 → null` 整组不渲染)。
+//       **一个插件的形状错误,代价是宿主自带命令全部消失** —— 这正是本家族要拆的耦合。
+// 修法: ① description 允许「函数(文档形状)或字符串(历史形状)」,非函数时按字符串渲染并
+//       `console.warn` 点名;② `available(session)` 抛错时**只跳过该条**并 `console.error`,
+//       不再连坐整组;③ 名字冲突仍保持上游的 fail-loud(`throw`),不吞真实编程错误。
+//       (根因侧同步修好: `dsh-file-drop/lib/client.js` 的 description 改回函数。)
+// 载体纪律: 与 [R94] 同款 —— 核心包客户端产物、自有 MARK 幂等、失败不写盘、只认锚点在场的
+//       副本,历史 seed 静默 skipped;改盘后需**刷新页面**才对用户生效(见 [R94] 注释与手册)。
+const COMMAND_CONTRIB_MARK = '/* [dsh-desktop] R95 contribution-shape-guard */'
+function patchCommandContributionGuard() {
+  const FROM = 'for (const contribution of this.live.contributions.values()) {\n' +
+    '\t\t\t\t\tif (!contribution.available(session)) continue;\n' +
+    '\t\t\t\t\tif (seen.has(contribution.name)) throw new Error(`ui-commands: contribution /${contribution.name} collides with a host command`);\n' +
+    '\t\t\t\t\trows.push({\n' +
+    '\t\t\t\t\t\tname: contribution.name,\n' +
+    '\t\t\t\t\t\tdescription: contribution.description()\n' +
+    '\t\t\t\t\t});\n' +
+    '\t\t\t\t}'
+  const TO = 'for (const contribution of this.live.contributions.values()) {\n' +
+    '\t\t\t\t\t' + COMMAND_CONTRIB_MARK + '\n' +
+    '\t\t\t\t\t// [R95] 形状容错:历史字符串 description 照常渲染、available 抛错只跳过本条 —— 见家族文件头\n' +
+    '\t\t\t\t\tlet r95Usable = false;\n' +
+    '\t\t\t\t\ttry { r95Usable = !!contribution.available(session); }\n' +
+    '\t\t\t\t\tcatch (error) { console.error(`[ui-commands] contribution /${contribution.name} availability check threw; skipped`, error); continue; }\n' +
+    '\t\t\t\t\tif (!r95Usable) continue;\n' +
+    '\t\t\t\t\tif (seen.has(contribution.name)) throw new Error(`ui-commands: contribution /${contribution.name} collides with a host command`);\n' +
+    '\t\t\t\t\tconst r95Describe = contribution.description;\n' +
+    '\t\t\t\t\tif (typeof r95Describe !== "function") console.warn(`[ui-commands] contribution /${contribution.name} declares a non-function description; rendering it verbatim`);\n' +
+    '\t\t\t\t\trows.push({\n' +
+    '\t\t\t\t\t\tname: contribution.name,\n' +
+    '\t\t\t\t\t\tdescription: typeof r95Describe === "function" ? r95Describe() : String(r95Describe ?? "")\n' +
+    '\t\t\t\t\t});\n' +
+    '\t\t\t\t}'
+  const patchFile = (p, label) => {
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(COMMAND_CONTRIB_MARK)) return { file: label, ok: true, already: true }
+    if (!current.includes(FROM)) return { file: label, ok: true, skipped: true, reason: '该副本无此形状的 contributions 循环(非活体/版本不同)' }
+    const { rep, failures } = makeCtx(label)
+    const c = rep(current, FROM, TO, 1, 'contribution-shape-guard')
+    if (failures.length) return { file: label, ok: false, failures: [...failures] }
+    fs.writeFileSync(p, c, 'utf8')
+    return { file: label, ok: true, already: false }
+  }
+  const results = []
+  const seen = new Set()
+  const add = (p, label) => {
+    if (typeof p !== 'string' || !p || seen.has(p)) return
+    seen.add(p)
+    if (!fs.existsSync(p)) return
+    let ver = 'local'
+    try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+    results.push({ ...patchFile(p, label), version: ver })
+  }
+  const REL = ['@deepseek-ai', 'dsh-client-ui-commands', 'lib', 'client.js']
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', ...REL), 'ui-commands/client.js@hoist@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', ...REL), 'ui-commands/client.js@flat@' + h.slice(0, 6))
+      const pnpmDir = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmDir)) continue
+      for (const d of fs.readdirSync(pnpmDir)) {
+        if (!d.startsWith('@deepseek-ai+dsh-client-ui-')) continue
+        add(path.join(pnpmDir, d, 'node_modules', ...REL), 'ui-commands/client.js@pnpm@' + d.slice(-8))
+      }
+    }
+  }
+  for (const lp of ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-commands\\lib\\client.js',
+    path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-commands', 'lib', 'client.js')]) {
+    add(lp, 'ui-commands/client.js@L')
+  }
+  if (!results.length) results.push({ file: 'ui-commands/client.js', missing: true })
+  return results
+}
+
+// ---- [R96] `/` 菜单第三方分组标题本地化(2026-09-11,用户需求①) ----
+// 症状: 敲 "/" 打开候选菜单,第三组标题显示**裸源名**「genui」,与「指令」「技能」不一致 ——
+//       全菜单唯一一个没本地化的组(源来自市场插件 @changfenhuang/dsh-genui 的 /panel)。
+// 根因(活体取证): 组标题 = `ui-input-trigger` 的 MenuView 渲染 `t(group.source)`,其中 `t`
+//       绑定命名空间 `slash.menu`;字典查不到该源名就**回落到键本身** —— 框架 locales.js 注释
+//       原文: 「the lookup chain returns the key itself, so an unknown source shows its raw
+//       name」。而 `slash.menu` 字典由 `ui-input-trigger` **独家**注册
+//       (`ctx.locale.register(MENU_NS, { zh, en })`),locale 服务对「同命名空间 + 同语言」是
+//       **唯一占用**(重复注册即 throw `locale namespace "slash.menu" already has
+//       locale "zh"`)⇒ 插件侧**没有**任何官方途径给自己的源名补标题。
+// 上游自身做法: 把**他包**的源名也登记进这张字典 —— 实证: 字典里已有
+//       `"subagent": "子智能体"`,而 subagent 源并不属于 input-trigger。本家族沿用同一套路,
+//       为 genui 源补 zh/en 标题。
+// 边界: 只加键,不动渲染逻辑与其它键;zh/en **同时**补齐(上游注释声明 en 的键集与 zh 完整
+//       对齐,单边加键会破坏该不变式);上游哪天自带 genui 标题则本家族让位(见 already 分支)。
+//       genui 改名/卸载后,这枚键退化为无害死键。
+// 锚点: 用「字典开启行」(`\t\tconst zh = {` / `\t\tconst en = {`)而非某个条目 —— 两代产物
+//       实测各命中 1 次(0.1.5 seed 的「指令」版 + 本机 monorepo 的 0.1.2「命令」版),
+//       比条目锚点抗版本漂移。
+// 载体纪律: 与 [R94]/[R95] 同款 —— 核心包客户端产物、自有 MARK 幂等、失败不写盘、只认锚点
+//       在场的副本(历史 seed 静默 skipped);改盘后**需刷新页面**才对用户生效。
+const SLASH_TITLE_MARK = '/* [dsh-desktop] R96 slash-menu-group-titles */'
+function patchSlashMenuGroupTitles() {
+  const TITLE_ZH = 'GenUI 面板'
+  const TITLE_EN = 'GenUI panel'
+  const FROM_ZH = '\t\tconst zh = {\n'
+  const TO_ZH = '\t\tconst zh = {\n' +
+    '\t\t\t' + SLASH_TITLE_MARK + '\n' +
+    '\t\t\t// [R96] genui 源(= @changfenhuang/dsh-genui 的 /panel 组)标题;上游同款:他包源名也登记在本字典\n' +
+    '\t\t\t"genui": "' + TITLE_ZH + '",\n'
+  const FROM_EN = '\t\tconst en = {\n'
+  const TO_EN = '\t\tconst en = {\n' +
+    '\t\t\t"genui": "' + TITLE_EN + '",\n'
+  const patchFile = (p, label) => {
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(SLASH_TITLE_MARK)) return { file: label, ok: true, already: true }
+    // 上游哪天自己把 genui 登记进字典 → 本家族让位(不重复插键)
+    if (current.includes('"genui": "')) return { file: label, ok: true, already: true, reason: '上游已自带 genui 标题,本家族让位' }
+    // 只认「带 slash.menu 字典」的现代形态;没有该字典的历史副本静默 skipped(不算 FAIL)
+    if (!current.includes('slash.menu') || !current.includes(FROM_ZH) || !current.includes(FROM_EN)) {
+      return { file: label, ok: true, skipped: true, reason: '该副本无 slash.menu 的 zh/en 字典(非活体/版本不同)' }
+    }
+    const { rep, failures } = makeCtx(label)
+    let c = rep(current, FROM_ZH, TO_ZH, 1, 'slash-menu-zh-title')
+    c = rep(c, FROM_EN, TO_EN, 1, 'slash-menu-en-title')
+    if (failures.length) return { file: label, ok: false, failures: [...failures] }
+    fs.writeFileSync(p, c, 'utf8')
+    return { file: label, ok: true, already: false }
+  }
+  const results = []
+  const seen = new Set()
+  const add = (p, label) => {
+    if (typeof p !== 'string' || !p || seen.has(p)) return
+    seen.add(p)
+    if (!fs.existsSync(p)) return
+    let ver = 'local'
+    try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+    results.push({ ...patchFile(p, label), version: ver })
+  }
+  const REL = ['@deepseek-ai', 'dsh-client-ui-input-trigger', 'lib', 'client.js']
+  // O: npx 缓存三层布局(提升层 .pnpm/node_modules、平铺层 node_modules、.pnpm 实体层)
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', ...REL), 'slash-titles/client.js@hoist@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', ...REL), 'slash-titles/client.js@flat@' + h.slice(0, 6))
+      const pnpmDir = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmDir)) continue
+      for (const d of fs.readdirSync(pnpmDir)) {
+        if (!d.startsWith('@deepseek-ai+dsh-client-ui-')) continue
+        add(path.join(pnpmDir, d, 'node_modules', ...REL), 'slash-titles/client.js@pnpm@' + d.slice(-8))
+      }
+    }
+  }
+  // L: 本机 monorepo 构建产物(lib/ 在 .gitignore 内,改动 git-clean;与 [R94]/[R95] 同款)
+  for (const lp of ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-input-trigger\\lib\\client.js',
+    path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-input-trigger', 'lib', 'client.js')]) {
+    add(lp, 'slash-titles/client.js@L')
+  }
+  if (!results.length) results.push({ file: 'ui-input-trigger/client.js', missing: true })
+  return results
+}
+
+// ---- [R97] `/` 菜单分组标题措辞改写(2026-09-11,用户需求②) ----
+// 需求: 把「指令」改成「系统指令」、「技能」改成「技能与能力」(主人接 [R96] 之后选的第二个可选项)。
+// 事实: 这两串就是 `slash.menu` 字典里 `command` / `skill` 两枚键的**值**(载体与理由同 [R96] ——
+//       组标题 = `t(group.source)`),所以本家族**只改值、不动键集**: 键集是上游声明的不变式
+//       (zh 是键集真相源 + en 完整对齐),改键会破坏它。
+// 成对: zh/en 两侧同步改(英文侧「Commands」→「System commands」、「Skills」→「Skills &
+//       capabilities」),否则英文界面仍是旧措辞 —— 与 [R96] 的成对纪律同源。
+// 世代判据(实测两代措辞): 0.1.0/0.1.1 系列是「命令」(27 份历史 seed),0.1.2+ 才改成「指令」
+//       (6 份: 0.1.2-alpha.5 ×2 / 0.1.2-rc.1 ×2 / 0.1.5-rc.1 ×2)。本家族只改**目标世代**
+//       (`"command": "指令"`),「命令」世代静默 skipped;既非目标措辞又非已知历史措辞 ⇒ FAIL
+//       待人工研判(比「锚点没了就 FAIL」温和,又不至于把上游改措辞吞掉)。
+// 载体纪律: 同 [R94]/[R95]/[R96] —— 核心包客户端产物、自有 MARK 幂等、失败不写盘、
+//       改盘后**需刷新页面**才对用户生效。
+const SLASH_WORDING_MARK = '/* [dsh-desktop] R97 slash-menu-title-wording */'
+function patchSlashMenuGroupTitleWording() {
+  const FROM_ZH = '\t\t\t"command": "指令",\n\t\t\t"skill": "技能",\n'
+  const TO_ZH = '\t\t\t' + SLASH_WORDING_MARK + '\n' +
+    '\t\t\t// [R97] 组标题措辞(用户需求②):「指令」→「系统指令」、「技能」→「技能与能力」;只改值、键集不动\n' +
+    '\t\t\t"command": "系统指令",\n\t\t\t"skill": "技能与能力",\n'
+  const FROM_EN = '\t\t\t"command": "Commands",\n\t\t\t"skill": "Skills",\n'
+  const TO_EN = '\t\t\t"command": "System commands",\n\t\t\t"skill": "Skills & capabilities",\n'
+  const LEGACY_ZH = '"command": "命令",'
+  const patchFile = (p, label) => {
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(SLASH_WORDING_MARK)) return { file: label, ok: true, already: true }
+    if (!current.includes('slash.menu') || !current.includes('const zh = {')) {
+      return { file: label, ok: true, skipped: true, reason: '该副本无 slash.menu 的 zh 字典(非活体/版本不同)' }
+    }
+    if (!current.includes(FROM_ZH)) {
+      if (current.includes(LEGACY_ZH)) return { file: label, ok: true, skipped: true, reason: '历史世代措辞(0.1.0/0.1.1 的「命令」),本家族不改' }
+      return { file: label, ok: false, failures: [`[${label}] slash-menu-zh-wording: 措辞既非目标形态(「指令」)也非已知历史形态(「命令」),待人工研判`] }
+    }
+    const { rep, failures } = makeCtx(label)
+    let c = rep(current, FROM_ZH, TO_ZH, 1, 'slash-menu-zh-wording')
+    c = rep(c, FROM_EN, TO_EN, 1, 'slash-menu-en-wording')
+    if (failures.length) return { file: label, ok: false, failures: [...failures] }
+    fs.writeFileSync(p, c, 'utf8')
+    return { file: label, ok: true, already: false }
+  }
+  const results = []
+  const seen = new Set()
+  const add = (p, label) => {
+    if (typeof p !== 'string' || !p || seen.has(p)) return
+    seen.add(p)
+    if (!fs.existsSync(p)) return
+    let ver = 'local'
+    try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+    results.push({ ...patchFile(p, label), version: ver })
+  }
+  const REL = ['@deepseek-ai', 'dsh-client-ui-input-trigger', 'lib', 'client.js']
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', ...REL), 'slash-wording/client.js@hoist@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', ...REL), 'slash-wording/client.js@flat@' + h.slice(0, 6))
+      const pnpmDir = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmDir)) continue
+      for (const d of fs.readdirSync(pnpmDir)) {
+        if (!d.startsWith('@deepseek-ai+dsh-client-ui-')) continue
+        add(path.join(pnpmDir, d, 'node_modules', ...REL), 'slash-wording/client.js@pnpm@' + d.slice(-8))
+      }
+    }
+  }
+  for (const lp of ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-input-trigger\\lib\\client.js',
+    path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-input-trigger', 'lib', 'client.js')]) {
+    add(lp, 'slash-wording/client.js@L')
+  }
+  if (!results.length) results.push({ file: 'ui-input-trigger/client.js', missing: true })
+  return results
+}
+
 // ---- [B] dsh-node-nav ----
 function patchNodeNav() {
   const p = path.join(PLUGINS, 'dsh-node-nav', 'client.js')
@@ -372,6 +897,17 @@ function patchNodeNav() {
       '\t\t\t\tschedule()\n\t\t\t\tconst mo = typeof MutationObserver === \'function\'\n\t\t\t\t\t? new MutationObserver(() => { schedule() })\n\t\t\t\t\t: null',
       '\t\t\t\tschedule()\n\t\t\t\t// [dsh-desktop] R77: DOM 变化 → rAF 合流 + 锚点数签名门控,签名不变不重拉。\n\t\t\t\t// 流式 token 变更每帧触发 body MO,原实现每 800ms 强制全量重拉白耗;\n\t\t\t\t// 用户消息集合只在「加载历史/新消息」时变化,两者都会改变锚点行总数。\n\t\t\t\tlet lastSig = document.querySelectorAll(\'[data-chat-anchor-key]\').length\n\t\t\t\tlet sigRaf = 0\n\t\t\t\tconst mo = typeof MutationObserver === \'function\'\n\t\t\t\t\t? new MutationObserver(() => {\n\t\t\t\t\t\tif (sigRaf !== 0) return\n\t\t\t\t\t\tsigRaf = requestAnimationFrame(() => {\n\t\t\t\t\t\t\tsigRaf = 0\n\t\t\t\t\t\t\tconst sig = document.querySelectorAll(\'[data-chat-anchor-key]\').length\n\t\t\t\t\t\t\tif (sig !== lastSig) { lastSig = sig; schedule() }\n\t\t\t\t\t\t})\n\t\t\t\t\t})\n\t\t\t\t\t: null',
       1, 'users-refetch-gate')
+    // ---- [B13 2026-09-12] 会话切换即时拉取(用户需求:历史会话节点与切换会话同时加载) ----
+    // 原实现(上游 0.2.3 形态):fetch 效应内「初始 schedule()」与「MO 重拉」走同一条
+    // 800ms 防抖 —— 切会话后圆点固定晚 800ms+请求时延才出现,永远比消息内容慢一拍。
+    // 本批把「切换触发」与「DOM 变化触发」分流:effect 重跑(=会话切换)那一刻立即发请求,
+    // 与服务端读日志、消息列表渲染并行;缓存已有该会话名单时先上屏(切回最近访问的会话
+    // 瞬时可见),随后 force 重拉校正(SWR 语义)。800ms 防抖只保留给 MO 签名门控触发的
+    // 重拉,流式期行为零变化。
+    c = rep(c,
+      '\t\t\t\tconst schedule = () => {\n\t\t\t\t\tif (timer !== 0) window.clearTimeout(timer)\n\t\t\t\t\ttimer = window.setTimeout(fetchUsers, 800)\n\t\t\t\t}\n\t\t\t\tschedule()',
+      '\t\t\t\tconst schedule = () => {\n\t\t\t\t\tif (timer !== 0) window.clearTimeout(timer)\n\t\t\t\t\ttimer = window.setTimeout(fetchUsers, 800)\n\t\t\t\t}\n\t\t\t\t// [dsh-desktop B13 2026-09-12] 会话切换即时拉取(用户需求:历史节点与切换会话同时\n\t\t\t\t// 加载):800ms 防抖只该作用于 DOM 变化重拉(流式 token/加载历史),不该作用于切换\n\t\t\t\t// 本身——原实现切会话后圆点固定晚 800ms+请求时延,永远比消息内容慢一拍。改为\n\t\t\t\t// effect 重跑(=会话切换)那一刻立即发请求,与服务端读日志、消息列表渲染并行;\n\t\t\t\t// 缓存已有该会话名单时先上屏(切回最近会话瞬时可见),随后 force 重拉校正(SWR);\n\t\t\t\t// 800ms 防抖保留给 MO 签名门控触发的重拉,流式期行为不变。\n\t\t\t\tconst cachedUsers = typeof sessionId === \'string\' && sessionId !== \'\' ? usersCache.get(sessionId) : undefined\n\t\t\t\tif (cachedUsers !== undefined) setRemoteUsers(cachedUsers.map((u) => ({ id: u.id, time: u.time, text: u.text })))\n\t\t\t\tfetchUsers()',
+      1, 'switch-immediate-fetch')
     c = rep(c,
       '\t\t\t\t\tlet best = -1\n\t\t\t\t\tlet bestTop = Number.POSITIVE_INFINITY\n\t\t\t\t\tfor (let i = 0; i < roster.length; i++) {\n\t\t\t\t\t\tconst el = roster[i].el\n\t\t\t\t\t\tif (el === null || el === undefined) continue\n\t\t\t\t\t\tconst top = el.getBoundingClientRect().top\n\t\t\t\t\t\tif (top >= 0 && top < bestTop) { bestTop = top; best = i }\n\t\t\t\t\t}\n',
       '\t\t\t\t\tlet best = -1\n\t\t\t\t\t// [dsh-desktop] R77: roster 按 seq 有序=文档序,首个 top>=0 即视口顶行,早退;\n\t\t\t\t\t// 原全量 gBCR 扫描在长会话每个滚动帧 O(n) 触发布局查询。\n\t\t\t\t\tfor (let i = 0; i < roster.length; i++) {\n\t\t\t\t\t\tconst el = roster[i].el\n\t\t\t\t\t\tif (el === null || el === undefined) continue\n\t\t\t\t\t\tif (el.getBoundingClientRect().top >= 0) { best = i; break }\n\t\t\t\t\t}\n',
@@ -442,6 +978,53 @@ function patchNodeNav() {
       '\t\tfunction userRows() {\n\t\t\treturn [...document.querySelectorAll(\'[data-time-hover-root]\')].filter((row) =>\n\t\t\t\t!row.hasAttribute(\'data-pending-steering\') && row.querySelector(\'[class*="bubble"]\') !== null)\n\t\t}',
       '\t\tfunction userRows() {\n\t\t\t// [R91 alpha.5 适配 2026-09-04] data-time-hover-root 在 alpha.5 会话流已消失;\n\t\t\t// 锚点行(key 含 input-message)+ data-chat-flow-kind===\'user\' 过滤——排除 上下文注入\n\t\t\t// (context)/系统提示词(system-prompt)等 user 角色合成消息,只留真实用户输入,\n\t\t\t// 语义对齐旧服务端 source.kind===\'user\'(q187 实证)。旧核回退原选择器。\n\t\t\tconst anchorRows = [...document.querySelectorAll(\'[data-chat-anchor-key]\')].filter((row) =>\n\t\t\t\t(row.getAttribute(\'data-chat-anchor-key\') || \'\').indexOf(\'input-message\') !== -1)\n\t\t\tif (anchorRows.length > 0) {\n\t\t\t\tconst real = anchorRows.filter((row) => row.getAttribute(\'data-chat-flow-kind\') === \'user\')\n\t\t\t\tif (real.length > 0) return real\n\t\t\t\treturn anchorRows\n\t\t\t}\n\t\t\treturn [...document.querySelectorAll(\'[data-time-hover-root]\')].filter((row) =>\n\t\t\t\t!row.hasAttribute(\'data-pending-steering\') && row.querySelector(\'[class*="bubble"]\') !== null)\n\t\t}',
       1, 'alpha5-userrows-anchors')
+    // ---- [P2/T2-1 2026-09-11] 静置嗡嗡声根治:摘除「details 避让」3s 量测循环 ----
+    // 归因(CDP 静置 10s 帧直方图):11 帧 >18ms、其中 5 次 53-70ms 大帧,周期 ≈3s ——
+    // 与本文件 330-345 的 setInterval(measure, 3000) 精确吻合。measure 读
+    // getComputedStyle(frame).gridTemplateColumns:该读取本身是样式查询,但此时样式/布局
+    // 已被流式 token 的 1s 级重渲染弄脏 ⇒ 每次强制全帧样式重算(空转期零交互却持续掉帧)。
+    // 摘除依据(**强于原定 RO 化改造**):measure 的唯一消费者是 rail 内联
+    //   style:{right: detailsWidth > 0 ? detailsWidth + 18 : 28}
+    // —— 该行已被本家族 [B1] rail-inline 替换为 style:{left:"292px"}(rail 从右缘迁到
+    // 聊天区左缘)。⇒ 补丁态下 detailsWidth 是**只写不读的死状态**:3s 回流的全部代价
+    // 换零收益。RO 化只是把「死计算」升级成「事件驱动的死计算」,故直接整体摘除。
+    // 行为零变化证明:detailsWidth 的全部 3 处引用(声明/写/读)中「读」已在 [B1] 消失,
+    // 本批移除「写」(量测块)与「声明」(state),组件对外可观测行为完全不变。
+    // [V-F4 影响] 「details 避让宽度」职责随之失效 —— 已由 [B1] + dshvt posOnce 接管:
+    // rail 现居左缘,与右侧 details 面板无重叠关系;侧栏开合/窗口缩放的跟贴由 dshvt
+    // 的 RO + 兜底 tick 负责(node-nav 侧不再参与定位)。
+    c = rep(c,
+      '\t\t\t// details 避让\n\t\t\treact.useEffect(() => {\n\t\t\t\tconst measure = () => {\n\t\t\t\t\tconst rail = railRef.current\n\t\t\t\t\tif (rail === null) return\n\t\t\t\t\tconst overlay = rail.closest("[data-shell-overlay]")\n\t\t\t\t\tconst frame = overlay === null ? null : overlay.parentElement\n\t\t\t\t\tif (frame === null) return\n\t\t\t\t\tconst cols = (window.getComputedStyle(frame).gridTemplateColumns || "").split(" ")\n\t\t\t\t\tconst w = parseFloat(cols[2] || "0") || 0\n\t\t\t\t\tsetDetailsWidth((prev) => (prev === w ? prev : w))\n\t\t\t\t}\n\t\t\t\tconst timer = window.setInterval(measure, 3000)\n\t\t\t\tmeasure()\n\t\t\t\treturn () => window.clearInterval(timer)\n\t\t\t}, [])',
+      '\t\t\t// [dsh-desktop P2/T2-1 2026-09-11] 原「details 避让」3s 量测循环已整体摘除:\n\t\t\t// 其唯一消费者 rail 内联 style:{right: detailsWidth...} 已由 [B1] rail-inline\n\t\t\t// 改为 left:"292px" ⇒ detailsWidth 只写不读(死状态),3s 一次\n\t\t\t// getComputedStyle(gridTemplateColumns) 在布局被流式重渲染弄脏后强制全帧\n\t\t\t// 样式重算,是「静置每 ~3s 一次 53-70ms 大帧」的直因。摘除后行为零变化。',
+      1, 'details-measure-removed')
+    // 同批移除随之失去全部引用的 state 声明(死状态清理,避免留半截)
+    c = rep(c,
+      '\t\t\tconst [detailsWidth, setDetailsWidth] = react.useState(0)\n',
+      '',
+      1, 'details-width-state-removed')
+    // ---- [b159 2026-09-11] 节点渲染双保险批(用户报告:节点错误渲染到工作区顶部
+    // deepseek logo 处 + 历史节点显示不出) ----
+    // 现象①实证(CDP + 像素级比对用户截图):插件 CSS_TEXT 在未知触发下整体丢失
+    // (观测到 display:block/position:static/width:1256px 的退化态),rail 失去
+    // fixed 定位 → 退化为文档流元素 → 渲染进 shell.overlay 层顶部(y=0)= 工作区
+    // 顶部品牌区(橙棕 active dot + 灰色 line 叠在 deepseek logo 旁,即用户图2)。
+    // 本批给插件侧补两道防线:dshvt 必加载面已另给定位骨架兜底(CSS 数组 b159 条目),
+    // 这里补「样式自愈」+ CSS_TEXT 内矮视口钳制,与 dshvt 互不依赖。
+    c = rep(c,
+      '\t\t\t\tconst style = document.createElement("style")\n\t\t\t\tstyle.textContent = CSS_TEXT\n\t\t\t\tdocument.head.appendChild(style)',
+      '\t\t\t\tconst style = document.createElement("style")\n\t\t\t\tstyle.textContent = CSS_TEXT\n\t\t\t\tdocument.head.appendChild(style)\n\t\t\t\t// [b159 2026-09-11] 样式自愈:插件 CSS 被外部机制移除(实证:未知触发下 rail\n\t\t\t\t// 失去 fixed 定位、退化为文档流渲染进顶栏品牌区)时,2s 内检查并重新挂载,\n\t\t\t\t// 与 dshvt 必加载面骨架兜底互为双保险。\n\t\t\t\tconst styleGuard = window.setInterval(function () {\n\t\t\t\t\tif (!style.isConnected) document.head.appendChild(style)\n\t\t\t\t}, 2000)',
+      1, 'style-self-heal')
+    c = rep(c,
+      '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeHistory()\n\t\t\t\t\toffSlot()\n\t\t\t\t\tif (style.isConnected) style.remove()',
+      '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeHistory()\n\t\t\t\t\toffSlot()\n\t\t\t\t\twindow.clearInterval(styleGuard)\n\t\t\t\t\tif (style.isConnected) style.remove()',
+      1, 'style-self-heal-cleanup')
+    // 插件 CSS_TEXT 里给 rail 的 top 加矮视口钳制(顶栏 ~90px,rail 半高 ~50px):常规
+    // 视口保持 top:50% 居中零变化;窗口过矮时 rail 夹在 [96px, 100vh-120px] 区间,
+    // 不再以 50% 直接撞进 deepseek 品牌区。dshvt 侧同款规则互为双保险。
+    c = rep(c,
+      '@media (prefers-reduced-motion: reduce) {\n  .dsh-node-nav-dot, .dsh-node-nav-preview, .dsh-node-nav-bottom, .dsh-node-nav-miss { transition: none; animation: none; }\n}\n`',
+      '@media (prefers-reduced-motion: reduce) {\n  .dsh-node-nav-dot, .dsh-node-nav-preview, .dsh-node-nav-bottom, .dsh-node-nav-miss { transition: none; animation: none; }\n}\n@media (max-height:420px){.dsh-node-nav-rail{top:max(96px,min(50%,calc(100vh - 120px)))!important;transform:none!important}}\n`',
+      1, 'rail-short-viewport-clamp')
     return c
   }
 
@@ -452,13 +1035,47 @@ function patchNodeNav() {
   return [{ ...rewrite(p, '.bak-left', apply, failures, null), version: ver }]
 }
 
+// ---- [b159] dsh-node-nav host 半部 0.1.5 数据源适配守护(2026-09-11) ----
+// 用户报告「节点显示不出历史节点」根因:0.1.5(alpha.5+)中 sessions.get().events
+// 同步数组已死(storage 迁 SQLite,官方 dsh-session-log-export 已改用 persistence
+// 读句柄通道),node-nav 服务端 /api/users 恒回 {users:[]}(实测:带 session- 前缀
+// 400、裸 uuid 恒空)→ 客户端永远回退 DOM 扫描 → 压缩会话(manual-compaction 后
+// 无 input-message 行)/虚拟列表会话「历史节点显示不出」。
+// 适配:读事件改走官方 sessionPersistence.open(id,'read') → handle.read(0) 通道
+// (结构与 dsh-session-log-export 的 flushLiveSessionLog+readSessionLogText 同构),
+// live 会话先过 sessions.flush 屏障;旧核无该服务时回退旧 sessions.get().events。
+// 客户端已剥 session- 前缀,host 侧再剥一层双保险。基底 .bak-b159 = 原版 0.2.3;
+// 市场更新覆盖后守护自动重打。生效面 = host,改完需重启 dsh。
+function patchNodeNavHost() {
+  const p = path.join(PLUGINS, 'dsh-node-nav', 'index.js')
+  if (!fs.existsSync(p)) return [{ file: 'dsh-node-nav/index.js', missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-node-nav', 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const { rep, failures } = makeCtx('node-nav/index.js')
+  const apply = (c) => {
+    // 插入 readEvents 通道函数(应用函数前)
+    c = rep(c,
+      'export function apply(ctx) {',
+      '/**\n * [b159] 读取会话完整事件日志(0.1.5 适配)。\n * 首选官方 sessionPersistence 读句柄通道(dsh-session-log-export 同款);\n * live 会话先过 flush 屏障读到已提交前缀;旧核无该服务时回退 sessions.get().events。\n * 返回事件数组;会话不存在 / 读取失败返回 undefined(调用方回落空列表)。\n */\nasync function readEvents(ctx, id) {\n\t// [b159 双通道] 会话目录命名随格式换代:0.1.5 新格式目录带 session- 前缀\n\t// (persistence.open 按原样寻址),老格式目录是裸 uuid——先按客户端原始 id 试,\n\t// 打不开再试剥前缀/加前缀的另一形态,新旧格式通吃。\n\tconst persistence = ctx.get(\'sessionPersistence\') || ctx.sessionPersistence\n\tif (persistence !== undefined) {\n\t\tconst candidates = [id, id.indexOf(\'session-\') === 0 ? id.slice(8) : \'session-\' + id]\n\t\tfor (const cand of candidates) {\n\t\t\ttry {\n\t\t\t\t// live 会话先过 flush 屏障:persistence 读的是已落盘的 committed log,\n\t\t\t\t// flush 保证 in-memory 尾部也进入读视野(官方 flushLiveSessionLog 同款)。\n\t\t\t\tconst live = ctx.sessions.get(cand)\n\t\t\t\tif (live !== undefined && typeof ctx.sessions.flush === \'function\') {\n\t\t\t\t\ttry { await ctx.sessions.flush(live) } catch (e) { /* flush 失败不阻塞读盘 */ }\n\t\t\t\t}\n\t\t\t\tconst handle = await persistence.open(cand, \'read\')\n\t\t\t\ttry {\n\t\t\t\t\tconst { events } = await handle.read(0, undefined)\n\t\t\t\t\treturn events\n\t\t\t\t} finally {\n\t\t\t\t\tawait handle.close()\n\t\t\t\t}\n\t\t\t} catch (e) {\n\t\t\t\t// 该候选 id 不存在/打不开 → 试下一个形态\n\t\t\t}\n\t\t}\n\t\treturn undefined\n\t}\n\tconst session = ctx.sessions.get(id)\n\treturn session === undefined ? undefined : (session.events || [])\n}\n\nexport function apply(ctx) {',
+      1, 'host-read-events-fn')
+    // 读取段改造:剥前缀 + 走 readEvents
+    c = rep(c,
+      "    const sessionId = url.searchParams.get('sessionId') ?? ''\n    const session = sessionId === '' ? undefined : ctx.sessions.get(sessionId)\n    if (session === undefined) {\n      res.writeHead(200, JSON_HEADERS)\n      res.end(JSON.stringify({ users: [] }))\n      return\n    }\n    const users = []\n    for (const event of session.events) {",
+      "    const sessionId = url.searchParams.get('sessionId') ?? ''\n    // [R91/b159] 客户端会话 id 带 session- 前缀,存储层只认裸 uuid(前缀 400)→ 双保险剥离\n    const bareId = sessionId.indexOf('session-') === 0 ? sessionId.slice(8) : sessionId\n    if (bareId === '') {\n      res.writeHead(200, JSON_HEADERS)\n      res.end(JSON.stringify({ users: [] }))\n      return\n    }\n    const events = await readEvents(ctx, bareId)\n    if (events === undefined) {\n      res.writeHead(200, JSON_HEADERS)\n      res.end(JSON.stringify({ users: [] }))\n      return\n    }\n    const users = []\n    for (const event of events) {",
+      1, 'host-async-read')
+    return c
+  }
+  return [{ ...rewrite(p, '.bak-b159', apply, failures, null), version: ver }]
+}
+
 // ---- [T] @anionex/dsh-turn-rewind alpha.5 适配守护(2026-09-03,问题130) ----
 // 上游 0.2.1 lib/settings.js 顶层 named import installSettingsSection/settingsNamespace
 // (@deepseek-ai/dsh-settings 0.1.2-alpha.5 已移除)→ 插件市场更新重装覆盖本地适配后,
 // loader entry 崩加载拖垮整棵插件树 → dsh web 无法启动(2026-09-03 17:09 实证 5 连败)。
 // 本地深适配(批次 88c + 17:51 复发修复,备份 .bak-alpha5-q131)经此段守护,三种形态分流:
 //   已适配(哨兵行在场) → already 跳过;官方原版(特征 import 在场) → 重打为注入式注册;
-//   未知形态(上游新版/半态) → FAIL 保留原样不写盘(红色 canary,等作者适配版或人工研判)。
+//   其余形态 → 再按「能力」判(批次 144 修订):**不引用 dsh-settings** ⇒ skipped 安全跳过
+//   (上游 0.3.5 已自适配);仍引用却是陌生形态 ⇒ FAIL 保留原样不写盘(红色 canary,等人工研判)。
 // 自实现幂等(不借用 rewrite 基底):重复应用时 FROM 锚点已不存在会 FAIL 拒写,无半补丁态。
 function patchTurnRewind() {
   const dir = path.join(PLUGINS, '@anionex', 'dsh-turn-rewind')
@@ -472,7 +1089,18 @@ function patchTurnRewind() {
   if (current.includes(MARK)) return [{ file: '@anionex/dsh-turn-rewind/lib/settings.js', version: ver, ok: true, already: true }]
   const UPSTREAM_ANCHOR = "import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings';"
   if (!current.includes(UPSTREAM_ANCHOR)) {
-    return [{ file: '@anionex/dsh-turn-rewind/lib/settings.js', version: ver, ok: false, failures: ['[turn-rewind] settings.js 非官方原版亦非已适配形态(上游新版/半态?),保留原样不写盘'] }]
+    // [批次144 2026-09-10] 守卫判据由「形态」升级为「能力」:只看**还引不引用
+    // @deepseek-ai/dsh-settings**。理由:上游 0.3.5 已自行完成同一适配——裸字符串 NS 常量
+    // (`TURN_REWIND_SETTINGS_NAMESPACE = 'turn-rewind'`,源码注释明写「DSH 0.1.5 removed the
+    // settingsNamespace helper」)+ `ctx.inject(['settings'], …)` + 优先 `provider.installSection(...)`
+    // (0.1.5 的 dsh-settings 确有该 API,lib/index.js:327)——正是本段想做的事。
+    // 不引用该包 ⇒ 「导入已移除导出 → loader entry 崩加载 → cordis:include 全有或全无拖垮整树」
+    // 这条引线**不存在**,守护退化为安全跳过(不再是红色 canary,消除每 45s 的假 FAIL 噪音)。
+    // 反之,仍引用该包却是陌生形态(未来半态/新写法)⇒ 保持 FAIL 保留原样不写盘,等人工研判。
+    if (!current.includes('@deepseek-ai/dsh-settings')) {
+      return [{ file: '@anionex/dsh-turn-rewind/lib/settings.js', version: ver, ok: true, skipped: true, reason: '上游已自适配(不再引用 dsh-settings),无需守护' }]
+    }
+    return [{ file: '@anionex/dsh-turn-rewind/lib/settings.js', version: ver, ok: false, failures: ['[turn-rewind] settings.js 仍引用 @deepseek-ai/dsh-settings 但形态陌生(上游新版/半态?),保留原样不写盘'] }]
   }
   let c = current
   // A: 顶层 named import 行摘除(alpha.5 无 installSettingsSection/settingsNamespace 导出)
@@ -535,6 +1163,357 @@ function patchEgoBrowserSettings() {
   if (failures.length) return [{ file: 'dsh-ego-browser/lib/index.js', version: ver, ok: false, failures: [...failures], kept: true }]
   fs.writeFileSync(p, c, 'utf8')
   return [{ file: 'dsh-ego-browser/lib/index.js', version: ver, ok: true, already: false }]
+}
+
+// ---- [X] dsh-ego-browser ensureWorker spawn 缺 cwd/env(2026-09-11,批次146) ----
+// 与 [T2] **同文件不同语义**,按手册 §2.4「同文件第二家族」形态落笔:自有 MARK 幂等,
+// 绝不复用 [T2] 哨兵(否则 [T2] 头部 already 快通道会把本段整个跳掉)。无 .bak 基底:
+// 本文件由插件市场整份覆盖,.bak 会陈旧误导;幂等靠「自有 MARK + 上游锚点」双判据。
+// 根因(2026-09-11 实证,@deepseek-ai/dsh-subprocess-local):
+//   targetEnvironment() 内 `validateNoNullByte('options.cwd', spec.cwd)` 对 undefined 执行
+//   `undefined.includes('\0')` → TypeError;而本插件这次 spawn 只给了 argv/stdio/graceMs,
+//   既无 cwd 也无 env —— 对比同文件 runEgoScript 的 spawn(cwd+env 齐备,故 ego_* 工具一直正常)。
+// 后果:ensureWorker() 恒走 catch 返回 null,异常被 `.catch(() => null)` 静默吞掉(零日志)⇒
+//   无 worker 进程、无 ego-cast.json、GET /api/ego/spaces 回 {reason:'no live agent browser'},
+//   观测台恒显「暂无活跃浏览器页/没有显示任何画面」。
+// 修法:补 `cwd: process.cwd()` + `env: process.env`(与 ego 工具轨同形)。
+// 生效方式:host 面 → 改完**必须重启 dsh**(手册 §1.4)。
+function patchEgoBrowserWorkerSpawn() {
+  const dir = path.join(PLUGINS, 'dsh-ego-browser')
+  const p = path.join(dir, 'lib', 'index.js')
+  const FILE = 'dsh-ego-browser/lib/index.js(spawn)'
+  if (!fs.existsSync(p)) return [{ file: FILE, missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const { rex, failures } = makeCtx('dsh-ego-browser/index.js(spawn)')
+  const current = fs.readFileSync(p, 'utf8')
+  const MARK = '[X worker-spawn-cwd 2026-09-11,patches.cjs [X] 段守护]'
+  if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
+  // 缩进用 [ \t]* 通配(上游重排 tab/space 不误报);锚点唯一性由 rex 的 expected=1 兜底
+  const RE = /argv: \[\n([ \t]*)process\.execPath,\n[ \t]*WORKER_BIN,\n[ \t]*initCfg\n([ \t]*)\],\n([ \t]*)stdio: \{/
+  if (!RE.test(current)) {
+    // 机会性判据(手册 §2.7b):上游可能自行补齐 —— 能力已在就安全跳过,不制造假 FAIL
+    if (!current.includes('WORKER_BIN')) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已重写 worker 拉起方式(无 WORKER_BIN 锚)' }]
+    if (/WORKER_BIN[\s\S]{0,300}?cwd:/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行补齐 cwd/env' }]
+    return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] ensureWorker spawn 形态陌生(上游改写?),保留原样待人工研判'] }]
+  }
+  const c = rex(current, new RegExp(RE.source, 'g'),
+    'argv: [\n$1process.execPath,\n$1WORKER_BIN,\n$1initCfg\n$2],\n$3/* ' + MARK + ' */\n$3cwd: process.cwd(),\n$3env: process.env,\n$3stdio: {',
+    1, 'worker-spawn-cwd')
+  if (failures.length) return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
+  fs.writeFileSync(p, c, 'utf8')
+  return [{ file: FILE, version: ver, ok: true, already: false }]
+}
+
+// ---- [Z] dsh-ego-browser ego-cast-worker 观测台 FFmpeg 后端 pid 丢失(2026-09-11,批次146) ----
+// 根因(2026-09-11 实证):bin/ego-cast-worker.mjs 的 resolveBrowser() 从 browser.json 读到
+//   `{ port, wsUrl, pid, binary, headless, profileDir }`,返回值却只带出 `{ port, wsUrl }` ——
+//   state.pid 被丢弃;而 `active = { ...browser, ws, cdp, sessions }` 是 browserPid 的唯一来源
+//   ⇒ active.pid 恒 undefined ⇒ FfmpegCaptureBackend 收到 `browserPid: active.pid ?? 0` = 0 ⇒
+//   enumerateWindowsForPid(0) 首行 `if (browserPid <= 0) return []` ⇒ resolveCaptureSource 抛
+//   「Chrome window not found for browser PID unknown」⇒ 观测台 Windows 侧 FFmpeg 后端
+//   **恒回退 CDP**(code=ffmpeg-fallback-cdp),与 FFmpeg 装没装、gfxcapture filter 在不在**毫无关系**。
+// 修法:返回值补 `pid: state.pid ?? 0`(读不到时回退 0,与旧行为等价、零副作用)。
+// 生效方式:worker 面 → 重启 worker 即生效(host 侧 ensureWorker 收养新 ego-cast.json,不必重启 dsh)。
+function patchEgoBrowserCastWorker() {
+  const dir = path.join(PLUGINS, 'dsh-ego-browser')
+  const p = path.join(dir, 'bin', 'ego-cast-worker.mjs')
+  const FILE = 'dsh-ego-browser/bin/ego-cast-worker.mjs'
+  if (!fs.existsSync(p)) return [{ file: FILE, missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const { rex, failures } = makeCtx('dsh-ego-browser/ego-cast-worker.mjs')
+  const current = fs.readFileSync(p, 'utf8')
+  const MARK = '[Z cast-worker-pid 2026-09-11,patches.cjs [Z] 段守护]'
+  if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
+  const RE = /return wsUrl \? \{\n([ \t]*)port: state\.port \?\? null,\n([ \t]*)wsUrl\n([ \t]*)\} : null;/
+  if (!RE.test(current)) {
+    if (/return wsUrl \? \{[\s\S]{0,240}?pid:/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行带回 pid' }]
+    return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] resolveBrowser 返回形态陌生(上游改写?),保留原样待人工研判'] }]
+  }
+  const c = rex(current, new RegExp(RE.source, 'g'),
+    'return wsUrl ? {\n$1port: state.port ?? null,\n$2wsUrl,\n$2/* ' + MARK + ' */ pid: state.pid ?? 0\n$3} : null;',
+    1, 'resolveBrowser-pid')
+  if (failures.length) return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
+  fs.writeFileSync(p, c, 'utf8')
+  return [{ file: FILE, version: ver, ok: true, already: false }]
+}
+
+// ---- [R98] dsh-ego-browser:模型调用浏览器不弹桌面窗口,改侧边卡片观看(2026-09-12,用户需求) ----
+// 主人需求:「优化模型调用浏览器时不在单独打开浏览器窗口,改为在侧边卡片打开(DSH-better-sidebar)」。
+// 现状:侧边卡片「Agent 浏览器」Tab(mountSidebarTab, better-sidebar 0.19.0 service)本就生效;
+// 桌面那个「DeepSeek Harness - Edge」窗口(ego_doctor 实测 headless=false)是 ego 浏览器本体。
+// 根因双层:
+//   ① runtime 层 bin/ego-browser.mjs 的 envHeadless 判据:
+//        hasDisplay = win32 || DISPLAY非空  → Windows 恒 true
+//        envHeadless = hasDisplay ? false : !["","0","false","no"].includes(EGO_LINUX_HEADLESS)
+//        → Windows 上 EGO_LINUX_HEADLESS 环境变量被整体短路无视,只有 CLI `--headless` 能强制无头;
+//   ② 插件层 lib/index.js 的 resolveEgoEnv 只在 isHeadlessDetected (win32 恒 false) 时才注入
+//      EGO_LINUX_HEADLESS=1 → Windows 永不注入;而 chromeArgs/egoCliArgs 白名单又 blocked
+//      --headless/--no-startup-window(厂家设计:归 EGO_LINUX_HEADLESS 管理)→ 两条路全堵死。
+// 修法两刀:① host 面 resolveEgoEnv 对 win32 默认注入 EGO_LINUX_HEADLESS=1(用户显式设过——
+//   哪怕是 "0"——则尊重原值,逃生门保留;=== void 0 判据天然实现);
+//   ② runtime 面 ego-browser.mjs envHeadless 去掉 hasDisplay 短路(Windows 同样读环境变量)。
+// 生效链路:ego-browser.mjs 读 EGO_LINUX_HEADLESS=1 → chrome.mjs launch 加 --headless=new
+//   + 指纹剥离 UA(头条系风控)→ 无窗口;画面照常由 CDP screencast/FFmpeg 推流到侧边卡片。
+// FFmpeg 配套:无头后 gfxcapture(hwnd) 无窗口可采 → 观察自动回退 CDP(README:保存的 FFmpeg
+//   后端失效时本次观察回退 CDP 并展示原因);主人已接受画质略降。settings.yaml 的
+//   captureBackend 建议同步改 cdp(见交付说明),避免每次尝试 FFmpeg 失败的噪音。
+// client 面文案:「去桌面那个 Chrome 窗口登录/验证」→「在侧边卡片画面中操作」(无头后无窗口可去)。
+// 生效方式:host 面 + runtime 面 → 重启 dsh;client 面(文案)→ 刷新页面。
+function patchEgoBrowserHeadlessHost() {
+  const dir = path.join(PLUGINS, 'dsh-ego-browser')
+  const p = path.join(dir, 'lib', 'index.js')
+  const FILE = 'dsh-ego-browser/lib/index.js(headless)'
+  if (!fs.existsSync(p)) return [{ file: FILE, missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const { rep, failures } = makeCtx('dsh-ego-browser/index.js(headless)')
+  const current = fs.readFileSync(p, 'utf8')
+  const MARK = '[R98 host-headless 2026-09-12,patches.cjs [R98] 段守护]'
+  if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
+  const FROM = 'if (env.EGO_LINUX_HEADLESS === void 0 && isHeadlessDetected(platform, env)) env.EGO_LINUX_HEADLESS = "1";'
+  if (!current.includes(FROM)) {
+    if (current.includes('EGO_LINUX_HEADLESS') && /platform === "win32"\s*\|\|/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行支持 win32 headless 注入' }]
+    return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] resolveEgoEnv headless 注入形态陌生(上游改写?),保留原样待人工研判'] }]
+  }
+  const c = rep(current, FROM,
+    '// ' + MARK + ' Windows 默认注入 EGO_LINUX_HEADLESS=1(用户显式设过——含 "0"——则尊重原值,逃生门保留):\n' +
+    '\t// 配合 runtime 面去短路(见 [R98]),模型调用 ego_* 时浏览器以无头模式跑,桌面不弹窗,\n' +
+    '\t// 画面在 better-sidebar「Agent 浏览器」侧边卡片观看。\n' +
+    '\tif (env.EGO_LINUX_HEADLESS === void 0 && (isHeadlessDetected(platform, env) || platform === "win32")) env.EGO_LINUX_HEADLESS = "1";',
+    1, 'win32-headless-inject')
+  if (failures.length) return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
+  fs.writeFileSync(p, c, 'utf8')
+  return [{ file: FILE, version: ver, ok: true, already: false }]
+}
+
+function patchEgoBrowserHeadlessRuntime() {
+  const dir = path.join(PLUGINS, 'dsh-ego-browser')
+  const p = path.join(dir, 'runtime', 'ego-linux', 'bin', 'ego-browser.mjs')
+  const FILE = 'dsh-ego-browser/runtime/ego-browser.mjs(headless)'
+  if (!fs.existsSync(p)) return [{ file: FILE, missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const { rep, failures } = makeCtx('dsh-ego-browser/runtime/ego-browser.mjs(headless)')
+  const current = fs.readFileSync(p, 'utf8')
+  const MARK = '[R98 runtime-headless 2026-09-12,patches.cjs [R98] 段守护]'
+  if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
+  const FROM = '  const envHeadless = hasDisplay\n    ? false\n    : !["", "0", "false", "no"].includes(\n        (process.env.EGO_LINUX_HEADLESS ?? "").toLowerCase(),\n      );'
+  if (!current.includes(FROM)) {
+    if (current.includes('EGO_LINUX_HEADLESS') && !/envHeadless = hasDisplay/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行放开 win32 envHeadless' }]
+    return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] runtime envHeadless 形态陌生(上游改写?),保留原样待人工研判'] }]
+  }
+  const c = rep(current, FROM,
+    '  // ' + MARK + ' Windows 同样尊重 EGO_LINUX_HEADLESS:原实现 hasDisplay 对 win32 恒 true\n' +
+    '  // → envHeadless 恒 false → 环境变量被整体无视,桌面必弹真实窗口(插件侧注入也无效)。\n' +
+    '  // 现在释放短路;显式 "0"/"false"/"no" 仍走有头(逃生门)。\n' +
+    '  const envHeadless = !["", "0", "false", "no"].includes(\n' +
+    '    (process.env.EGO_LINUX_HEADLESS ?? "").toLowerCase(),\n' +
+    '  );',
+    1, 'runtime-headless-env')
+  if (failures.length) return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
+  fs.writeFileSync(p, c, 'utf8')
+  return [{ file: FILE, version: ver, ok: true, already: false }]
+}
+
+function patchEgoBrowserHeadlessCopy() {
+  const dir = path.join(PLUGINS, 'dsh-ego-browser')
+  const p = path.join(dir, 'lib', 'client.js')
+  const FILE = 'dsh-ego-browser/lib/client.js(headless-copy)'
+  if (!fs.existsSync(p)) return [{ file: FILE, missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const { rep, failures } = makeCtx('dsh-ego-browser/client.js(headless-copy)')
+  const current = fs.readFileSync(p, 'utf8')
+  const MARK = '[R98 headless-copy 2026-09-12,patches.cjs [R98] 段守护]'
+  if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
+  // 浮动面板版(无 better-sidebar 时的回退形态)
+  let c = rep(current,
+    '需要账号登录时，请到桌面上那个 <b>「ego lite — agent」</b> Chrome 窗口完成登录。',
+    '需要账号登录时，请直接在「Agent 浏览器」画面（侧边卡片）中完成登录，画面支持点击与输入。',
+    1, 'float-login-copy')
+  c = rep(c,
+    '<b>⚠️ 检测到人机验证</b> — 请在桌面那个 <b>「ego lite — agent」</b> 浏览器窗口手动完成验证，agent 会继续。',
+    '<b>⚠️ 检测到人机验证</b> — 请在「Agent 浏览器」画面（侧边卡片）中手动完成验证（画面支持点击操作），agent 会继续。',
+    1, 'float-captcha-copy')
+  // 侧边 Tab 版(better-sidebar 形态,JSX 拼接)
+  c = rep(c,
+    '"需要账号登录时，请到桌面上那个 ", h("b", null, "「ego lite — agent」"), " Chrome 窗口完成登录。"',
+    '"需要账号登录时，请直接在侧边卡片「Agent 浏览器」画面中完成登录（画面支持点击与输入）。"',
+    1, 'tab-login-copy')
+  c = rep(c,
+    'h("b", null, "⚠️ 检测到人机验证"), " — 请在桌面那个 ", h("b", null, "「ego lite — agent」"), " 浏览器窗口手动完成验证，agent 会继续。"',
+    'h("b", null, "⚠️ 检测到人机验证"), " — 请在侧边卡片「Agent 浏览器」画面中手动完成验证（画面支持点击操作），agent 会继续。"',
+    1, 'tab-captcha-copy')
+  if (failures.length) return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
+  c = c + '\n// ' + MARK + '\n'
+  fs.writeFileSync(p, c, 'utf8')
+  return [{ file: FILE, version: ver, ok: true, already: false }]
+}
+
+// ---- [R98b] dsh-ego-browser worker stopSiblingWorkers 误杀 Job runner 父进程(2026-09-12,批次160 测试暴露) ----
+// 现象:批次 160 三刀落地后实测 `/api/ego/spaces` 恒回 {reason:"no live agent browser"},
+//   ego-cast.json 从未生成;desktop.log 尾行出现 "subprocess-local: Windows Job runner
+//   exited with exit code 1 before proving its managed range empty";host 侧 spawn 的
+//   worker 进程(pid 21364/17112/26044)全部秒死,而真实终端里直跑 `node ego-cast-worker.mjs`
+//   完全正常(port 5920/12279,@@DSH_RESULT@@ ok)。
+// 根因(2026-09-12 实证):dsh 0.1.5 的 dsh-subprocess-local 用 **Windows Job runner 包裹
+//   一切 spawn**:宿主侧真实进程形态 = `node ...\dsh-subprocess-local\lib\runner.js -- node
+//   ...\ego-cast-worker.mjs {initCfg}`(实测 11152 进程命令行逐字证实)。而 worker 的
+//   stopSiblingWorkers()(Windows 分支)枚举**所有命令行含 'ego-cast-worker.mjs' 的 node.exe**
+//   并 taskkill /PID /T /F —— **runner 进程命令行里恰好也含该字样** → worker 亲手把罩着
+//   自己的 runner 父进程(连同自己, /T 杀整棵子树)杀掉 → runner close=1 且从未发直接结果
+//   → host 面 launchWindowsJob 报 "Windows Job runner exited with exit code 1 before
+//   proving its managed range empty" → ensureWorker 返回 null。终端直跑无 runner 包裹,
+//   枚举时只有自己(被 -ne ${self} 排除)所以正常 —— 与全部观测严格一致。
+// 为什么批次 146 没炸:该批 dsh 版本尚无 Windows Job 包裹路径(launchWindowsJob),
+//   0.1.5 升级引入包裹后 stopSiblingWorkers 的宽匹配即成自杀陷阱。
+// 修法:stopSiblingWorkers 的 PowerShell 枚举前先收集**自身祖先进程链**(pid 向上追溯
+//   ParentProcessId 至根),过滤条件追加 `-not $anc.ContainsKey([int]$_.ProcessId)` ——
+//   runner(父进程)与 dsh 宿主(祖父)全部放行,只杀真正的兄弟残留 worker。零依赖、
+//   纯 PowerShell 内完成,不改 worker 网络/服务逻辑。
+// 生效方式:worker 面 → 下次 ensureWorker spawn 即生效(不必重启 dsh;host 52s 防护兜底)。
+function patchEgoBrowserWorkerSelfKill() {
+  const dir = path.join(PLUGINS, 'dsh-ego-browser')
+  const p = path.join(dir, 'bin', 'ego-cast-worker.mjs')
+  const FILE = 'dsh-ego-browser/bin/ego-cast-worker.mjs(selfkill)'
+  if (!fs.existsSync(p)) return [{ file: FILE, missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const { rep, failures } = makeCtx('dsh-ego-browser/ego-cast-worker.mjs(selfkill)')
+  const current = fs.readFileSync(p, 'utf8')
+  const MARK = '[R98b worker-selfkill 2026-09-12,patches.cjs [R98] 段守护]'
+  if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
+  const FROM = "const ps = `Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*ego-cast-worker.mjs*' -and $_.ProcessId -ne ${self} } | Select-Object -ExpandProperty ProcessId`;"
+  if (!current.includes(FROM)) {
+    if (current.includes('stopSiblingWorkers') && current.includes('ancestors')) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行修复 selfkill' }]
+    return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] stopSiblingWorkers ps 模板形态陌生(上游改写?),保留原样待人工研判'] }]
+  }
+  const c = rep(current, FROM,
+    '// ' + MARK + ' 0.1.5 Windows Job runner 包裹回归:runner 进程命令行含 ego-cast-worker.mjs,\n' +
+    '\t// 旧宽匹配会把罩着自己的 runner 父进程 taskkill → 宿主报 Job runner exit 1。\n' +
+    '\t// 修法:枚举前收集自身祖先进程链(pid 向上追溯),过滤时放行祖先,只杀兄弟残留 worker。\n' +
+    "\tconst ps = `$anc = @{}; $cur = [int]${self}; while ($cur -gt 0 -and -not $anc.ContainsKey([int]$cur)) { $anc[[int]$cur] = $true; $p = Get-CimInstance Win32_Process -Filter \"ProcessId=$cur\" -ErrorAction SilentlyContinue; if ($null -eq $p) { break }; $cur = [int]$p.ParentProcessId }; Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*ego-cast-worker.mjs*' -and $_.ProcessId -ne ${self} -and -not $anc.ContainsKey([int]$_.ProcessId) } | Select-Object -ExpandProperty ProcessId`;",
+    1, 'selfkill-ancestors')
+  if (failures.length) return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
+  fs.writeFileSync(p, c, 'utf8')
+  return [{ file: FILE, version: ver, ok: true, already: false }]
+}
+
+// ---- [R98c] dsh-ego-browser 会话内外链不再被「Agent 浏览器」Tab 认领(2026-09-12,用户需求) ----
+// 主人需求:「修复在点击会话中的链接时,会打开侧边卡片的agent浏览器,而不是侧边卡片的浏览器」。
+// 根因:better-sidebar 的外链接管路由(client-registry.js link interception)落地时是
+//   `const type = urlTargetOf(new URL(url)) ?? "browser"` —— 声明了 urlTarget 的插件 Tab
+//   **优先于**内置「浏览器」Tab(better-sidebar 设计如此:内置 browser 恒不声明 urlTarget,
+//   以免反向遮蔽插件页)。而 dsh-ego-browser 的 mountSidebarTab 注册 `ego-browser:watch`
+//   Tab 时声明 `urlTarget: (url) => http/https 且非文档后缀` —— 认领了几乎所有网页外链 ⇒
+//   点击会话里的链接(外链接管开启时)全被塞进「Agent 浏览器」观看屏,而非内置「浏览器」Tab。
+// 修法:urlTarget 谓词恒 false(保留注册结构不动,对 matchUrlTarget 等价「不认领」)⇒
+//   urlTargetOf 恒 undefined ⇒ 外链回归默认路由 `?? "browser"`:由内置「浏览器」Tab 承接
+//   (其是否接管仍由 browserInterceptLinks/Http/Https 三开关与 Tab 启用态决定;Ctrl/Cmd+
+//   点击临时放行系统浏览器的既有约定不受影响)。「Agent 浏览器」Tab 回归本职:仅观看/接管
+//   agent 的 ego_* 浏览画面,SSE tool-call 自动翻开的原逻辑保留。
+// 生效方式:client 面 → 刷新页面(补丁本体由壳启动/手动 node patches.cjs 重放落盘)。
+function patchEgoBrowserUrlTargetRelease() {
+  const dir = path.join(PLUGINS, 'dsh-ego-browser')
+  const p = path.join(dir, 'lib', 'client.js')
+  const FILE = 'dsh-ego-browser/lib/client.js(urlTarget-release)'
+  if (!fs.existsSync(p)) return [{ file: FILE, missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const { rep, failures } = makeCtx('dsh-ego-browser/client.js(urlTarget-release)')
+  const current = fs.readFileSync(p, 'utf8')
+  const MARK = '[R98c urlTarget-release 2026-09-12,patches.cjs [R98c] 段守护]'
+  if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
+  if (!current.includes('urlTarget')) {
+    return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行移除 urlTarget 认领' }]
+  }
+  const FROM = 'urlTarget: function(url) {\n\t\t\t\t\treturn /^https?:$/.test(url.protocol) && !/\\.(pdf|txt|md|docx?|xlsx?|pptx?)$/i.test(url.pathname);\n\t\t\t\t},'
+  const c = rep(current, FROM,
+    '// ' + MARK + ' 恒 false:不再认领外链。better-sidebar 外链路由是 urlTargetOf(url) ?? "browser",\n' +
+    '\t\t\t\t// 声明 urlTarget 的插件 Tab 优先于内置「浏览器」Tab —— 此处曾认领一切 http/https 网页,\n' +
+    '\t\t\t\t// 致点击会话里的链接被塞进「Agent 浏览器」观看屏。放行后外链回归默认路由:内置「浏览器」\n' +
+    '\t\t\t\t// Tab(Ctrl/Cmd+点击临时放行系统浏览器的既有约定不变);「Agent 浏览器」Tab 仍由 SSE\n' +
+    '\t\t\t\t// tool-call 自动翻开,观看/接管 agent 浏览的本职不受影响。\n' +
+    '\t\t\t\turlTarget: function(url) {\n' +
+    '\t\t\t\t\treturn false;\n' +
+    '\t\t\t\t},',
+    1, 'urlTarget-release')
+  if (failures.length) {
+    if (/urlTarget:\s*function\(url\)\s*\{\s*\n\s*return false;/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行恒 false' }]
+    return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
+  }
+  fs.writeFileSync(p, c, 'utf8')
+  return [{ file: FILE, version: ver, ok: true, already: false }]
+}
+
+// ---- [Y] 核心 @deepseek-ai/dsh-system-prompt:人设字段改名兼容(persona → personaPrefix) ----
+// 根因(2026-09-10 批次143 定谳):0.1.5-rc.1 把部署级人设字段由 `persona` 改名为
+// `personaPrefix`(并新增 `personaSuffix`;schema 见 SystemPrompt.Config)。而本部署的
+// **写入方全用旧名**:home patch 的 `- id: system-prompt` + `config.persona: |-`、
+// 壳 main.js 的 /persona 读写与 canonical 守卫(认 `persona: |-`)、dshvt 人设设置页(走壳 API)。
+// 实测(schemastery 不剥未知键):persona 值能进配置对象,但构造器只读 `config.personaPrefix`
+// ⇒ 部署级 persona 段落恒为空串 ⇒ 「设置页写人设不生效」(问题 54 家族第三形态)。
+// 兼容补丁两刀:①schema 显式声明 legacy 别名(防未来 schemastery 收紧剥键);
+// ②前缀段落取值加 legacy 回退(`config.personaPrefix || config.persona || ""`)。
+// 只打「新字段形态」的副本(0.1.5+ 种子);旧形态副本(本地 monorepo 源码当前仍是
+// `persona:` 形态)天然兼容 → 安全跳过、不写盘、不污染 git 树。
+// 上游若再改名,本段锚点失配即 FAIL 保留原样(绝不留半补丁态)。
+function patchSystemPromptPersona() {
+  const results = []
+  const files = []
+  const NEW_SCHEMA = 'personaPrefix: z.string().default(""),'
+  const NEW_TEXT = 'text: config.personaPrefix ?? ""'
+  const LEGACY_SCHEMA = 'persona: z.string().default(""),'
+  const PATCHED_TEXT = 'text: config.personaPrefix || config.persona || ""'
+  // 1) npx 缓存各版本种子(pnpm 布局)内全部哈希副本
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      const pnpmRoot = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmRoot)) continue
+      for (const d of fs.readdirSync(pnpmRoot)) {
+        if (!d.startsWith('@deepseek-ai+dsh-system-pro')) continue
+        const f = path.join(pnpmRoot, d, 'node_modules', '@deepseek-ai', 'dsh-system-prompt', 'lib', 'index.js')
+        if (fs.existsSync(f)) files.push(f)
+      }
+    }
+  }
+  // 2) profile 顶层副本(旧布局可能自带一份,存在即一起打)
+  const profCopy = path.join(PLUGINS, '@deepseek-ai', 'dsh-system-prompt', 'lib', 'index.js')
+  if (fs.existsSync(profCopy)) files.push(profCopy)
+  // 3) 本地构建轨 monorepo 源码(当前旧字段形态 → 走 skipped 分支)
+  const localCopy = process.env.DSH_LOCAL_SYSTEM_PROMPT
+    || ['D:\\deepseek harness\\deepseek-harness\\packages\\core\\system-prompt\\lib\\index.js',
+      path.join(os.homedir(), 'deepseek-harness', 'packages', 'core', 'system-prompt', 'lib', 'index.js')]
+      .find((f) => fs.existsSync(f))
+  if (localCopy) files.push(localCopy)
+
+  for (const p of files) {
+    const cur = fs.readFileSync(p, 'utf8')
+    if (cur.includes(PATCHED_TEXT)) { results.push({ file: p, ok: true, already: true }); continue }
+    if (!cur.includes(NEW_SCHEMA) || !cur.includes(NEW_TEXT)) {
+      results.push({ file: p, ok: true, skipped: true, reason: '旧字段形态(persona 仍在),无需兼容补丁' })
+      continue
+    }
+    const { rep, failures } = makeCtx('system-prompt')
+    const apply = (c) => {
+      let out = c
+      if (!out.includes(LEGACY_SCHEMA)) {
+        out = rep(out, NEW_SCHEMA, NEW_SCHEMA + '\n\t\t' + LEGACY_SCHEMA, 1, 'legacy-persona-schema')
+      }
+      out = rep(out, NEW_TEXT, PATCHED_TEXT, 1, 'legacy-persona-prefix')
+      return out
+    }
+    try {
+      results.push(rewriteFresh(p, '.bak-persona-alias', apply, failures, PATCH_MARK))
+    } catch (e) {
+      results.push({ file: p, ok: false, failures: [`[system-prompt] ${e.message}`] })
+    }
+  }
+  if (!files.length) results.push({ file: 'dsh-system-prompt', missing: true })
+  return results
 }
 
 // ---- [E](已废弃:SettingsRoot 打进 dsh web Vite 主 bundle assets/index-*.js,patch 源码仓无效;
@@ -1811,11 +2790,17 @@ function patchTurnReview() {
 //       滚动锚定与贴底逻辑被拖出可见的「抬起-落下」。
 //       J1 paintTexture 两阶段(先纯读收集,再统一写类);J2 applyHalo 同法。
 //       读集中一次回流,写集中一次失效,整趟 reconcile 从 O(命中数) 次强制回流降为 1 次。
+//   [批次144 2026-09-10 锚点分流] J1/J2 是**当下仍必需**的修复(实证:上游 0.1.11 的
+//   client.js 2256 行 add(TEX_CLASS) 仍在 getBoundingClientRect 读循环内、1585 行
+//   toggle(HALO_CLASS) 同理)→ 用 rep(缺了就是上游变了、要人工研判)。J3/J4/J5 属
+//   **历史遗留/上游可能自解**的适配 → 改用 repOpt:命中就顺手打(上游若回退旧写法,守护
+//   自动重打),不命中只记 optional、不算失败。否则三处过时锚点会把整趟 apply 拖死
+//   (apply 全趟原子),J1/J2 白丢 —— 这正是批次 144 修的那个「连坐」。
 function patchJoiTheme() {
   const p = path.join(PLUGINS, 'dsh-joi-channel-theme', 'lib', 'client.js')
   if (!fs.existsSync(p)) return [{ file: 'dsh-joi-theme', missing: true }]
   const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-joi-channel-theme', 'package.json'), 'utf8')).version
-  const { rep, failures } = makeCtx('joi-theme/client.js')
+  const { rep, repOpt, failures, optional } = makeCtx('joi-theme/client.js')
 
   const apply = (c) => {
     // J1 paintTexture 两阶段: 先收集命中再统一加类,消除读-写交替的强制回流
@@ -1842,34 +2827,51 @@ function patchJoiTheme() {
     }
     // J3 [批次 88b/93] alpha.5 client-runtime 已内联:运行时引用改 seed 词 dsh-client-store
     // (官方原版 require("@deepseek-ai/dsh-client-runtime/client") 必炸 "missed the module table")
-    c = rep(c,
+    // [批次144] 机会性:0.1.11 上游已把该依赖整个去掉(文件里已无此 require)→ 0 命中只记 optional。
+    c = repOpt(c,
       'require("@deepseek-ai/dsh-client-runtime/client")',
       'require("@deepseek-ai/dsh-client-store")',
-      1, 'client-store-seed')
+      'client-store-seed')
     // J4 [批次 94 2026-09-04] alpha.5 品牌区嵌套化:brand > brandIdentity > (brandMark, brandName),
     // [class*=_brand] 子串选择器命中全部 4 层,每层各画一次 --joi-brand-logo + padding-left:98px
     // → 工作区顶部一排重复立绘(用户截图实证)。收窄为品牌区本体,排除 brand* 后代。
-    // 存活副本已手工迁移并带哨兵,重放走哨兵快速通道;上游漂移刷新后本步自动重打。
-    c = rep(c,
+    // [批次144] 机会性:上游 0.1.11 自己换成 `brand: "[class*=logoRow] > [class*=_brand]"` 并
+    // 隐藏 [data-slot="sidebar.brand.mark"](同一问题的自有解法)→ 本步 0 命中,不再算失败。
+    c = repOpt(c,
       'brand: "[class*=_brand]",',
       'brand: "[class*=_brand]:not([class*=_brandMark]):not([class*=_brandName]):not([class*=_brandIdentity])",',
-      1, 'brand-selector-narrow')
+      'brand-selector-narrow')
     // J5 [2026-09-04] alpha.5 品牌区拆双 svg(brandMark=鲸鱼 24px / brandName=字标 156px,
     // viewBox 26 0 156 24)。旧单 svg 时代的 translateX(-27px) + overflow:visible 现在:
     // 鲸鱼 svg 被推到立绘脸上;字标 svg 右缘到 274,压住 logoRow 右下角面板开关(240,44)——
     // 用户截图里的「U 形残影」即开关 panelIcon 从徽章底下探出。新规则:鲸鱼藏(立绘替代);
     // 字标 flex:none 防被 span 压缩致双重缩放,scale(.78) 左缘对齐立绘右缘(114),徽章右缘
     // 235 < 开关 240;overflow:hidden 裁掉 brandName svg viewBox 外的旧鲸鱼(g 在 x0.1-23 < 26)。
-    c = rep(c,
+    // [批次144] 机会性:上游 0.1.11 改成 JS brandSurgery() + `translateX(-12px)` + 隐藏 mark slot
+    // (自有解)→ 本步 0 命中;若上游将来回退旧写法,守护自动重打。
+    c = repOpt(c,
       '${SELECTORS.brand} svg { overflow: visible !important; transform: translateX(-27px); }',
       '${SELECTORS.brand} svg { overflow: hidden !important; transform: none; }\n' +
       '${SELECTORS.brand} [class*=_brandMark] svg { display: none !important; }\n' +
       '${SELECTORS.brand} [class*=_brandName] svg { flex: none; overflow: hidden !important; transform: scale(.78); transform-origin: left center; margin-left: -8px; }',
-      1, 'brand-two-svg-fit')
+      'brand-two-svg-fit')
+    // J6 [P1/C1 2026-09-10] MO 触发限流(leading+trailing 200ms)+ J7 滚动触发补缺。
+    // 背景:framed() 只把高频触发合并到下一帧(rAF),流式期间 body mutation 每帧都来,
+    //   装饰重算仍 60 次/秒([J] 两阶段后每次 1 次强制回流 + 数次 qSA,长会话下是持续
+    //   主线程占用)。装饰锚点(纹理大面/立绘/composer 卡 placeChat 锚 visibleCard)在
+    //   流式期间几何稳定,200ms 一拍足够;trailing 保证最后一拍必达,最终状态与不限流
+    //   完全一致。J7:装饰原本不监听滚动,长会话离屏 turn 由 dshvt 的 content-visibility
+    //   占位(120px 估值),滚入视口后装饰可能停留在占位几何上;补 passive 捕获滚动委托,
+    //   经同一限流调度重算,装饰随滚动自愈(scroll 事件不冒泡但捕获可达,document 捕获
+    //   委托同 dshvt 模式,视图重挂零重绑)。
+    c = rep(c,
+      '\t\t\t\tthis.observer = new MutationObserver(() => {\n\t\t\t\t\tthis.loop.schedule();\n\t\t\t\t});\n\t\t\t\tthis.observer.observe(document.body, {\n\t\t\t\t\tchildList: true,\n\t\t\t\t\tsubtree: true,\n\t\t\t\t\tattributes: true,\n\t\t\t\t\tattributeFilter: ["class", "data-ds-dark-theme"]\n\t\t\t\t});\n\t\t\t\twindow.addEventListener("resize", this.loop.schedule);',
+      '\t\t\t\t// [P1/C1 2026-09-10] MO 触发限流(leading+trailing 200ms)+滚动触发补缺。\n\t\t\t\t// framed 只把高频触发合并到下一帧,流式期间 body mutation 每帧都来,装饰重算\n\t\t\t\t// 仍 60 次/秒;装饰锚点(纹理大面/立绘/composer 卡)在流式期间几何稳定,\n\t\t\t\t// 200ms 一拍足够,trailing 保证最后一拍必达,最终状态与不限流完全一致。\n\t\t\t\tthis._moLast = 0;\n\t\t\t\tthis._moTrail = void 0;\n\t\t\t\tconst moSchedule = () => {\n\t\t\t\t\tconst now = Date.now();\n\t\t\t\t\tif (now - this._moLast >= 200) {\n\t\t\t\t\t\tthis._moLast = now;\n\t\t\t\t\t\tthis.loop.schedule();\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tclearTimeout(this._moTrail);\n\t\t\t\t\tthis._moTrail = setTimeout(() => {\n\t\t\t\t\t\tthis._moLast = Date.now();\n\t\t\t\t\t\tthis.loop.schedule();\n\t\t\t\t\t}, 200 - (now - this._moLast));\n\t\t\t\t};\n\t\t\t\tthis.observer = new MutationObserver(() => {\n\t\t\t\t\tmoSchedule();\n\t\t\t\t});\n\t\t\t\tthis.observer.observe(document.body, {\n\t\t\t\t\tchildList: true,\n\t\t\t\t\tsubtree: true,\n\t\t\t\t\tattributes: true,\n\t\t\t\t\tattributeFilter: ["class", "data-ds-dark-theme"]\n\t\t\t\t});\n\t\t\t\twindow.addEventListener("resize", this.loop.schedule);\n\t\t\t\t// [P1/C1] 装饰原本不监听滚动:长会话离屏 turn 由 content-visibility 占位,\n\t\t\t\t// 滚入视口后装饰可能停留在占位几何上。passive 捕获委托,滚动经同一限流\n\t\t\t\t// 调度重算,装饰随滚动自愈(document 捕获委托,视图重挂零重绑)。\n\t\t\t\tdocument.addEventListener("scroll", moSchedule, { capture: true, passive: true });',
+      1, 'mo-throttle-scroll')
     return c
   }
 
-  return [{ ...rewrite(p, '.bak-q109', apply, failures), version: ver }]
+  return [{ ...rewrite(p, '.bak-q109', apply, failures), version: ver, optionalAnchors: optional.length ? [...optional] : undefined }]
 }
 
 // ---- [V] dsh-vision-router (批次 88b/93): remote.session 须随 remote 一并注入 ----
@@ -2095,6 +3097,112 @@ function patchSettingsNest() {
       return c
     }
     results.push({ ...rewriteFresh(p, '.bak-nest-skin', apply, failures, PATCH_MARK), version: ver })
+  }
+  return results
+}
+
+// ---- [K12] 通用设置「其它」入口 v8→v9 升级(批次 139,2026-09-10) ----
+//       背景: 批次 121 的 v9 增量已不在本文件(历史回退至 v8 形态),0.1.2-rc.1/0.1.5
+//       seed 的 settings-general 经 patchSettingsNest 只能到达 v8(5 卡无「其它」)。
+//       本家族从 alpha.5 孤本(唯一幸存 v9 权威态,subOther=True)提取全部 v9 形态,
+//       以 v8→v9 增量重打;已含 v9 指纹(sub.other+sub:other)则幂等跳过。
+//       路径修正: rc.1+ seed 的 pnpm 布局改为 .pnpm 平铺虚拟仓
+//       (.pnpm/node_modules/@deepseek-ai/...),顶层 node_modules 无此包 ——
+//       patchSettingsNest 的 roots 扫不到新副本,故本家族自带平铺仓 root。
+function patchGeneralOtherV9() {
+  const results = []
+  const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
+  const roots = []
+  if (fs.existsSync(npxCache)) {
+    for (const h of fs.readdirSync(npxCache)) {
+      roots.push(path.join(npxCache, h, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+    }
+  }
+  for (const p of roots) {
+    if (!fs.existsSync(p)) continue
+    const rest = p.slice(npxCache.length + 1)
+    const seed = rest.slice(0, rest.indexOf(path.sep))
+    const label = 'general-other-v9/' + seed + '/client.js'
+    const head = fs.readFileSync(p, 'utf8')
+    const pkgDir = path.dirname(path.dirname(p))
+    const ver = (() => { try { return JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')).version } catch { return '?' } })()
+    if (head.includes('sub.other') && head.includes('sub:other')) {
+      results.push({ file: label, ok: true, already: true, version: ver })
+      continue
+    }
+    if (!head.includes('sGenSubGrid')) {
+      // 非 v8 形态(pristine/未知修订):交给 patchSettingsNest 走它自己的流程
+      results.push({ file: label, ok: true, skipped: true, version: ver })
+      continue
+    }
+    const { rep, rex, failures } = makeCtx(label)
+    const apply = (c) => {
+      // 1) GeneralSection 三形态(basics/other/入口卡)
+      c = rep(c,
+        'if (show === "basics") {',
+        'if (show === "basics" || show === "other") { // [K12 v9] 其它子页同走 general 渲染分支',
+        1, 'k12-show-branch')
+      c = rep(c,
+        'children: renderSlot("settings.general.item", {})',
+        'children: renderSlot(show === "other" ? "settings.general.other.item" : "settings.general.item", {})',
+        1, 'k12-slot-pick')
+      // 2) 入口卡第六张「其它」
+      c = rep(c,
+        '["sub:archive-manager", t("sub.archive"), t("sub.archive.desc")]',
+        '["sub:archive-manager", t("sub.archive"), t("sub.archive.desc")],\n\t\t\t["sub:other", t("sub.other"), t("sub.other.desc")]',
+        1, 'k12-entry-card')
+      // 3) 字典:zh/en 新增 sub.other 双键 + basics.desc 移除提示音/文件放入
+      c = rep(c,
+        '"sub.basics.desc": "语言、外观、提示音、文件放入等常规偏好。"',
+        '"sub.basics.desc": "语言、外观等常规偏好。"',
+        1, 'k12-zh-basics-desc')
+      c = rep(c,
+        '"sub.basics.desc": "Language, appearance, sounds, file drop and other general preferences."',
+        '"sub.basics.desc": "Language, appearance and other general preferences."',
+        1, 'k12-en-basics-desc')
+      c = rep(c,
+        '恢复到侧栏或彻底删除。",',
+        '恢复到侧栏或彻底删除。",\n\t\t\t"sub.other": "其它",\n\t\t\t"sub.other.desc": "提示音、文件放入等其它偏好。",',
+        1, 'k12-zh-other-keys')
+      c = rep(c,
+        'delete them for good.",',
+        'delete them for good.",\n\t\t\t"sub.other": "Other",\n\t\t\t"sub.other.desc": "Notification sound, file drop and other preferences.",',
+        1, 'k12-en-other-keys')
+      // 4) 导航 CHILD_IDS + other 虚拟子行
+      c = rep(c,
+        'const CHILD_IDS = ["basics", "agency-agents", "config-manager", "vision-router", "archive-manager"];',
+        'const CHILD_IDS = ["basics", "agency-agents", "config-manager", "vision-router", "archive-manager", "other"];',
+        1, 'k12-child-ids')
+      c = rep(c,
+        'if (id === "basics") return { id: "sub:basics", order: 0, label: t("sub.basics"), child: true };',
+        'if (id === "basics") return { id: "sub:basics", order: 0, label: t("sub.basics"), child: true };\n\t\t\t\t\t\t\t\tif (id === "other") return { id: "sub:other", order: 0, label: t("sub.other"), child: true };',
+        1, 'k12-child-row')
+      // 5) SEL 路由:sub:other → show:"other" + only:"general"
+      c = rep(c,
+        'show: active === "sub:basics" ? "basics" : active === "sub:skin-assets"',
+        'show: active === "sub:basics" ? "basics" : active === "sub:other" ? "other" : active === "sub:skin-assets"',
+        1, 'k12-sel-show')
+      c = rep(c,
+        '{ only: active === "sub:basics" ? "general" : active.indexOf("sub:skin-")',
+        '{ only: active === "sub:basics" || active === "sub:other" ? "general" : active.indexOf("sub:skin-")',
+        1, 'k12-sel-only')
+      // 6) children 声明扩 settings.general.other.item(缩进无关正则)
+      c = rex(c,
+        /children: \{ "settings\.general\.item": \{\n\t+kind: "list",\n\t+scope: "root"\n\t+\} \}/,
+        'children: { "settings.general.item": {\n\t\t\t\t\tkind: "list",\n\t\t\t\t\tscope: "root"\n\t\t\t\t}, "settings.general.other.item": {\n\t\t\t\t\tkind: "list",\n\t\t\t\t\tscope: "root"\n\t\t\t\t} }',
+        1, 'k12-other-slot-decl')
+      // 7) CSS:其它槽末行边框(沿 v9 形态,置于 cssNest 串首;文件内为 JS 字符串,引号已转义)
+      c = rep(c,
+        'const cssNest = "button[data-dsh-sub=',
+        'const cssNest = "[data-slot=\\"settings.general.other.item\\"]>:last-child{border-bottom:none!important}button[data-dsh-sub=',
+        1, 'k12-other-css')
+      return c
+    }
+    // [批次161 2026-09-12] 不传 PATCH_MARK: 哨兵快速通道会把「v8 形态+哨兵」的半补丁态
+    // (哨兵由同趟更早的 patchSettingsNest 先写入,或新 seed 展开时带入)误判为「已是补丁态」,
+    // v9 增量永不应用 → 「其它」入口/子页缺失(0.1.5-rc.2 实证)。幂等改由函数前部的
+    // v9 指纹(sub.other+sub:other)短路负责;apply 全锚点匹配原子写盘,失败 kept 报错。
+    results.push({ ...rewriteFresh(p, '.bak-other-v9', apply, failures, null), version: ver })
   }
   return results
 }
@@ -2329,6 +3437,60 @@ function patchMnemonProjection() {
     return c
   }
   return [{ ...rewrite(p, '.bak-mnemproj', apply, failures), version: ver }]
+}
+
+// ---- [P3/T5 2026-09-12] 遗留时钟 document.hidden 门(P2 T2-2 升级执行) ----
+// 依据:P3 方案 §一.F7 / §四.A3 —— mnemon-spaces 记忆空间页 1s setSyncClock setState 时钟与
+// better-sidebar 通用轮询 hook / 任务轮询 / 相对时间 tick / locate 重试均无 hidden 门,窗口
+// 遮挡/最小化期间仍每秒触发 React 重渲染并弄脏布局(与 1s 时钟类重渲染族同源)。加门语义:
+// 隐藏期跳过采样,可见后下一拍自动恢复(时钟类显示的是相对时间/状态,500ms~1s 的恢复延迟无感);
+// 不动既有早退条件(liveCount===0 / visible prop / isJobLive),不推进任何状态机基线。
+function patchMnemonClockGate() {
+  const p = path.join(PLUGINS, 'dsh-mnemon-source-memory-spaces', 'lib', 'client.js')
+  if (!fs.existsSync(p)) return [{ file: 'dsh-mnemon-source-memory-spaces/lib/client.js', missing: true }]
+  const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-mnemon-source-memory-spaces', 'package.json'), 'utf8')).version
+  const { rep, failures } = makeCtx('dsh-mnemon-source-memory-spaces/lib/client.js')
+  const apply = (c) => c && rep(c,
+    '\n\t\t\t\tconst timer = window.setInterval(() => setSyncClock(Date.now()), 1e3);\n',
+    '\n\t\t\t\tconst timer = window.setInterval(() => { if (!document.hidden) setSyncClock(Date.now()); }, 1e3); // [dsh-desktop P3/T5] 隐藏期跳过采样\n',
+    1, 'sync-clock-hidden-gate')
+  return [{ ...rewrite(p, '.bak-p3clock', apply, failures), version: ver }]
+}
+
+function patchBetterSidebarClockGate() {
+  const p = path.join(PLUGINS, 'dsh-better-sidebar', 'lib', 'client.js')
+  if (!fs.existsSync(p)) return [{ file: 'dsh-better-sidebar/lib/client.js', missing: true }]
+  const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-better-sidebar', 'package.json'), 'utf8')).version
+  const { rep, failures } = makeCtx('dsh-better-sidebar/lib/client.js')
+  const apply = (c) => {
+    if (!c) return c
+    c = rep(c,
+      '\n\t\t\t\t\tsetNow(Date.now());\n',
+      '\n\t\t\t\t\tif (!document.hidden) setNow(Date.now()); // [dsh-desktop P3/T5] 隐藏期跳过采样\n',
+      1, 'now-tick-hidden-gate')
+    c = rep(c,
+      '\n\t\t\t\tconst timer = window.setInterval(() => {\n\t\t\t\t\tload();\n\t\t\t\t}, JOB_POLL_MS);\n',
+      '\n\t\t\t\tconst timer = window.setInterval(() => {\n\t\t\t\t\tif (!document.hidden) load(); // [dsh-desktop P3/T5] 隐藏期跳过轮询\n\t\t\t\t}, JOB_POLL_MS);\n',
+      1, 'job-poll-hidden-gate')
+    c = rep(c,
+      '\n\t\t\t\tconst timer = window.setInterval(run, intervalMs);\n',
+      '\n\t\t\t\tconst timer = window.setInterval(function () { if (!document.hidden) run(); }, intervalMs); // [dsh-desktop P3/T5] 隐藏期跳过轮询\n',
+      1, 'poll-hook-hidden-gate')
+    c = rep(c,
+      '\n\t\t\t\tconst retry = window.setInterval(locate, 1500);\n',
+      '\n\t\t\t\tconst retry = window.setInterval(function () { if (!document.hidden) locate(); }, 1500); // [dsh-desktop P3/T5] 隐藏期跳过量测\n',
+      1, 'locate-retry-hidden-gate')
+    // [P3/T3-1c 2026-09-12] measureCenter RO 宽度门:黑匣子实证「RO 回调强制回流」为偶发卡顿
+    // 主源(366 帧 fsl 4924ms,且与 dshvt rail 定位 RO 同帧交错:A 写脏布局 → B 读 = 强制回流)。
+    // bottom 横条定位只依赖 col 横向几何(gBCR.left/right),col 高度变化(会话滚动/流式增高)
+    // 不必逐帧重测。宽度门放行首次与宽度变化,高度-only 通知零成本跳过。
+    c = rep(c,
+      'observer = new ResizeObserver(measureCenter);',
+      'let dshBsrColW = -1;\n\t\t\t\t\t\tobserver = new ResizeObserver(function (entries) {\n\t\t\t\t\t\t\tvar dshGo = dshBsrColW < 0;\n\t\t\t\t\t\t\tfor (var di = 0; di < entries.length; di++) {\n\t\t\t\t\t\t\t\tvar dw = entries[di].contentRect ? entries[di].contentRect.width : void 0;\n\t\t\t\t\t\t\t\tif (typeof dw === "number" && (dshBsrColW < 0 || Math.abs(dw - dshBsrColW) > 0.5)) dshGo = true;\n\t\t\t\t\t\t\t\tif (typeof dw === "number") dshBsrColW = dw;\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tif (dshGo) measureCenter(); // [dsh-desktop P3/T3-1c] 宽度门:高度-only 通知跳过重测\n\t\t\t\t\t\t});',
+      1, 'measure-center-width-gate')
+    return c
+  }
+  return [{ ...rewrite(p, '.bak-p3clock', apply, failures), version: ver }]
 }
 
 // ---- [P] 新会话无工作区兜底(R68,2026-08-30) ----
@@ -2619,6 +3781,77 @@ function patchSessionDeleteEntry() {
   return results
 }
 
+// ---- [V] 悬停卡片主题一致(R100,2026-09-12) ----
+// 症状: 鼠标悬停侧栏会话行,预览卡标题显示 store 原题(如「优化模型调用浏览器时不在单…」),
+//       与行内展示的壳端 LLM 摘要主题(「优化模型调用浏览器改为侧边卡片打开」)双轨不一致,
+//       用户感知为「悬停会话主题时卡片显示错误」。
+// 根因: R40「摘要即主题」只在壳端 dshvt installSessionSummary 做 DOM 级 textContent 替换
+//       (4s 轮询,React 不感知),而 HoverCard(SessionHoverContent)是 React 渲染,标题走
+//       displayTitle(node)=node.title(store 原题)——两条轨必然分叉,摘要越准卡片越「错」。
+// 修法: 同文件(ui-workspace/lib/client.js)单锚点——displayTitle 优先读壳端发布的
+//       window.__dshSessionTopics(sid→清洗摘要,dshvt renderAll 每轮整表重建),命中即返回;
+//       全局缺席(纯 Web/旧壳/插件未发布)回落 node.title,行为与上游一致。行标题与悬停卡
+//       共用 displayTitle,天然同题;壳端 DOM 替换退化为对齐兜底(cur===sum 不再触发)。
+//       copyText 仍取 row.title(原题完整可复用,摘要 ≤20 字有损不适合作为复制语义)。
+// 与 [Q]/[S]/[U] 同文件 → sentinel=null 绕快路径 + 自有 V_MARK 幂等(批次 49 教训②预防态);
+// replayAll 排在全部 ui-workspace 家族之后(上游重建时先重打旧链,本家族在其上重放,顺序自愈);
+// .bak-topic 基底=当前全链补丁态,语义=本家族单独可逆。锚点 L+O 12 文件字节一致(逐一提取比对过)。
+function patchSessionTopicHoverCard() {
+  const V_MARK = '__dshSessionTopics'
+  const FROM = '\t\tfunction displayTitle(node, t) {\n\t\t\treturn node.blank ? t("session.new") : node.title;\n\t\t}'
+  const TO = [
+    '\t\tfunction displayTitle(node, t) {',
+    '\t\t\t// [dsh-desktop] R100: 悬停卡主题一致——行标题被壳端摘要(R40)DOM 替换后,HoverCard 仍渲染',
+    '\t\t\t// store 原题。优先读壳发布的 window.__dshSessionTopics(sid→清洗摘要),行/卡同一函数同题;',
+    '\t\t\t// 全局缺席(纯 Web/旧壳)回落原题。copyText 仍取原题(完整可复用)。',
+    '\t\t\tconst __topic = typeof window !== "undefined" ? window.__dshSessionTopics : void 0;',
+    '\t\t\tif (__topic && typeof __topic[node.id] === "string" && __topic[node.id]) return __topic[node.id];',
+    '\t\t\treturn node.blank ? t("session.new") : node.title;',
+    '\t\t}',
+  ].join('\n')
+  const makeApply = (rep, failures) => (c) => {
+    c = rep(c, FROM, TO, 1, 'topic-displayTitle')
+    return c
+  }
+  const results = []
+  // L: 本地 monorepo 构建产物(与 [Q]/[S]/[U] 同款寻址)
+  const localFile = ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-workspace\\lib\\client.js',
+    path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-workspace', 'lib', 'client.js')]
+    .find((f) => fs.existsSync(f))
+  if (localFile) {
+    if (fs.readFileSync(localFile, 'utf8').includes(V_MARK)) {
+      results.push({ file: 'ui-workspace/lib/client.js@L', ok: true, already: true, version: 'local' })
+    } else {
+      const { rep, failures } = makeCtx('ui-workspace/lib/client.js@L')
+      results.push({ ...rewrite(localFile, '.bak-topic', makeApply(rep, failures), failures, null), version: 'local' })
+    }
+  } else {
+    results.push({ file: 'ui-workspace/lib/client.js@L', missing: true })
+  }
+  // O: npx 缓存全部 hash 并存版本——双布局(与 [Q] 同款):平铺顶层 + .pnpm pnpm-seed 实体
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    const seen = new Set()
+    for (const h of fs.readdirSync(npxRoot)) {
+      for (const f of [
+        path.join(npxRoot, h, 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js'),
+        path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js'),
+      ]) {
+        if (!fs.existsSync(f) || seen.has(f)) continue
+        seen.add(f)
+        if (fs.readFileSync(f, 'utf8').includes(V_MARK)) {
+          results.push({ file: 'ui-workspace/lib/client.js@O', ok: true, already: true, version: 'npx-' + h.slice(0, 6) })
+          continue
+        }
+        const { rep, failures } = makeCtx('ui-workspace/lib/client.js@O')
+        results.push({ ...rewrite(f, '.bak-topic', makeApply(rep, failures), failures, null), version: 'npx-' + h.slice(0, 6) })
+      }
+    }
+  }
+  if (!results.length) results.push({ file: 'ui-workspace/lib/client.js', missing: true })
+  return results
+}
+
 // ---- [R] 无工作区会话 hero 输入解禁(R76) + 会话恢复期"新会话"闪变根治(R84),2026-09-01 原子化 ----
 // R76(2026-08-30): R68/[P](侧栏新会话兜底)与 R70/[Q](菜单「不选择工作区」)创建的无工作区会话
 //       (blank,cwd=部署默认目录)打开后,对话 hero 仍锁死「选择一个工作区开始」——
@@ -2902,9 +4135,497 @@ function patchSkinSubpagesK11() {
   }
   return results
 }
+// ---- [V] 空白会话重复产生根治(R85,2026-09-10) ----
+// 症状(用户问题 2026-09-10 #1): 侧栏「多出的无用会话记录」——同工作区反复出现无标题
+//       会话行(显示为文件夹名,如 se'jng'k's / XXX),磁盘累计 110+ 个 0.3KB 空会话;
+//       实测同一天内 08-30 21 个、08-31 21 个、09-04 16 个,且多次出现「一分钟内 8 个」的成串。
+// 根因: workspaces.connectWorkspace 复用一个 blank 会话的谓词要求 `summary.cwd === workspace.path`,
+//       而 sessions.create({ workspaceId }) 的**本地摘要合并不带 cwd**(上游注释自认:
+//       "a create's summary lands without cwd until the host frame arrives")。host 全量帧
+//       到达前,任何再次 connect(启动策略 startInitialSelection、侧栏「新会话」、工作区组头 +、
+//       未分组组头 +、工作区选择器 onPick)都会错过复用扫描 → 再造一个 blank;启动策略失败重试
+//       (state 回 'waiting' 再 reconcile)会把成串放大。
+// 修法: ① create 调用带 `cwd: workspace.path` —— create() 在 workspaceId 分支**不上 wire**
+//       (payload 只放 workspaceId),cwd 仅用于本地摘要合并,host 行为零变化;摘要立即持有
+//       cwd,紧随其后的 connect 复用扫描即刻命中。
+//       ② 复用谓词对「cwd 尚未到达」的摘要豁免 cwd 相等(仅 void 0/"" 豁免;成员关系
+//       workspace.sessionIds 与 archived 仍是硬条件,保持上游「cwd alone 不可信」的语义)。
+// 幂等: 自实现 MARK 判 already。本文件已被 [P](patchNewSessionFallback) 的 rewrite 家族占用
+//       `.bak-newsess` 基底 —— 同文件第二家族**不得再走 rewrite**,否则互判「上游已更新」污染
+//       基底(同 patchHeroNoWorkspaceInert 记载的 2026-09-01 实测教训)。replayAll 顺序放在
+//       patchNewSessionFallback 之后(两者锚点区域不同,顺序仅为可读性)。
+const BLANK_DEDUP_MARK = '/* [dsh-desktop] R85 blank-dedup'
+function patchBlankSessionDup() {
+  const REUSE_FROM = '\t\t\t\t\tif (summary !== void 0 && summary.blank && summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id) && !archived.includes(summary.id)) return summary.id;'
+  const REUSE_TO = '\t\t\t\t\t/* [dsh-desktop] R85 blank-dedup: cwd 未达(刚 create、host 帧未到)时不再因 cwd 失配漏掉复用,否则同工作区连续 connect 各造一个 blank */\n\t\t\t\t\tif (summary !== void 0 && summary.blank && (summary.cwd === void 0 || summary.cwd === "" || summary.cwd === workspace.path) && workspace.sessionIds.includes(summary.id) && !archived.includes(summary.id)) return summary.id;'
+  const CREATE_FROM = '\t\t\t\tconst attempt = this.sessions.create({ workspaceId }).finally(() => {'
+  const CREATE_TO = '\t\t\t\t/* [dsh-desktop] R85 blank-dedup: 本地摘要即刻持有 cwd —— create() 在 workspaceId 分支不上 wire(host 行为不变),\n\t\t\t\t   随后的 connect 复用同一 blank 而非再建一个 */\n\t\t\t\tconst attempt = this.sessions.create({ workspaceId, cwd: workspace.path }).finally(() => {'
+  const patchFile = (p, label) => {
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(BLANK_DEDUP_MARK)) return { file: label, ok: true, already: true }
+    const { rep, failures } = makeCtx(label)
+    let c = rep(current, REUSE_FROM, REUSE_TO, 1, 'blank-reuse-cwd-optional')
+    c = rep(c, CREATE_FROM, CREATE_TO, 1, 'blank-create-carries-cwd')
+    if (failures.length) return { file: label, ok: false, failures: [...failures] }
+    fs.writeFileSync(p, c, 'utf8')
+    return { file: label, ok: true, already: false }
+  }
+  const results = []
+  const seen = new Set()
+  const add = (p, label) => {
+    if (typeof p !== 'string' || !p || seen.has(p)) return
+    seen.add(p)
+    if (!fs.existsSync(p)) return
+    results.push({ ...patchFile(p, label), version: 'runtime' })
+  }
+  // L: 本地 monorepo 构建产物(与 [P]/[Q]/[S] 同款寻址)
+  add('D:\\deepseek harness\\deepseek-harness\\packages\\client\\runtime\\lib\\client.js', 'client-runtime/lib/client.js@L')
+  add(path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'runtime', 'lib', 'client.js'), 'client-runtime/lib/client.js@L2')
+  // devlink 层: profiles/node_modules junction(活体实际解析路径;junction 写入=写 L 同一物理文件,
+  // 故第二次经 MARK 判 already,天然幂等)
+  add(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js'), 'client-runtime/lib/client.js@devlink')
+  // O: npx 缓存全部 hash 并存版本——双布局(平铺顶层 + .pnpm seed 实体)
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      for (const f of [
+        path.join(npxRoot, h, 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js'),
+        path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js'),
+      ]) add(f, 'client-runtime/lib/client.js@O@' + h.slice(0, 6))
+    }
+  }
+  if (!results.length) results.push({ file: 'client-runtime/lib/client.js', missing: true })
+  return results
+}
+
+// ---- [W] v0 会话格式迁移宽容化(R86,2026-09-10,问题 #2) ----
+// 症状(用户问题 2026-09-10 #2): 打开历史会话报
+//       `failed to observe session "session-ab9e37f6-…": @deepseek-ai/dsh-session-format-v0-to-v1
+//        refuses this format v0 Session: user/message 11 source summary requires notice form;
+//        source v0 artifact remains unchanged` → 该会话历史永久加载失败。
+// 根因: @deepseek-ai/dsh-session-format-v0-to-v1 的 pluginSourceValue 把「冻结 v0 契约」实现成
+//       互斥断言 —— 带 `sections` 必须 form==="snapshot"、带 `summary` 必须 form==="notice"。
+//       但释放版 v0 自身写出过 form 非 notice 却携带 summary 的 plugin 源(seq 11,按形态推断为
+//       compact 的 snapshot + summary),于是校验器把整个会话判为非法并拒绝迁移(源文件保持不变)。
+//       注意 form === void 0 的源本来就在前面 `if (form === void 0) return;` 提前返回,故真凶
+//       是「form 有值且 ≠ notice/≠ snapshot」这一支。
+// 修法: 只把两条「requires … form」断言改为**同语义校验**(sections 按 snapshot 校验、summary 按
+//       notice 校验),即对合法载荷放宽到「任何 form 都可携带」;值类型校验与 literalValue 白名单
+//       原样保留,strictly-less-rejecting,无回归面(form 缺失分支不动)。
+// 覆盖面: 该检查只存在于 v0-to-v1(v1-to-v2 / v2-to-v3 / session-format / catalog 实证 0 命中),
+//       故只需修这一个包。whitelist 之外的 form 仍按原逻辑抛错。
+//       **单轨意图声明**: 本家族只落官方 npx 轨(O)—— @deepseek-ai/dsh-session-format-v0-to-v1
+//       是 0.1.5 才出现的新包,本地 monorepo(L 轨,rc.5 基座)无此包、也无 session-format 层,
+//       audit:patches 的「仅官方轨」告警在此为预期态,不是覆盖缺口。
+const V0_LENIENT_MARK = '[dsh-desktop] R86 v0-lenient'
+function patchSessionFormatV0Lenient() {
+  const SEC_FROM = '\telse if (source["sections"] !== void 0) throw new SessionFormatError(`${label} sections require snapshot form`);'
+  const SEC_TO = '\t/* [dsh-desktop] R86 v0-lenient: 释放版 v0 存在 form 非 snapshot 却带 sections 的 plugin 源 —— 按 snapshot 语义校验,而不是拒绝整个会话 */\n\telse if (source["sections"] !== void 0) arrayValue(source["sections"], `${label} sections`, (member, memberLabel) => {\n\t\tconst section = exactRecord(member, memberLabel, ["name", "text"]);\n\t\tnonEmptyString(section["name"], `${memberLabel} name`);\n\t\tstringValue(section["text"], `${memberLabel} text`);\n\t});'
+  const SUM_FROM = '\tif (form === "notice") stringValue(source["summary"], `${label} summary`);\n\telse if (source["summary"] !== void 0) throw new SessionFormatError(`${label} summary requires notice form`);'
+  const SUM_TO = '\t/* [dsh-desktop] R86 v0-lenient: 释放版 v0 存在 form 非 notice 却携带 summary 的 plugin 源\n\t * (实证 session-ab9e37f6 seq 11 —— 推断为 compact 的 snapshot + summary),冻结版互斥断言\n\t * 会把整个 v0 会话判非法并拒绝迁移 → 历史永久加载失败。放宽为「任何 form 都可携带 summary」,\n\t * 仅保留字符串类型校验;form 缺失分支(上方提前 return)不动。 */\n\tif (source["summary"] !== void 0) stringValue(source["summary"], `${label} summary`);'
+  const patchFile = (p, label) => {
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(V0_LENIENT_MARK)) return { file: label, ok: true, already: true }
+    const { rep, failures } = makeCtx(label)
+    let c = rep(current, SEC_FROM, SEC_TO, 1, 'v0-sections-any-form')
+    c = rep(c, SUM_FROM, SUM_TO, 1, 'v0-summary-any-form')
+    if (failures.length) return { file: label, ok: false, failures: [...failures] }
+    fs.writeFileSync(p, c, 'utf8')
+    return { file: label, ok: true, already: false }
+  }
+  const results = []
+  const seen = new Set()
+  const add = (p, label) => {
+    if (typeof p !== 'string' || !p || seen.has(p)) return
+    seen.add(p)
+    if (!fs.existsSync(p)) return
+    results.push({ ...patchFile(p, label), version: 'format' })
+  }
+  // O: npx 缓存——双布局: `_npx/<hash>/node_modules/@deepseek-ai/…`(平铺)与
+  //     `_npx/<hash>/node_modules/.pnpm/node_modules/@deepseek-ai/…`(pnpm seed 提升层,
+  //     0.1.5-rc.1 实证有 4 个 peer 变体实体,全部覆盖)
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      add(path.join(npxRoot, h, 'node_modules', '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js'), 'session-format-v0-to-v1@O@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js'), 'session-format-v0-to-v1@O@' + h.slice(0, 6))
+      // .pnpm 实体层: 4 个 peer 变体各自持独立副本(提升符号链接指向其中之一)
+      const pnpmDir = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (fs.existsSync(pnpmDir)) {
+        for (const d of fs.readdirSync(pnpmDir)) {
+          if (!d.startsWith('@deepseek-ai+dsh-session-fo')) continue
+          add(path.join(pnpmDir, d, 'node_modules', '@deepseek-ai', 'dsh-session-format-v0-to-v1', 'lib', 'index.js'), 'session-format-v0-to-v1@O@' + d.slice(0, 24))
+        }
+      }
+    }
+  }
+  if (!results.length) results.push({ file: 'session-format-v0-to-v1', missing: true })
+  return results
+}
+
+// ---- [M1] 模型选择器:会话已删除时软化 + 自愈(2026-09-11,验证 0.1.5-rc.1) ----
+// 症状: 当前所在会话被删掉后(批量清理 / 侧栏删除),在模型选择器里切换模型弹红 toast
+//       「模型操作失败：session/not-found: …」;此后该会话任何会话级操作(发消息 / 改推理
+//       等级 / fork)全部失败,只有手动刷新页面才恢复(用户报告 2026-09-11,批次 153 取证)。
+// 根因: ① 切模型不是本地状态,而是往该会话日志追加 model/selection 事件;服务端
+//          dsh-api-session-controller 三级查找(活动 agent → 已挂载会话 → 持久化 resume)
+//          全落空即回 session/not-found;
+//       ② 客户端把该错误原样塞进 toast —— inject 面孔的
+//          `select: (s) => directory.select(s).then(() => true, () => false)` 吞掉异常,
+//          settleSelection(false) 再读 directory.store.error 直接 t("error.action");
+//       ③ 「当前会话」指针只活在渲染进程内存里,服务端删会话不回推,故渲染层长期持死 id。
+// 修法: ① ModelDirectory.select 失败且 code==="session/not-found" 时触发 onSessionGone
+//          自愈回调(directoryFor 注入):sessions.clear() 清掉失效的当前选择,布局立刻
+//          回到「新建会话」空态 —— 与手动刷新等价,但不必整页重载;
+//       ② settleSelection 命中 not-found 改显示专用文案 error.sessionGone(zh/en 双字典),
+//          不再把生错误码甩给用户;
+//       ③ 自愈挂在 ModelDirectory 上,故 /model 弹窗与 composer 座位两条入口同时受益。
+// 单轨声明: 该包只存在于 profile 层(~/.dsh/profiles/node_modules,core runtime 层,
+//       junction → 当前轨的 seed / 本地产物),不在 web 插件层也不在 monorepo 源码树,
+//       打一次两轨生效 —— 本家族只落 profile 层单根属结构性同步,非覆盖缺口。
+//       不落 npx 缓存内那 10 份历史版本副本(36784 / 36889 / 40020 字节,锚点形态不同):
+//       它们不是活体,强行覆盖只会引入失配 FAIL。
+function patchModelSelectionSessionGone() {
+  const p = path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
+  if (!fs.existsSync(p)) return [{ file: 'model-selection/lib/client.js', missing: true }]
+  let ver = 'profile'
+  try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+  const { rep, failures } = makeCtx('model-selection/lib/client.js')
+  const apply = (c) => {
+    // (a) select 失败分支:识别「会话已删除」并触发自愈
+    c = rep(c,
+      '\t\t\t\tif (!result.ok) {\n\t\t\t\t\tthis.store.update((s) => {\n\t\t\t\t\t\ts.status = "error";\n\t\t\t\t\t\ts.error = `${result.error.code}: ${result.error.message}`;\n\t\t\t\t\t});\n\t\t\t\t\tthrow new Error(`session.selectModel failed: ${result.error.code}: ${result.error.message}`);\n\t\t\t\t}',
+      '\t\t\t\tif (!result.ok) {\n\t\t\t\t\t// [dsh-desktop] M1: 会话已被删除时自愈,不让死会话卡死整条会话级操作链\n\t\t\t\t\tconst sessionGone = result.error.code === "session/not-found";\n\t\t\t\t\tthis.store.update((s) => {\n\t\t\t\t\t\ts.status = "error";\n\t\t\t\t\t\ts.error = `${result.error.code}: ${result.error.message}`;\n\t\t\t\t\t});\n\t\t\t\t\tif (sessionGone && typeof this.onSessionGone === "function") this.onSessionGone();\n\t\t\t\t\tthrow new Error(`session.selectModel failed: ${result.error.code}: ${result.error.message}`);\n\t\t\t\t}',
+      1, 'm1-select-gone')
+    // (b) onSessionGone 字段声明
+    c = rep(c,
+      '\t\t\tasync select(selection) {\n\t\t\t\tthis.assertAvailable();',
+      '\t\t\t/** [dsh-desktop] M1: 会话已删除时的自愈回调(directoryFor 注入)。 */\n\t\t\tonSessionGone;\n\t\t\tasync select(selection) {\n\t\t\t\tthis.assertAvailable();',
+      1, 'm1-field')
+    // (c) resolver 注入自愈
+    c = rep(c,
+      '\t\t\t\tlive.directories.set(sessionId, directory);',
+      '\t\t\t\t// [dsh-desktop] M1: 死会话自愈 —— 清掉失效的当前选择,回到「新建会话」空态(等价刷新;sessions.clear 幂等)\n\t\t\t\tdirectory.onSessionGone = () => {\n\t\t\t\t\ttry {\n\t\t\t\t\t\tsessions.clear();\n\t\t\t\t\t} catch {}\n\t\t\t\t};\n\t\t\t\tlive.directories.set(sessionId, directory);',
+      1, 'm1-resolver-hook')
+    // (d) toast 文案:命中会话已删除时用专用文案
+    c = rep(c,
+      '\t\t\t\t\t\ttext: t("error.action", { message })',
+      '\t\t\t\t\t\ttext: /session\\/not-found/.test(message) ? t("error.sessionGone") : t("error.action", { message })',
+      1, 'm1-toast')
+    // (e) zh 字典
+    c = rep(c,
+      '\t\t\t"error.action": "模型操作失败：{message}",',
+      '\t\t\t"error.action": "模型操作失败：{message}",\n\t\t\t"error.sessionGone": "当前会话已被删除，已回到新建会话",',
+      1, 'm1-zh')
+    // (f) en 字典
+    c = rep(c,
+      '\t\t\t"error.action": "Model operation failed: {message}",',
+      '\t\t\t"error.action": "Model operation failed: {message}",\n\t\t\t"error.sessionGone": "This session was deleted - returned to a new session",',
+      1, 'm1-en')
+    return c
+  }
+  return [{ ...rewrite(p, '.bak-msel', apply, failures), version: ver }]
+}
+
+// [M2 2026-09-11] pi-ai openai-completions: 发送前兼容性矫正(GLM/智谱模板硬约束)。
+// 起因:阿里云 MaaS 托管的 ZHIPU/GLM-5.3-Flash 实测(2026-09-11/12,headless 端到端):
+//   ① 拒绝连续同角色消息 → 400 {"code":"1214","message":"角色信息不正确"};
+//     dsh 插件层天然注入多条 user 消息(运行时上下文快照、技能清单),首回合 3 连 user。
+//   ② 不认 OpenAI developer role —— 且这是 dsh-llm-pi-ai 的真 bug:
+//     `resolveModelCompat`(packages/llm/llm-pi-ai/src/catalog.ts)对 route 级 compat
+//     **只透传 thinkingFormat/supportsReasoningEffort 两个开关**,settings 声明的
+//     `supportsDeveloperRole:false`/`supportsStore:false` 被静默丢弃 → 模型落到
+//     pi-ai 的 baseURL 侦测(OpenAI 新版默认)→ system 提示词以 developer role + 
+//     store:true 上线。deepseek 系第一方模型恰好被端点容忍,GLM 不会。
+// 矫正(对其它端点语义等价或仅限 aliyuncs 域):
+//   a) developer→system(system 全端点通用);
+//   b) 连续同角色 user/assistant(无 tool_calls)合并;
+//   c) baseUrl 命中 aliyuncs.com 时剔除 store(OpenAI 专属字段)。
+// 落点 = buildParams/onPayload 之后、create 之前(最后一步,覆盖一切上游变换)。
+// 单轨声明:pi-ai 为 profile 层核心包(junction → repo apps/cli 嵌套副本 → .pnpm
+// 物理单份),全机唯一活体(P 轨双覆盖)。
+function patchPiAiMergeConsecutiveMessages() {
+  const p = path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@earendil-works', 'pi-ai', 'dist', 'api', 'openai-completions.js')
+  if (!fs.existsSync(p)) return [{ file: 'pi-ai/dist/api/openai-completions.js', missing: true }]
+  let ver = 'profile'
+  try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(path.dirname(p))), 'package.json'), 'utf8')).version } catch {}
+  const { rep, failures } = makeCtx('pi-ai/dist/api/openai-completions.js')
+  const apply = (c) => c && rep(c,
+    `            const nextParams = await options?.onPayload?.(params, model);\n            if (nextParams !== undefined) {\n                params = nextParams;\n            }\n`,
+    `            const nextParams = await options?.onPayload?.(params, model);\n            if (nextParams !== undefined) {\n                params = nextParams;\n            }\n            // [dsh-desktop] M2: GLM/智谱模板硬约束矫正(连续同角色 1214;developer role 不认;\n            // aliyuncs 域剔除 OpenAI 专属 store)。详见 patches.cjs 的 M2 注释。\n            {\n                const merged = [];\n                const joinContent = (a, b) => {\n                    const av = a == null ? "" : a;\n                    const bv = b == null ? "" : b;\n                    if (typeof av === "string" && typeof bv === "string") return av ? av + "\\n\\n" + bv : bv;\n                    const pa = Array.isArray(av) ? av : [{ type: "text", text: String(av) }];\n                    const pb = Array.isArray(bv) ? bv : [{ type: "text", text: String(bv) }];\n                    return [...pa, ...pb];\n                };\n                for (const m of params.messages ?? []) {\n                    const prev = merged[merged.length - 1];\n                    const mergeable = prev\n                        && prev.role === m.role\n                        && (m.role === "user" || (m.role === "assistant" && !m.tool_calls && !prev.tool_calls));\n                    if (mergeable) prev.content = joinContent(prev.content, m.content);\n                    else merged.push(m);\n                }\n                for (const m of merged) if (m.role === "developer") m.role = "system";\n                params.messages = merged;\n                try {\n                    if (params.store !== undefined && /(^|\\.)aliyuncs\\.com$/.test(new URL(model.baseUrl || "").hostname)) delete params.store;\n                } catch {}\n                if (process.env.DSH_M2_DEBUG) {\n                    console.error("[M2dbg]", JSON.stringify({\n                        roles: merged.map((m) => m.role),\n                        shapes: merged.map((m) => typeof m.content === "string" ? "s" + m.content.length : "a" + (m.content || []).length),\n                        tools: (params.tools || []).length,\n                        store: params.store,\n                        enable_thinking: params.enable_thinking,\n                    }));\n                }\n            }\n`,
+    1, 'm2-compat-block')
+  return [{ ...rewrite(p, '.bak-piai', apply, failures), version: ver }]
+}
+
+// ---- [R99] ui-layout 右栏(侧边卡片)首开默认宽度 45%→37%(2026-09-12,用户需求) ----
+// 需求:「优化侧边卡片初次打开时的尺寸,改为如图的尺寸(不影响后续尺寸手动修改)」。
+// 现状: 原生右栏首开默认 = 视口宽的 45%(ui-layout 两处硬编码)。主人截图(2100×1350 物理 px,
+//       左栏分隔线 x=419 ⇒ DPR 1.5、视口 1400 CSS px)实测右栏 773 物理 px = 515 CSS ≈ **36.8%**。
+// 修法: 两处 .45 → .37 —— ① 常量 RIGHTBAR_DEFAULT_RATIO(openRightbar 的 `rightbar ??=` 种子,
+//       即「首开默认」);② AppFrame 渲染回退 `layoutInfo.rightbar ?? viewport * .45`(同语义,
+//       同步改免双轨)。**手动拖宽不受影响**:拖拽走 setRightbar 写 layoutInfo.rightbar,
+//       ??= 从此不命中;布局 store 不持久化,页面刷新后回到「从未手动调过」态,首开再落新默认。
+//       约束面核对:min 300px / max .7×viewport(RIGHTBAR_MAX_RATIO)/ computeColumns 的
+//       available=viewport-sidebar-400 收缩 —— .37 在常规窗口宽度下不触界(1400 视口时
+//       518px < available 720px)。
+// 载体纪律: 与 [R95] 同款 —— 核心包客户端产物、自有 MARK 幂等、失败不写盘、只认锚点在场的
+//       副本,历史 seed / 本地 monorepo 旧构建(无右栏代码)天然 skipped;改盘后需**刷新页面**
+//       才对用户生效。覆盖面:L 本地 monorepo 构建 + devlink profile junction + O npx 缓存
+//       三层(提升/平铺/.pnpm 实体)。
+const RIGHTBAR_RATIO_MARK = '/* [dsh-desktop] R99 rightbar-default-ratio'
+// GOOD = 修正后的注入形态(块注释正确闭合,const 落在代码区)。
+const RIGHTBAR_RATIO_GOOD = RIGHTBAR_RATIO_MARK + ': 首开默认宽度 45%→37%,对齐主人期望尺寸(截图实测 36.8%);\n' +
+  '\t\t   手动拖宽走 setRightbar 落 layoutInfo.rightbar,??= 即退场 → 手动尺寸不受影响 */\n' +
+  '\t\tconst RIGHTBAR_DEFAULT_RATIO = .37;'
+// BROKEN = 首版(TO1 漏了块注释闭合 `*/`)的精确形态 —— 该形态把 const 连同后续 JSDoc 一起
+// 吞进注释,活体实证 openRightbar 抛 ReferenceError、右栏打不开(b167 验收抓到)。因 MARK 已
+// 在场,普通重放会误判 already → 本家族对 BROKEN 形态做精确匹配自愈,再走 GOOD 的 already 判定。
+const RIGHTBAR_RATIO_BROKEN = RIGHTBAR_RATIO_MARK + ' 45%→37%:右栏(侧边卡片)首开默认宽度对齐主人期望尺寸\n' +
+  '\t\t// (截图实测 36.8%;手动拖宽走 setRightbar 落 layoutInfo.rightbar,??= 即退场,手动尺寸不受影响)\n' +
+  '\t\tconst RIGHTBAR_DEFAULT_RATIO = .37;'
+function patchRightbarDefaultRatio() {
+  const FROM1 = 'const RIGHTBAR_DEFAULT_RATIO = .45;'
+  const FROM2 = 'const rightbarPreference = layoutInfo.rightbar ?? viewport * .45;'
+  const TO2 = 'const rightbarPreference = layoutInfo.rightbar ?? viewport * .37; /* [dsh-desktop] R99 与 RIGHTBAR_DEFAULT_RATIO 同步 */'
+  const patchFile = (p, label) => {
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(RIGHTBAR_RATIO_BROKEN)) {
+      fs.writeFileSync(p, current.split(RIGHTBAR_RATIO_BROKEN).join(RIGHTBAR_RATIO_GOOD), 'utf8')
+      return { file: label, ok: true, already: false, repaired: true }
+    }
+    if (current.includes(RIGHTBAR_RATIO_GOOD)) return { file: label, ok: true, already: true }
+    if (!current.includes('RIGHTBAR_DEFAULT_RATIO')) return { file: label, ok: true, skipped: true, reason: '该副本无右栏宽度逻辑(非活体/版本不同)' }
+    const { rep, failures } = makeCtx(label)
+    let c = rep(current, FROM1, RIGHTBAR_RATIO_GOOD, 1, 'rightbar-default-ratio-const')
+    c = rep(c, FROM2, TO2, 1, 'rightbar-default-ratio-fallback')
+    if (failures.length) return { file: label, ok: false, failures: [...failures], kept: true }
+    fs.writeFileSync(p, c, 'utf8')
+    return { file: label, ok: true, already: false }
+  }
+  const results = []
+  const seen = new Set()
+  const add = (p, label) => {
+    if (typeof p !== 'string' || !p || seen.has(p)) return
+    seen.add(p)
+    if (!fs.existsSync(p)) return
+    let ver = 'local'
+    try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+    results.push({ ...patchFile(p, label), version: ver })
+  }
+  const REL = ['@deepseek-ai', 'dsh-client-ui-layout', 'lib', 'client.js']
+  // L: 本地 monorepo 构建产物(现构建无右栏代码 → skipped;上游重构建后自动接管)
+  add('D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-layout\\lib\\client.js', 'ui-layout/client.js@L')
+  add(path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-layout', 'lib', 'client.js'), 'ui-layout/client.js@L2')
+  // devlink 层: profiles/node_modules junction(活体实际解析路径;与 O 轨同物理文件,MARK 幂等)
+  add(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', ...REL), 'ui-layout/client.js@devlink')
+  // O: npx 缓存三层布局(提升层 .pnpm/node_modules、平铺层 node_modules、.pnpm 实体层)
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', ...REL), 'ui-layout/client.js@hoist@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', ...REL), 'ui-layout/client.js@flat@' + h.slice(0, 6))
+      const pnpmDir = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmDir)) continue
+      for (const d of fs.readdirSync(pnpmDir)) {
+        if (!d.startsWith('@deepseek-ai+dsh-client-ui-')) continue
+        add(path.join(pnpmDir, d, 'node_modules', ...REL), 'ui-layout/client.js@pnpm@' + d.slice(-8))
+      }
+    }
+  }
+  if (!results.length) results.push({ file: 'ui-layout/client.js', missing: true })
+  return results
+}
+
+// ---- [R101] dsh-better-sidebar 内置「浏览器」Tab 接不住聊天外链(2026-09-12,批次 166 用户复检) ----
+// 现象: [R98c] 放行后,点会话里的链接确实改开侧边卡片内置「浏览器」Tab(Tab 标题=域名),但
+//       Tab 内部停在「输入网址开始浏览(沙箱模式)」空态 —— 地址栏空、iframe 不加载、不导航。
+// 根因(0.19.x 原生右栏迁移半成品,字节级实证):
+//   ① service openTab 的 surface 分支把外链装进 params:{title, url} 交宿主 sidebarRight;宿主按
+//      kind 复用/新建 Tab(contentId=pageAddress(kind),同 kind 恒同地址)后经 tabDomain.navigate
+//      把 params 原样带回;插件侧原生 tab-adapter ensure() **只搬 params.path**(mint 分支 path
+//      展开 + 更新分支 path diff),params.url 在全新 mint 分支被整体丢弃、在更新分支只进 meta.url;
+//   ② BrowserView 的导航状态是 useState(tab.path) —— 只读初值,后续 tab.path 变化不感知。
+//   ⇒ 首开 Tab: path=undefined → 恒空态;同 Tab 复用(第二击): meta.url 无人消费 → 不导航。
+//   对照: 底部工作台回退路径(openTab 的 reducer 分支)有 `seed.url → patchTab({path: seed.url})`
+//   (isCreation 时,client.js:1450)—— 上游 0.19.0 迁移原生右栏时漏掉了等价物。
+// 修法两刀(全落 better-sidebar 自己的产物;宿主 sidebar-right 与 ego-browser 均不动):
+//   ① openTab surface 分支: params 额外带 `path: seed.url`(仅 seed.type==="browser")—— 适配器
+//      mint/更新两分支对 params.path 的搬运是现成的(编辑器「就地换文件」同款通道);
+//   ② BrowserView 补 tab.path 同步 effect: path 变化即 setUrl/setInput/清提示/抬 reloadKey,
+//      覆盖复用导航;首开路径 useState 初值已对,effect 等值早退。地址栏手动导航(persist 只写
+//      插件自有 store 的 patchTab,不回写原生 record)不会与本 effect 打架。
+// 载体: lib/client.js + lib/client-registry.js(双 FULL 产物,两处锚点字节一致;[A] 家族同款覆盖面)。
+// 生效方式: client 面 → 刷新页面。
+function patchBetterSidebarBrowserLinkNav() {
+  const dir = path.join(PLUGINS, 'dsh-better-sidebar')
+  const results = []
+  if (!fs.existsSync(dir)) return [{ file: 'dsh-better-sidebar(browser-linknav)', missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const MARK = '[R101 bsr-browser-linknav 2026-09-12,patches.cjs [R101] 段守护]'
+  // 刀①: surface 分支 params 补 path
+  const A_FROM = '\t\t\t\t\t\t\t...seed.url === void 0 ? {} : { url: seed.url },'
+  const A_TO = A_FROM + '\n' +
+    '\t\t\t\t\t\t\t// ' + MARK + ' 原生右栏 browser 外链导航:url 须兼作 path 下发 —— 原生 tab-adapter\n' +
+    '\t\t\t\t\t\t\t// ensure() 只搬 params.path(BrowserView 只读 tab.path),url 在 mint 分支被丢弃,\n' +
+    '\t\t\t\t\t\t\t// 点聊天外链开出的浏览器 Tab 恒空态。对齐底部回退路径既有行为;仅 browser 类。\n' +
+    '\t\t\t\t\t\t\t...seed.url === void 0 || seed.type !== "browser" ? {} : { path: seed.url },'
+  // 刀②: BrowserView 随 tab.path 同步导航
+  const B_FROM = [
+    '\t\t\t(0, react.useEffect)(() => {',
+    '\t\t\t\tif (url === void 0) return;',
+    '\t\t\t\tlet cancelled = false;',
+    '\t\t\t\tsetEmbedBlocked(null);',
+    '\t\t\t\tsetForceEmbed(false);',
+    '\t\t\t\tapi.browserProbe(url).then((probe) => {',
+    '\t\t\t\t\tif (!cancelled && embeddabilityOf(probe) === "blocked") setEmbedBlocked(url);',
+    '\t\t\t\t}).catch(() => {});',
+    '\t\t\t\treturn () => {',
+    '\t\t\t\t\tcancelled = true;',
+    '\t\t\t\t};',
+    '\t\t\t}, [url]);',
+  ].join('\n')
+  const B_TO = B_FROM + '\n' +
+    '\t\t\t// ' + MARK + ' 外链复用导航:同 kind Tab 被宿主复用时,新地址经 tab.path 到达,而本组件\n' +
+    '\t\t\t// 的 url 是 useState 只读初值 ⇒ 不导航。随 tab.path 同步导航状态(首开时等值早退)。\n' +
+    '\t\t\t(0, react.useEffect)(() => {\n' +
+    '\t\t\t\tif (tab.path === void 0 || tab.path === url) return;\n' +
+    '\t\t\t\tsetUrl(tab.path);\n' +
+    '\t\t\t\tsetInput(tab.path);\n' +
+    '\t\t\t\tsetMessage(null);\n' +
+    '\t\t\t\tsetEmbedBlocked(null);\n' +
+    '\t\t\t\tsetForceEmbed(false);\n' +
+    '\t\t\t\tsetReloadKey((key) => key + 1);\n' +
+    '\t\t\t}, [tab.path]);'
+  for (const f of ['client.js', 'client-registry.js']) {
+    const p = path.join(dir, 'lib', f)
+    const FILE = 'dsh-better-sidebar/lib/' + f + '(browser-linknav)'
+    if (!fs.existsSync(p)) { results.push({ file: FILE, missing: true }); continue }
+    const { rep, failures } = makeCtx('bsr/' + f + '(browser-linknav)')
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(MARK)) { results.push({ file: FILE, version: ver, ok: true, already: true }); continue }
+    if (!current.includes('api.browserProbe(url)')) {
+      results.push({ file: FILE, version: ver, ok: true, skipped: true, reason: '该副本无内置浏览器模块(版本/入口不同),无需守护' })
+      continue
+    }
+    let c = rep(current, A_FROM, A_TO, 1, 'surface-params-path')
+    c = rep(c, B_FROM, B_TO, 1, 'browserview-path-sync')
+    if (failures.length) { results.push({ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }); continue }
+    fs.writeFileSync(p, c, 'utf8')
+    results.push({ file: FILE, version: ver, ok: true, already: false })
+  }
+  return results
+}
+
+// ---- [R102] dsh-better-sidebar「拒绝嵌入」面板退役,配合壳层剥头直连(2026-09-12,用户需求) ----
+// 主人需求:「优化侧边卡片在浏览某些网站时提示的拒绝了嵌入请求,改为直接访问」。
+// 背景: X-Frame-Options / CSP frame-ancestors 由 Chromium 网络层强制,壳层 main.js [R102] 已对
+//   subFrame 响应剥离(见 main.js whenReady)⇒ 内置浏览器 iframe 可直连任意站点真实源站。
+// 本刀: better-sidebar 的 embed 探针(api.browserProbe,走 **dsh 服务端** fetch 读上游**原始**
+//   响应头)对壳剥离不可见,仍会判 blocked 并弹「拒绝嵌入」面板挡住 iframe ⇒ 不再采信其 blocked
+//   判定(embedBlocked 恒不入列,面板与「仍然加载/在浏览器中打开」按钮整体退役;地址栏右侧
+//   本就有外开按钮)。过渡期(壳未重打包): 被拒站点 iframe 显示 Chromium「拒绝连接」空白框,
+//   重打包重启壳后即真实直连。
+// 载体: lib/client.js + lib/client-registry.js(锚点字节一致,api.browserProbe 全文件唯一)。
+// 生效方式: client 面 → 刷新页面(面板立即退役;直连生效依赖壳重打包)。
+function patchBetterSidebarEmbedAllow() {
+  const dir = path.join(PLUGINS, 'dsh-better-sidebar')
+  const results = []
+  if (!fs.existsSync(dir)) return [{ file: 'dsh-better-sidebar(embed-allow)', missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const MARK = '[R102 bsr-embed-allow 2026-09-12,patches.cjs [R102] 段守护]'
+  const FROM = [
+    '\t\t\t\tapi.browserProbe(url).then((probe) => {',
+    '\t\t\t\t\tif (!cancelled && embeddabilityOf(probe) === "blocked") setEmbedBlocked(url);',
+  ].join('\n')
+  const TO = [
+    '\t\t\t\tapi.browserProbe(url).then((probe) => {',
+    '\t\t\t\t\t// ' + MARK + ' 壳层(main.js [R102])已对 subFrame 剥离 X-Frame-Options/CSP frame-ancestors,',
+    '\t\t\t\t\t// 任意站点都可被内置浏览器 iframe 直连 —— 不再采信探针的 blocked 判定(探针走 dsh',
+    '\t\t\t\t\t// 服务端 fetch 读上游原始头,对壳剥离不可见),「拒绝嵌入」面板整体退役。旧壳(未重',
+    '\t\t\t\t\t// 打包)期间被拒站点显示 Chromium「拒绝连接」空白框,重打包重启壳后即真实直连。',
+    '\t\t\t\t\tif (!cancelled && false) setEmbedBlocked(url);',
+  ].join('\n')
+  for (const f of ['client.js', 'client-registry.js']) {
+    const p = path.join(dir, 'lib', f)
+    const FILE = 'dsh-better-sidebar/lib/' + f + '(embed-allow)'
+    if (!fs.existsSync(p)) { results.push({ file: FILE, missing: true }); continue }
+    const { rep, failures } = makeCtx('bsr/' + f + '(embed-allow)')
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(MARK)) { results.push({ file: FILE, version: ver, ok: true, already: true }); continue }
+    if (!current.includes('api.browserProbe(url)')) {
+      results.push({ file: FILE, version: ver, ok: true, skipped: true, reason: '该副本无内置浏览器模块(版本/入口不同),无需守护' })
+      continue
+    }
+    const c = rep(current, FROM, TO, 1, 'embed-probe-verdict')
+    if (failures.length) { results.push({ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }); continue }
+    fs.writeFileSync(p, c, 'utf8')
+    results.push({ file: FILE, version: ver, ok: true, already: false })
+  }
+  return results
+}
+
+// ---- [P3/T3-1d 2026-09-12] ui-conversation composer 高度同步 RO 高度门 ----
+// 依据:黑匣子 dump RO 归因(RO#1 = seatObserver,观察 composerSeat+scroller):卡片开合/
+// 宽度过渡期该 RO 每帧触发,回调内 offsetHeight+clientHeight 两次布局读 + 两次 CSS 变量写,
+// 与 dshvt rail RO / better-sidebar measureCenter 同帧交错形成读-写-读强制回流级联
+// (366 帧 fsl 4924ms = 偶发卡顿主源)。两个 CSS 变量只承载「高度」语义:contentRect.height
+// 未变(宽度-only 变化)时跳过读写,级联即断;高度真变(输入框增行/窗口改高)才读+写,
+// 语义与原行为完全一致(首见目标必放行,初始正确性保留)。
+// 载体:@deepseek-ai/dsh-client-ui-conversation(lib)全部并存布局 + 本地 monorepo 构建产物。
+// 叠加语义:该文件已被多个家族补丁(全局哨兵在场),不能走 rewrite 默认哨兵短路——
+// 自治理:自有标记 'P3/T3-1d' 判幂等,锚点失配(上游漂移)即不写盘保持现状。
+function patchConversationHeightGate() {
+  const ANCHOR_FROM = 'seatObserver.current = new ResizeObserver(() => {\n\t\t\t\t\tscroller.style.setProperty("--dsh-composer-height", `${seat.offsetHeight}px`);\n\t\t\t\t\tscroller.style.setProperty("--dsh-conversation-viewport-height", `${scroller.clientHeight}px`);\n\t\t\t\t});'
+  const ANCHOR_TO = 'seatObserver.current = new ResizeObserver((entries) => {\n\t\t\t\t\tvar dshSeatH = seatObserver.current.__dshSeatH, dshViewH = seatObserver.current.__dshViewH;\n\t\t\t\t\tfor (var di = 0; di < entries.length; di++) {\n\t\t\t\t\t\tvar dcr = entries[di].contentRect;\n\t\t\t\t\t\tif (!dcr) continue;\n\t\t\t\t\t\tif (entries[di].target === seat) { if (dshSeatH === void 0 || Math.abs(dcr.height - dshSeatH) > 0.5) { dshSeatH = dcr.height; } }\n\t\t\t\t\t\telse if (entries[di].target === scroller) { if (dshViewH === void 0 || Math.abs(dcr.height - dshViewH) > 0.5) { dshViewH = dcr.height; } }\n\t\t\t\t\t}\n\t\t\t\t\tvar dshSeatGo = dshSeatH !== void 0 && dshSeatH !== seatObserver.current.__dshSeatH;\n\t\t\t\t\tvar dshViewGo = dshViewH !== void 0 && dshViewH !== seatObserver.current.__dshViewH;\n\t\t\t\t\tif (dshSeatGo) { seatObserver.current.__dshSeatH = dshSeatH; scroller.style.setProperty("--dsh-composer-height", `${seat.offsetHeight}px`); }\n\t\t\t\t\tif (dshViewGo) { seatObserver.current.__dshViewH = dshViewH; scroller.style.setProperty("--dsh-conversation-viewport-height", `${scroller.clientHeight}px`); } // [dsh-desktop P3/T3-1d] 高度门:宽度-only 通知跳过读写\n\t\t\t\t});'
+  const files = []
+  const localConv = ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-conversation\\lib\\client.js',
+    path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-conversation', 'lib', 'client.js')]
+    .find((f) => fs.existsSync(f))
+  if (localConv) files.push(localConv)
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      const nm = path.join(npxRoot, h, 'node_modules')
+      if (!fs.existsSync(nm)) continue
+      const walk = (d, depth) => {
+        if (depth > 6) return
+        let es
+        try { es = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
+        for (const e of es) {
+          const fp = path.join(d, e.name)
+          if (e.isDirectory()) { if (e.name === '.bin') continue; walk(fp, depth + 1) } else if (e.name === 'client.js' && fp.includes('dsh-client-ui-conversation')) files.push(fp)
+        }
+      }
+      walk(nm, 0)
+    }
+  }
+  if (!files.length) return [{ file: 'ui-conversation/lib/client.js', missing: true }]
+  const results = []
+  for (const p of files) {
+    const label = 'ui-conversation/lib/client.js@' + (p.includes('deepseek-harness') || p.includes('deepseek-harness') ? 'L' : path.basename(path.dirname(path.dirname(path.dirname(p))))).slice(0, 24)
+    try {
+      const cur = fs.readFileSync(p, 'utf8')
+      if (cur.includes('[dsh-desktop P3/T3-1d]')) { results.push({ file: label, ok: true, already: true, version: 'p3hg' }); continue }
+      const n = cur.split(ANCHOR_FROM).length - 1
+      if (n !== 1) { results.push({ file: label, ok: false, failures: [`${label}: composer-height 锚点 matched ${n}, expected 1(上游漂移,保持现状)`], kept: true }); continue }
+      const bak = p + '.bak-p3hg'
+      if (!fs.existsSync(bak)) fs.writeFileSync(bak, cur, 'utf8')
+      let patched = cur.split(ANCHOR_FROM).join(ANCHOR_TO)
+      if (!patched.includes(PATCH_MARK)) patched += '\n' + PATCH_MARK + '\n'
+      fs.writeFileSync(p, patched, 'utf8')
+      results.push({ file: label, ok: true, already: false, version: 'p3hg' })
+    } catch (e) {
+      results.push({ file: label, ok: false, failures: [`${label}: ${e.message}`], kept: true })
+    }
+  }
+  return results
+}
+
 function replayAll(log = () => {}) {
   const out = { ok: true, items: [] }
-  for (const r of [...patchBetterSidebar(), ...patchNodeNav(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchVisionRouterPortal(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchSkinSubpages(), ...patchSkinSubpagesK10(), ...patchSkinSubpagesK11(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchMnemonProjection(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchConversationPlusQuickActions()]) {
+  for (const r of [...patchBetterSidebar(), ...patchBetterSidebarBrowserLinkNav(), ...patchBetterSidebarEmbedAllow(), ...patchPresentedCardRedirect(), ...patchPresentedMentionSidebar(), ...patchCommandContributionGuard(), ...patchSlashMenuGroupTitles(), ...patchSlashMenuGroupTitleWording(), ...patchNodeNav(), ...patchNodeNavHost(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchEgoBrowserWorkerSpawn(), ...patchEgoBrowserCastWorker(), ...patchEgoBrowserWorkerSelfKill(), ...patchEgoBrowserUrlTargetRelease(), ...patchEgoBrowserHeadlessHost(), ...patchEgoBrowserHeadlessRuntime(), ...patchEgoBrowserHeadlessCopy(), ...patchSystemPromptPersona(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchVisionRouterPortal(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchGeneralOtherV9(), ...patchSkinSubpages(), ...patchSkinSubpagesK10(), ...patchSkinSubpagesK11(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchMnemonProjection(), ...patchMnemonClockGate(), ...patchBetterSidebarClockGate(), ...patchConversationHeightGate(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchConversationPlusQuickActions(), ...patchBlankSessionDup(), ...patchSessionFormatV0Lenient(), ...patchModelSelectionSessionGone(), ...patchPiAiMergeConsecutiveMessages(), ...patchSessionTopicHoverCard(), ...patchRightbarDefaultRatio()]) {
     if (r.missing) { log(`[patches] ${r.file}: 未安装,跳过`); continue }
     out.items.push(r)
     if (r.ok) log(`[patches] ${r.file}@${r.version}: ${r.skipped ? '锚点不适配,安全跳过' : r.already ? '已是补丁态' : '已恢复本地定制'}`)

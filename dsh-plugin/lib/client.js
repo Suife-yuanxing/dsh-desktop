@@ -11,6 +11,21 @@ window.__ModuleLoader__.load({
 
 		var SHELL_API = "http://127.0.0.1:30801";
 
+		// [P1/B3 2026-09-10 性能批次] 统一 1200ms UI 轮询调度器
+		// 合并原两处独立 1200ms 轮询(滚动渐隐门 syncScrollFadeSync / 圆点导航门控
+		// syncGate+posOnce);document.hidden 期间整体跳过(隐藏期零消耗),
+		// visibilitychange 恢复可见立即补跑一次(覆盖手册已知坑「后台切页门控停在
+		// 旧态」)。各回调独立 try 包裹,单项失败不牵连其余。
+		var dshVtTickFns = [];
+		var dshVtTick = function () {
+			if (document.hidden) return;
+			for (var i = 0; i < dshVtTickFns.length; i++) {
+				try { dshVtTickFns[i](); } catch (e) { /* 单项失败不牵连 */ }
+			}
+		};
+		window.setInterval(dshVtTick, 1200);
+		document.addEventListener("visibilitychange", function () { if (!document.hidden) dshVtTick(); });
+
 		var css = [
 			".pm_root{display:flex;flex-direction:column;gap:10px;padding:4px 0}",
 			".pm_search{display:flex;align-items:center;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px}",
@@ -61,6 +76,9 @@ window.__ModuleLoader__.load({
 			".cm_sw:disabled{opacity:.5;cursor:default}",
 			".cm_confirm{display:flex;align-items:center;gap:8px;margin-top:2px;flex-wrap:wrap}",
 			".cm_confirmTxt{font-size:12px;color:#f85149}",
+			// [v0.5.17] dsh 更新前插件兼容性确认块:竖排清单 + 滚动
+			".cm_compat{flex-direction:column;align-items:stretch;gap:6px;border:1px solid rgba(248,81,73,.35);border-radius:8px;padding:10px 12px;margin-top:6px}",
+			".cm_compatList{font-size:12px;color:var(--dsw-alias-label-secondary);max-height:150px;overflow:auto;display:flex;flex-direction:column;gap:3px;line-height:1.5;word-break:break-all}",
 			".cm_btnDanger{background:transparent;border:1px solid #da3633;color:#f85149;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer}",
 			".cm_btnDanger:hover{background:rgba(248,81,73,.1)}",
 			".cm_btnGhost{background:transparent;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer}",
@@ -215,6 +233,74 @@ window.__ModuleLoader__.load({
 			// max(…,96px) 恒取 96px——与新建参照页像素一致,两页类型/开闭态/刷新重启恒不变。
 			"[class*=\"_panel\"]:has(> [class*=\"panelResize\"]){padding-top:max(44px,var(--dsh-titlebar-safe,44px))!important;box-sizing:border-box!important}",
 			"[class*=\"toggleCluster\"]{right:max(var(--dsh-bsr-cluster-right,96px),96px)!important}",
+			// ---- [批次150 2026-09-11] better-sidebar 0.19.0 接入原生右栏后的三处补正 ----
+			// 背景:批次149 把会话头两个入口(底部工作台开关 / 原生右栏展开钮)从「整簇 display:none」
+			//   里救回来之后,主人截图报两件事:①「打开侧边卡片后上方图标与系统窗口重叠」
+			//   ②「去除底部卡片进入入口」。本批按同一令牌(--dsh-titlebar-safe-right)补齐。
+			// ①-a 右栏面板**自身铬件**钻进控件区(主诉):0.19.0 的右栏 = 原生
+			//   @deepseek-ai/dsh-client-ui-sidebar-right(类前缀 _tabStrip_/_stripChrome_/P3OORG_,
+			//   **不是** better-sidebar 自绘面板)⇒ 上方 ③ 那条 [class*="_panel"]:has(>panelResize)
+			//   与 [class*="toggleCluster"] 两条已随 0.18.1 自绘面板架构**整体退役**(0.19.0 里
+			//   toggleCluster ×0),对原生面板零作用。实测(面板开、窗宽 1400):面板 tab 条
+			//   [data-dockkit-strip](x770-1400)的上游 padding 是 `10px 6px 0 10px`,故右端铬件
+			//   —— 分栏 x1294-1322 / 全屏 x1330-1358 / 收起右侧边栏 x1366-1394 —— 正压在壳窗口控件
+			//   #dsh-desktop-win-controls(x1314-1390, y0-40, position:fixed, z-index 2147483647)上
+			//   (收起钮被整颗压住)。会话头那条 ② 早已按同一令牌预留 100px(故 titleRow 恒止于
+			//   vw-100=1300),此处对 tab 条补同一条预留;表达式沿用 max(78px,var(--dsh-titlebar-
+			//   safe-right,100px)) 保持「令牌单一事实来源 + 硬底线兼容旧壳」。
+			//   只做水平预留、**不动垂直**:tab 条与控件垂直同带(y10-38 vs y0-40),但右端止于
+			//   vw-100 后 x 区间不再相交 —— 与 ② 同一取舍(不动垂直以免破坏既有布局与拖拽区)。
+			//   ⚠ 不加 box-sizing:border-box:该元素 height:28px + padding-top:10px 是 content-box
+			//   语义(实测总高 38px),改 border-box 会把总高压成 28px、动到布局。
+			"[data-dockkit-strip]{padding-right:max(78px,var(--dsh-titlebar-safe-right,100px))!important}",
+			// ①-b 会话头右上角簇的**负右边距**:上游 .[hash]_headerCorner{margin-right:-16px} 让整簇
+			//   外溢 16px(其设计意图是贴到窗口右缘;在壳已按令牌留出 100px 的前提下就变成压进控件区
+			//   —— 批次149 恢复出来的右栏展开钮 x1288-1316 恰越界 16px,正是主人第二张裁片里那两颗。
+			//   注:展开钮只在右栏收起时渲染,故本条只在收起态起作用)。margin 归零即止于安全线 vw-100。
+			"[data-conversation-header-corner],[class*=\"_headerCorner\"]{margin-right:0!important}",
+			// ② 底部工作台入口摘除(主人裁决「去除底部卡片进入入口」):better-sidebar 0.19.0 的
+			//   底部工作台开合钮 button[data-dsh-bottom-toggle](README 自述注册进 conversation.
+			//   session.header.utilities 槽)。锚插件自己给的**语义属性** data-dsh-bottom-toggle
+			//   (非 CSS module 哈希,抗重构);只 display:none 不删 DOM、不动市场插件 ⇒ 想让入口
+			//   回来只需删掉本条。能力面不丢:底部工作台容器 nArs4W_bottomPanel 仍在 DOM。
+			"[data-dsh-bottom-toggle]{display:none!important}",
+			// utilities 槽在 ② 之后已无**可见**子件,但外层容器 div.[hash]_headerUtilities 仍
+			//   display:flex 且自带 margin-left:20px(上游仅在 `:empty` 时 display:none,而「子件被
+			//   隐藏」不算 empty)⇒ 会留 20px 幽灵空隙。⚠ 注意层级:data-slot 宿主 div 是**内层**
+			//   (style="display:contents"),有 margin 的是它的**父**容器(实测链:headerUtilities >
+			//   div[data-slot=…][display:contents] > 注入件)⇒ 钉 data-slot 容器打不到这条 margin
+			//   (批次150 首版打偏,已实测修正)。改用 `:has(> 该槽宿主)` 从子反查父(语义、免哈希;
+			//   实测与 [class*="_headerUtilities"] 命中同一节点且仅 1 个),哈希后缀双保险。
+			//   只归零外边距、**不 display:none 容器**:容器保留 display:flex,上游日后往该槽新注入
+			//   的件才能照常显示 —— 这是批次149 的教训(整簇藏容器会反噬插件入口)。
+			":has(>[data-slot=\"conversation.session.header.utilities\"]){margin-left:0!important}",
+			"[class*=\"_headerUtilities\"]{margin-left:0!important}",
+			// ---- [批次153 2026-09-11] 侧边卡片入口「钉位」:开合两向都停在同一点 ----
+			// 主诉:「优化侧边卡片入口在打开侧边卡片到关闭卡片时入口位置变化不合理顺畅的问题」。
+			// 实测(CDP 逐帧采样,面板宽 626;⚠ 必须在窗口前台测 —— 壳窗口被遮挡时 Chromium 冻结
+			//   渲染管线,CSS 过渡会「卡」在中间值,量出来全是假象,本批实测踩过):
+			//   入口由两枚**原生**钮轮值 —— 收起态 = 会话头右上角 [data-sidebar-right-expand]
+			//   (挂在中列,中列宽 0→626 走 grid 过渡);展开态 = 面板 tab 条内
+			//   [data-sidebar-right-toggle](挂在面板,面板 transform:translate(100%) 从屏外滑入)。
+			//   两者**静止位重合**(均 x1272..1300,即窗口右缘内缩 --dsh-titlebar-safe-right 100px + 28),
+			//   但过渡期各自被「会动的容器」拖着走 ⇒ 观感就是主人说的「位置变化不合理、不顺」:
+			//     打开:点击瞬间 expand 卸载 ⇒ 入口位**空窗 ~255ms**,收起钮自窗口右缘 x1899 滑到 1272(627px);
+			//           中途 (1286,25) 处甚至已变成 tab 条的「全屏」钮;
+			//     关闭:expand 在 x646(中列窄时的头部右缘)**凭空出现** ⇒ 入口位**空窗 ~277ms**,
+			//           图标横穿 626px 才落到 1272。
+			// 修法:两枚原生钮**只保留布局盒、撤掉可见性与命中**(visibility:hidden;**不用** display:none
+			//   也不用 position:fixed 改挂 —— 两者都会让会话头/tab 条排版位移),由壳注入一枚常驻入口钮
+			//   #dsh-bsr-entry:position:fixed 锚窗口右缘(与面板宽 443/626 无关),逐字复刻原生几何
+			//   (28×28 / padding 6 / radius 28 / label-secondary / interactive-bg-hover 交互底色,
+			//   令牌与原生规则实测同源),点击代理转发给「当前该用的」那枚原生钮。
+			// 守卫:仅在壳成功注入后(body.dsh-bsr-entry-ready,由 installSidebarRightEntry 打)才隐藏原生钮
+			//   ⇒ 注入失败 = 自动回退原生行为,不会把入口藏丢(批次149 教训)。
+			// 回退:删掉本条 + 对应"ready"类规则即完全恢复原生入口,零副作用。
+			"body.dsh-bsr-entry-ready [data-sidebar-right-expand],body.dsh-bsr-entry-ready [data-sidebar-right-toggle]{visibility:hidden!important}",
+			"#dsh-bsr-entry{position:fixed;top:var(--dsh-bsr-entry-top,11px);right:max(96px,var(--dsh-titlebar-safe-right,100px));width:28px;height:28px;padding:6px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:28px;background:0 0;color:var(--dsw-alias-label-secondary,#61666b);cursor:pointer;z-index:40;-webkit-app-region:no-drag;transition:background-color .15s ease}",
+			"#dsh-bsr-entry:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}",
+			"#dsh-bsr-entry>svg{width:15px;height:15px;display:block}",
+			"#dsh-bsr-entry[data-bsr-entry-hidden=true]{display:none!important}",
 			// ---- [问题2] 侧栏 entry 行(任务看板/SSH/记忆)收起态平滑化:与原生项同节奏 ----
 			// 插件自身用 display:none 硬切 label + padding 瞬变,与原生侧栏项的渐变收起不一致。
 			"[data-dsh-frame] .entry{transition:padding var(--dsh-bsr-slide-duration) var(--dsh-bsr-slide-ease),width var(--dsh-bsr-slide-duration) var(--dsh-bsr-slide-ease)!important}",
@@ -254,6 +340,18 @@ window.__ModuleLoader__.load({
 			// 判定存在可见 [data-chat-flow])时显示;left 不写死——由 railSyncPos 按聊天内容区
 			// 实时左缘 JS 定位(含过渡期逐帧跟随)。判定类缺失时安全态=不可见(默认隐藏方向)。
 			".dsh-node-nav-rail{opacity:1!important;visibility:visible!important;pointer-events:auto!important}",
+			// ---- [b159 2026-09-11] node-nav 渲染骨架兜底:插件 CSS_TEXT 丢失(未知触发,疑似
+			// HMR 半程重载)时 rail 失去 fixed 定位 → 退化为 static 文档流 → 整条渲染进
+			// shell.overlay 层顶部(y=0)= 工作区顶部 deepseek 品牌区(用户截图实证:rail 的
+			// 橙棕 active dot + 灰色 line 叠在 logo 旁)。本规则把 rail/preview/miss 的定位
+			// 骨架钉进必加载面,不依赖插件样式表;top 加视口钳制(矮窗口 rail 不再以
+			// top:50% 撞进顶栏)。left 刻意不写 !important —— posOnce 的行内 left 仍可覆盖。
+			".dsh-node-nav-rail,.dsh-node-nav-preview,.dsh-node-nav-miss{position:fixed!important;z-index:1000!important}",
+			".dsh-node-nav-rail{display:flex!important;flex-direction:column!important;align-items:center!important;width:16px!important;max-height:calc(100vh - 32px)!important;overflow-y:auto!important;scrollbar-width:none!important;top:50%!important;transform:translateY(-50%)!important;left:292px}",
+			".dsh-node-nav-rail::-webkit-scrollbar{display:none!important}",
+			".dsh-node-nav-preview{width:284px!important;max-height:240px!important;overflow:hidden!important;left:316px!important}",
+			".dsh-node-nav-miss{left:316px!important}",
+			"@media (max-height:420px){.dsh-node-nav-rail{top:max(96px,min(50%,calc(100vh - 120px)))!important;transform:none!important}}",
 			// [b13问题2] 非聊天页门控:SSH/记忆系统/任务看板等页 chat-flow 摘除或 0×0,
 			// rail/miss 一并淡出,不沿用聊天页坐标残显(特异性 0,2,1 胜过恒开规则,双 !important 按特异性决胜)
 			"body:not(.dsh-vt-chatflow-on) .dsh-node-nav-rail,body:not(.dsh-vt-chatflow-on) .dsh-node-nav-miss{opacity:0!important;visibility:hidden!important;pointer-events:none!important}",
@@ -435,7 +533,16 @@ window.__ModuleLoader__.load({
 			// 用户表现为位置错位/不显示。显式豁免(动画摘除+强制不透明),不受冻结影响。
 			// [问题62] 设置弹窗打开时解除侧栏列裁剪(fixed overlay 被 sidebarCol/frame
 			// 的 overflow:hidden 裁得全屏不可见);弹窗打开时侧栏无动画,解除安全。
+			// [批次134] 但 overflow:visible 在放行弹窗的同时,也放行了"藏在视口右侧的滑出面板":
+			// 文档 scrollWidth 由 ~1045 被撑到 ~1512(实测横向溢出约 467px),视口底部于是冒出
+			// 一整条横向滚动条。又因 dsh 把 --dsh-scrollbar-thumb 只定义在 body 上,html 读不到
+			// 该变量,根滚动条回退成系统色(像素实测 #EC8036 橙),比灰条刺眼得多 —— 这正是用户
+			// 看到的「设置页底部橙色横条」。处置:在 html 层禁止横向滚动。clip 不产生滚动容器、
+			// 不影响 fixed/sticky;弹窗本体在视口内(实测 CSS x≈77..968)故不受裁剪,视口外的
+			// 藏件被裁掉,滚动条整体消失。
 			'html.dsh-vt-settings-open div[class*="_sidebarCol"],html.dsh-vt-settings-open div[class*="_frame"]{overflow:visible!important}',
+			'html{overflow-x:clip!important}',
+			'@supports not (overflow:clip){html{overflow-x:hidden!important}}',
 			// 设置内模块切换:section 内容方向性入场(navfx:切区段按导航移动方向上/下入位,空间连续性;
 			// 首次打开无 data-dsh-dir 走默认上移。React 切区段卸旧挂新,动画仅挂载时播;data-dsh-dir 由
 			// MO 微任务先于绘制写入,入场首帧即选中正确关键帧)
@@ -578,7 +685,21 @@ window.__ModuleLoader__.load({
 			//   _portal_ 菜单浮在页面米色底上无此问题且由批次101 玻璃层负责,显式排除避免互斥。
 			"[role=\"menu\"] [class*=\"_viewport_\"]{overflow-x:hidden!important}",
 			"[role=\"menu\"][class*=\"_sideTop_\"]:not([class*=\"_portal_\"]){padding-bottom:2px!important;translate:0 3px!important;box-shadow:rgb(234,220,226) 0px 0px 0px 0.5px,0 4px 10px -4px rgba(0,0,0,.10)!important}",
-			// ---- [R80] 归档会话管理页:列表/统计/幽灵警示/行操作 ----
+			// ---- [批次133 2026-09-10] 设置对话框底部「多余横向滚动条」根治(用户问题 #3) ----
+			// 症状: 打开设置(通用/皮肤等任意页)后,对话框底部多出一条 8px 横向滚动条
+			//   (用户截图的橙色横条),面板视觉上「多出一截」。
+			// 根因: 设置外壳 SettingsRoot 的内容滚动区 .VOzbGW_options 只声明 overflow-y:auto
+			//   —— 按 CSS 规范另一轴的 visible 会被计算成 auto,于是内部任何 1~3px 的横向溢出
+			//   都会弹出经典 8px 滚动条(与本项目批次 103「上开菜单白条」同源:overflow-y:auto
+			//   容器内 hover translateX / width:100%+gap 的亚像素溢出)。
+			// 修法: 设置对话框本体与其滚动/面板容器恒隐藏横向滚动 —— 设置内容恒为纵向布局,
+			//   横向滚动无意义(DOM 实证: div[role=dialog][aria-modal] = .VOzbGW_panel,
+			//   其内 .VOzbGW_options 为唯一 overflow-y:auto 滚动区)。
+			//   选择器用 role/aria + css-modules 本地名后缀寻址,构建哈希前缀漂移不影响,
+			//   official/local 双轨通用(与批次 101/103 菜单族同策略:只隐藏横向,不动纵向滚动)。
+			"div[role=\"dialog\"][aria-modal=\"true\"]{overflow-x:hidden!important}",
+			"div[role=\"dialog\"] [class*=\"_options\"],div[role=\"dialog\"] [class*=\"_panel\"]{overflow-x:hidden!important}",
+			// ---- [R99] 归档会话管理页:列表/统计/幽灵警示/行操作 ----
 			".am_root{display:flex;flex-direction:column;gap:10px;padding:4px 0}",
 			".am_top{display:flex;align-items:center;justify-content:space-between;gap:10px}",
 			".am_stats{font-size:12px;color:var(--dsw-alias-label-secondary)}",
@@ -591,6 +712,10 @@ window.__ModuleLoader__.load({
 			".am_btnDanger:active{transform:translateY(1px)}",
 			".am_btnDanger:disabled{opacity:.45;cursor:default}",
 			".am_ghost{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid rgba(210,153,34,.45);background:rgba(210,153,34,.08);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--dsw-alias-label-primary)}",
+			// [批次133 2026-09-10] 无用(空)会话清理条:与「幽灵」条同构,但走中性色(这不是异常,
+			// 是日常卫生清理),右侧按钮复用 am_btn;计数用等宽数字避免轮询刷新时抖动。
+			".am_blank{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--dsw-alias-border-l2);background:rgba(127,127,127,.05);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--dsw-alias-label-primary)}",
+			".am_blankN{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary)}",
 			".am_list{display:flex;flex-direction:column;gap:6px;max-height:56vh;overflow:auto;transition:opacity .18s ease}",
 			".am_listBusy{opacity:.55;pointer-events:none}",
 			".am_row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:9px 12px;cursor:pointer;transition:border-color .16s ease,background .16s ease,opacity .16s ease}",
@@ -622,6 +747,149 @@ window.__ModuleLoader__.load({
 			".am_dlgOverlay{animation:amFadeIn .14s ease}",
 			"@keyframes amPopIn{from{opacity:0;transform:scale(.96) translateY(4px)}}",
 			".am_dlgCard{animation:amPopIn .16s ease}",
+			// ---- [批次135 2026-09-10] 工具行「添加附件」摘除 + 排序钉语义化升级 ----
+			// 症状:用户截图显示工具行「专家」与「附件」在两个状态间来回换位(悬停「+」即变)。
+			// 根因(代码级取证,0.1.5-rc.1 部署面):上游 0.1.5 在工具行第 2 子位新增了独立回形针
+			// 按钮(aria-label=添加附件,类名与「+」同为 [hash]_add;lib/client.js 16141-16168)。
+			// 它踩中市场插件 @michengai/dsh-agency-agents 的「按位置定位」规则
+			//   [data-composer-card] :has(>button[aria-haspopup="listbox"])>:nth-child(2){order:2}
+			// (其 lib/client.js 6805 的 CSS 字面量;为旧 DOM 而写——那时第 2 子位正是权限簇,
+			//  即批次 60 修的那条)——如今第 2 子位变成附件按钮,于是附件抢走 order:2;
+			// 而悬停「+」时 Tooltip 气泡(position:fixed)会作为第 2 个子节点插进工具行,把
+			// order:2 又抢回去 ⇒ 附件掉回 order:0 左移一位、专家右移一位。移开气泡复原。
+			// 与批次 60「专家/完全权限」同一家族,只是 0.1.5 换了受害者。
+			// 用户裁决:不要把回形针挪位,直接摘掉这个入口(第 1 条规则)。
+			// 排序钉同时升级为「先清全场、再钉权限簇」,对任何位置型规则与气泡进出免疫
+			// (旧形态只钉 [class*="_modes"],挡不住别人钉 nth-child)。
+			// 边界:只做 display:none(不删 DOM、不改市场插件——插件更新即回退);附件能力不丢:
+			// 拖拽与 Ctrl+V 仍走 composer keymap 的 PASTE_COMMAND → intakeFiles 原路。
+			// 寻址用类名后缀 + aria-label 双语言 + :has(+input[type=file]) 三重兜底(R47 惯例,
+			// 构建哈希漂移免疫);仅 client 侧样式,DOM/CSS,刷新页面即生效(无需重启 dsh/重打包)。
+			'[data-composer-card] [class*="_tools"] button[class*="_add"][aria-label="添加附件"],[data-composer-card] [class*="_tools"] button[class*="_add"][aria-label="Add attachment"],[data-composer-card] [class*="_tools"] button[class*="_add"]:has(+input[type="file"]),[data-composer-card] [class*="_tools"]>*:has(>button[class*="_add"][aria-label="添加附件"]){display:none!important}',
+			'[data-composer-card] [class*="_tools"]>*{order:0!important}',
+			'[data-composer-card] [class*="_tools"]>[class*="_modes"]{order:2!important}',
+			// ---- [批次136 2026-09-10] 会话右缘「轮次导航」长条摘除(用户第二次要求,同批次91/v6) ----
+			// 症状:聊天页右缘一列右对齐的横杠刻度(未读刻度浅、当前轮最长最深),点击可跳轮次
+			// ——像素取证(用户截图):mark 高 4px,右缘齐平,宽度 12/18/30px 三档,间距 15px。
+			// 归属:0.1.5 的 @deepseek-ai/dsh-client-ui-chat `TurnNavigator`(lib/client.js 1749-1800):
+			//   div.[hash]_slot > nav.[hash]_frame[aria-label=轮次导航][style*="--turn-natural-height"]
+			//     > div.[hash]_scroller > div.[hash]_marks > div.[hash]_markPosition > button.[hash]_mark
+			// 常量 TURN_SPACING_PX=10 / RAIL_INSET_PX=6;aria-label zh=轮次导航 / en=Turn navigation。
+			// 为何复发:批次 91 的隐藏走 [U] v6(样式随 alpha.5 conversation bundle 常驻),而 [U] 段
+			// 版本门控只认 0.1.2-alpha.5 ⇒ 0.1.5 面整体 skipped,右缘条随升级回来了。
+			// 修法:钉进 dshvt 必加载面,选择器全部哈希无关(aria 双语言 + 内联样式变量 + :has 包装层,
+			// 包装层一起隐藏防留位);旧 v6 的 nav[style*="--turn-natural-height"] 在 0.1.5 仍有效,
+			// 与本钉语义一致双保险。生效:client 侧,刷新页面即可。
+			'nav[aria-label="轮次导航"],nav[aria-label="Turn navigation"],nav[class*="_frame"][style*="--turn-natural-height"],div[class*="_slot"]:has(>nav[style*="--turn-natural-height"]){display:none!important}',
+			// ---- [批次138 2026-09-10] 会话头部右上角三入口摘除(用户截图裁决:去掉系统窗口按钮左侧三件) ----
+			// 症状:窗口控制钮(交通灯)左侧并排三件——①工作区胶囊(彩色文件夹+⌄) ②⋯菜单 ③右侧栏展开钮(▯|)。
+			// 归属(0.1.5-rc.1 代码级取证):上游 0.1.5 会话头部新增右上角簇,容器
+			//   div.[hash]_headerCorner[data-conversation-header-corner](conversation bundle ~15082),
+			//   内容来自 conversation.session.header.corner 槽位的三个注入:
+			//   ① dsh-client-ui-workspace 工作区切换胶囊(FileTypeIcon folder 彩色文件夹 + chevron);
+			//   ② 会话/视图「⋯」菜单钮;③ dsh-client-ui-sidebar-right ExpandButton
+			//     (button[data-sidebar-right-expand],仅右侧面板收起时出现;lib/client.js 3740-3744 注入 corner)。
+			// 【批次149 收窄 2026-09-11】原「整簇 display:none」把簇内 ExpandButton 也一起摘了。
+			//   0.18.1 时代无碍(插件自绘浮动面板,自成一套入口);**0.19.0 上游退役自绘右侧面板、
+			//   接入 DSH 原生右侧栏**(README #605/#604),这颗钮就成了「面板收起时唯一 UI 重开入口」
+			//   —— 整簇摘除 = 把插件唯一入口掐死,表象就是用户报的「界面完全看不出 better-sidebar 痕迹」。
+			//   活体实证(批次149 新取证法:CDP 直连壳 renderer,--remote-debugging-port=9333):
+			//   corner 槽今日**直接子件只有该钮一件**,被藏后 w=0/h=0/offsetParent=null,人点不到。
+			// 修法(收窄):锚槽位宿主 [data-slot="conversation.session.header.corner"](上游公共扩展面)
+			//   的直接子件,只摘 :not([data-sidebar-right-expand]) —— 展开钮放行,簇内其余件(上游日后
+			//   再注入的)照摘。
+			//   ⚠ 不可写 corner 自身的 `>*`:corner 的直接子件是槽位包装 div(display:contents),
+			//   写 `>*` 会连包装层一起藏、把展开钮搭进去(批次149 踩坑,已实测)。
+			// 边界:只 display:none 不删 DOM、不动上游包。今日该槽只有展开钮一件 ⇒ 本规则实际为 no-op
+			//   (纯安全网);上游若再往 corner 注入件,自动摘除。仅 client 侧样式,刷新页面即生效。
+			'[data-slot="conversation.session.header.corner"]>*:not([data-sidebar-right-expand]){display:none!important}',
+			// ---- [批次139 2026-09-10] 会话头部「工具簇」两入口摘除(用户截图裁决:系统窗口钮左侧还剩两件) ----
+			// 症状:壳窗口控制钮(交通灯)左侧并排两件——①「在本地打开」分体胶囊(资源管理器图标 | 竖分隔线 | ⌄,
+			//   用户口中「文件资源管理器入口」)②「⋯」更多操作钮(Menu 仅一条「下载 Session 日志」,
+			//   用户口中「下载日志入口」)。批次138 摘的是 corner,这两件在另一个容器里,所以还在。
+			// 归属(0.1.5-rc.1 代码级取证):会话头部 titleRow 之后还有第三个槽位容器
+			//   div.[hash]_headerUtilities(= 槽位 conversation.session.header.utilities;conversation bundle
+			//   ~15077-15080,`:empty` 时上游本就 display:none)。全仓 grep `slots.inject("conversation.session
+			//   .header.utilities"` 只有两家注入,且就是这两件:
+			//   ① @deepseek-ai/dsh-client-ui-open-in-app 的 OpenInAppAction(order:-10,最左):
+			//      分体按钮,根节点 [class*="_split"];main 的 aria-label 随上次选择变化
+			//      (本机为「在 文件资源管理器 中打开工作目录」),chevron aria-label=「选择打开方式」;
+			//      点击走宿主路由 open.in-app 用系统文件管理器打开会话 cwd。
+			//   ② @deepseek-ai/dsh-session-log-export 的 SessionLogDownloadHeaderAction:
+			//      button[class*="_moreButton"][aria-label="更多操作"](IconEllipsisOutline16),菜单项
+			//      「下载 Session 日志」= 命令 export 成功后由浏览器下载 Session ZIP。
+			// 【批次149 收窄 2026-09-11】原「整簇容器 display:none」会连带掐死 utilities 槽的**新成员**:
+			//   better-sidebar 0.19.0 把「底部工作台开合钮」注册进 conversation.session.header.utilities
+			//   (button[data-dsh-bottom-toggle="true"];上游 0.19.0 README 自述「开合按钮注册进 DSH
+			//   会话头 utilities 槽」)。整簇藏 ⇒ 该钮 w=0/h=0、人点不到,插件只剩「看不出痕迹」。
+			// 修法(收窄为逐件锚 + 摘外层包装):钉槽位宿主 [data-slot="conversation.session.header.utilities"]
+			//   的**直接子件**,用 :has(> …) 辨认那两件并**连外层 span 包装一起摘**(只藏内层会因容器
+			//   gap:8px 留下空位);另留两条裸子件形态兜底(上游若改变包装层也覆盖)。
+			//   槽位宿主 data-slot 是上游公共扩展面,优于原 CSS module 哈希后缀 [class*="_headerUtilities"]。
+			// 边界:容器保持 display:flex(不再整簇藏),better-sidebar 的开合钮与日后新件都留在原地;
+			//   自带 margin-left:20px 恢复为上游正常间距。**恢复路径**:删本条刷新页面,两件即回。
+			// 能力面不丢:①Session 日志仍可 `/export` 命令导出(命令成功即触发同一 controller.download);
+			//   ②「在文件管理器中打开 cwd」仍可由文件树右键等宿主入口触达。
+			// 生效:仅 client 侧样式,刷新页面即生效(无需重启 dsh / 重打包 / 同步 patches.cjs)。
+			'[data-slot="conversation.session.header.utilities"]>*:has(>div[class*="_split"]),[data-slot="conversation.session.header.utilities"]>*:has(>button[class*="_moreButton"]),[data-slot="conversation.session.header.utilities"]>div[class*="_split"],[data-slot="conversation.session.header.utilities"]>button[class*="_moreButton"]{display:none!important}',
+			// ---- [批次141 2026-09-10] 会话内容列「右侧」宽度拖拽柄摘除(用户截图裁决:只去右侧,左侧保留) ----
+			// 症状:鼠标移到会话内容列两侧时,各浮出一条随指针纵向滑动的细条(浅色主题下为深灰,用户读作
+			//   「黑色条」);左侧那条拖拽可调会话内容宽度,右侧那条同样可调。用户裁决:只去右侧。
+			// 归属(0.1.5-rc.1 代码级取证):核心包 @deepseek-ai/dsh-client-ui-conversation 的
+			//   ConversationRoot 宽度柄(非市场插件):div.[hash]_widthHandle[data-side][data-width-handle],
+			//   渲染见 lib/client.js 14773-14781;CSS 在 14652 行 css 字符串里:
+			//   .wSkVaW_widthHandle{z-index:8;width:min(40px,…);cursor:col-resize;position:absolute;top:0;bottom:0}
+			//   [data-side=left]{right:calc(50% + var(--dsh-chat-content-width)/2 + 24px)} / [data-side=right]{left:…}
+			//   —— 两侧各一条 40px 宽透明热区;可见的 3px 细条是它的 ::after:
+			//   background:linear-gradient(... var(--dsw-alias-scrollbar-hover-l1) ...);opacity:0,
+			//   仅 :hover / [data-dragging] 时 opacity:1,纵向位置随 --dsh-width-handle-pointer-y 跟指针滑动;
+			//   拖拽结果写入 localStorage[dsh.conversation.contentWidth](CONTENT_MIN=640 起)。
+			// 修法:钉上游语义属性 data-width-handle="right"(哈希漂移免疫;比 data-side="right" 精确——
+			//   后者过宽,日后别的右侧控件若也带 data-side 会被误伤)。display:none 一次撤掉「热区 + ::after
+			//   细条 + 指针拖拽」三件事;该元素 absolute 定位、不参与布局,隐藏零副作用。
+			// 边界/恢复路径:只 display:none 不删 DOM、不动核心包;左侧柄的选择器一字未碰,几何/能力原样。
+			//   要右侧柄回来:删掉本条规则刷新即可。(核心另有
+			//   .wSkVaW_root:has([data-conversation-composer-overlay]) .wSkVaW_widthHandle{display:none}
+			//   在某些覆盖态自行隐藏两侧柄,与本规则互不冲突。)
+			// 生效:仅 client 侧样式,刷新页面即生效(无需重启 dsh / 重打包 / 同步 patches.cjs)。
+			// ---- [批次160 2026-09-12] 宽度柄彻底摘除 + 会话宽度钉死上游最大值(主人改裁决:批次141「只去右侧」升级为「两条全去」) ----
+			// 主诉(附裁片:一条浅灰细竖线):「彻底去除侧边会话窗口缩放的滑条,把会话尺寸固定为最大尺寸」。
+			// 取证(活跃 0.1.5-rc.1 ~/.dsh/profiles/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js):
+			//   ① 可见细条 = ConversationRoot 宽度柄 widthHandle 的 ::after(3px 渐变竖条,:hover/[data-dragging]
+			//     时 opacity:1;柄本体是 40px 透明热区,absolute 定位不参与布局);phase=active 时渲染
+			//     left/right 两条(活跃副本 lib/client.js 14960-14966),拖拽写
+			//     localStorage[dsh.conversation.contentWidth](CONTENT_MIN=640,14791-14707)。
+			//   ② 「最大尺寸」= 上游自己的钳制上限 resolveContentWidth:max(CONTENT_MIN, columnWidth-176)
+			//     (CONTENT_EDGE_BUDGET=176,14693-14715;176 = 两侧 24px 内缩+40px 柄条+24px 安全区,
+			//     保证柄可放置 —— 柄既已全摘,该预算即纯粹的最大留白定义)。列宽由上游 RO 逐次发布为
+			//     CSS 变量 --dsh-conversation-column-width(publishWidths,14814-14820,随窗口/面板变化)。
+			//     活体实测(窗宽 1400):列 1136px → 上限 960px,而主人拖拽偏好恰为 960 —— 即主人已把
+			//     宽度拖到最大,剩下的只是「滑条还会浮出来」的观感 ⇒ 本批 = 摘柄 + 把上限钉成恒等式。
+			// 修法两条(纯 client 侧样式,刷新页面即生效):
+			//   ① [data-width-handle](不带值)左右一起 display:none —— 热区/细条/拖拽三件事一次撤掉,
+			//     取代批次141 的 ="right" 单侧版(机制说明见上批,选择器泛化即「彻底」)。
+			//   ② 在 ConversationRoot 上把 --dsh-chat-content-width 覆盖为 max(640px, 列宽-176px):
+			//     !important 作者声明压过上游样式表声明与 JS 内联 --dsh-chat-user-width(均普通优先级),
+			//     列宽变量每变一次覆盖值即重算 = 恒等于上游允许的最大值、窗口缩放自动跟随。
+			//     锚 [class*="_root"]:has([data-conversation-scroll]) 活体实测全局唯一命中(1/1),
+			//     data-conversation-scroll 是上游语义属性(14958)。布局安全:消费方均为
+			//     max-width:var(…) + width:100% 语义,窄列时按容器宽回落,不会溢出;派生量
+			//     --dsh-composer-card-max-width(=内容宽+32)在根上同链重算,无需另改。
+			// 边界/恢复:删这两条刷新即完整回上游(拖拽偏好 localStorage 原值未动);空态 hero 页与
+			//   会话页共用同一宽度轴,随之同为最大宽(同一根变量,前后宽度一致)。
+			'[data-width-handle]{display:none!important}',
+			'[class*="_root"]:has([data-conversation-scroll]){--dsh-chat-content-width:max(640px,calc(var(--dsh-conversation-column-width,0px) - 176px))!important}',
+			// ---- [P1/A1 复核 2026-09-10] 对话逐消息 c-v 已由上方 [perf] 批次实现 ----
+			// (L197 '[data-chat-flow] > *{content-visibility:auto;...}';ChatNodeList 渲染
+			//   裸数组,flowItem 即直接子元素,逐消息生效)。本批原计划的 A1 新增规则经
+			//   代码级复核确认冗余,不重复注入(避免双规则 intrinsic 值漂移)。
+			// ---- [P1/F1] 设置页离屏区段跳过渲染(同技法零成本复用) ----
+			// 设置区段按 [data-slot="settings.section"] 逐段挂载,R43 长页滚动时离屏
+			//   区段的渲染照常发生;c-v 跳过其内部 layout/paint。视口内区段恒渲染,
+			//   R32/R42 布局与入场动画(L454 一带)不受影响。挂 body.dsh-cv-on 门
+			//   (installSidebarDotSync 的 syncCvGate:会话 flow item ≥ 60 才挂,把增量
+			//   优化限定在重会话场景;未挂类时零影响)。
+			'body.dsh-cv-on [data-slot="settings.section"]>*{content-visibility:auto;contain-intrinsic-size:auto 800px}',
 		].join("");
 		var tagId = "dsh-desktop-version-tab/style";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -689,7 +957,8 @@ window.__ModuleLoader__.load({
 			document.addEventListener("scroll", syncScrollFadeSync, { capture: true, passive: true });
 			window.addEventListener("resize", syncScrollFadeSync, { passive: true });
 			setTimeout(syncScrollFadeSync, 600);
-			setInterval(syncScrollFadeSync, 1200);
+			// [P1/B3] 原 1200ms 独立轮询并入统一调度器 dshVtTick(隐藏门控+恢复补跑)
+			dshVtTickFns.push(syncScrollFadeSync);
 		} catch (e) { /* 门控失败退化为无渐隐,不影响功能 */ }
 
 		function api(path, opts) {
@@ -1486,21 +1755,42 @@ window.__ModuleLoader__.load({
 				}).catch(function (e) { setBusy(false); setMsg("检查失败: " + e.message); });
 			};
 
-			var applyDsh = function () {
-				setBusy(true); setMsg("正在更新 dsh(预检新版可运行性,失败自动回滚)…");
-				api("/updates/apply-dsh", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(function (r) {
+			// [v0.5.17] 插件兼容性门控:首发请求若检出已启用插件与目标版本声明不兼容,
+			// 壳返 needsCompatConfirm + 清单,内联确认后回带 {confirmCompat,target} 继续
+			var compat = react.useState(null);
+			var setCompat = compat[1];
+
+			var pollDshDone = function () {
+				// 轮询直到编排结束(切换含预检+重启+回滚);10 分钟兜底防壳重启窗口轮询挂死
+				var waited = 0;
+				var poll = setInterval(function () {
+					waited += 2000;
+					api("/state").then(function (s) {
+						if ((s.switching || s.restarting) && waited < 600000) return;
+						clearInterval(poll);
+						setBusy(false);
+						setMsg(waited >= 600000 ? "更新编排超时未结束,请稍后在日志中确认结果。" : "dsh 更新编排结束,当前版本 " + s.dshVersion + "。");
+						load();
+					}).catch(function () { /* 壳短暂重启,继续轮询 */ });
+				}, 2000);
+			};
+
+			var applyDsh = function (confirmBody) {
+				var body = confirmBody || {};
+				setBusy(true);
+				setCompat(null);
+				setMsg(body.confirmCompat ? "已确认,正在更新 dsh(预检新版可运行性,失败自动回滚)…" : "正在检查已启用插件兼容性并更新 dsh…");
+				api("/updates/apply-dsh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (r) {
 					if (!r.ok) { setBusy(false); setMsg(r.error || "更新被拒绝"); return; }
+					if (r.needsCompatConfirm) {
+						setBusy(false);
+						setCompat(r);
+						setMsg("新版 dsh " + r.target + " 与 " + r.incompatible.length + " 个已启用插件声明不兼容,等待确认。");
+						return;
+					}
 					if (r.note) { setBusy(false); setMsg(r.note); return; }
-					// 轮询直到编排结束(切换含预检+重启+回滚)
-					var poll = setInterval(function () {
-						api("/state").then(function (s) {
-							if (s.switching || s.restarting) return;
-							clearInterval(poll);
-							setBusy(false);
-							setMsg("dsh 更新编排结束,当前版本 " + s.dshVersion + "。");
-							load();
-						}).catch(function () { /* 壳短暂重启,继续轮询 */ });
-					}, 2000);
+					setMsg("正在更新 dsh(预检新版可运行性,失败自动回滚)…");
+					pollDshDone();
 				}).catch(function (e) { setBusy(false); setMsg("请求失败: " + e.message); });
 			};
 
@@ -1600,6 +1890,19 @@ window.__ModuleLoader__.load({
 				h("p", { className: "vt_intro" }, "桌面壳与 dsh 服务的版本状态与更新通道;运行时轨道(官方/本地构建)与联合工作区灰度也在此切换。")),
 			h("div", { className: "vt_group vt_span" },
 				h("div", { className: "pm_list vt_2col" }, [shellRow, dshRow])),
+			// [v0.5.17] 插件兼容性确认块:壳检出不兼容插件后等用户放行
+			compat[0] ? h("div", { className: "cm_confirm cm_compat" },
+				h("span", { className: "cm_confirmTxt" },
+					"新版 dsh " + compat[0].target + " 与 " + compat[0].incompatible.length + " 个已启用插件的依赖声明不兼容:"),
+				h("div", { className: "cm_compatList" },
+					compat[0].incompatible.map(function (i) {
+						return h("span", { key: i.name }, "• " + i.name + (i.version ? "@" + i.version : "") + " — " + i.reason);
+					})),
+				h("span", { className: "cm_confirmTxt" },
+					"更新后这些插件可能无法工作,可先在插件管理中禁用它们或等待插件更新。仍要继续更新?"),
+				h("div", { style: { display: "flex", gap: "8px" } },
+					h("button", { className: "cm_btnDanger", disabled: busy[0], onClick: function () { applyDsh({ confirmCompat: true, target: compat[0].target }); } }, "仍要更新"),
+					h("button", { className: "cm_btnGhost", onClick: function () { setCompat(null); setMsg("已取消更新。"); } }, "取消"))) : null,
 			h("div", { className: "vt_group vt_span" },
 				h("div", { className: "vt_groupTitle" }, "运行时轨道"),
 				rtBody),
@@ -1608,7 +1911,7 @@ window.__ModuleLoader__.load({
 				h("button", { className: "pm_btn", disabled: busy[0], onClick: function () { api("/updates/open-releases", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); } }, "打开 Releases 页")),
 			c && c.shellNote ? h("div", { className: "pm_msg" }, c.shellNote) : null,
 			h("div", { className: msgCls }, msg[0]),
-			h("div", { className: "pm_msg" }, "壳更新从 GitHub(Suife-yuanxing/dsh-desktop)Releases 拉取:安装版自动下载并弹窗确认重启,便携版引导手动下载。dsh 更新先预检新版可运行性,失败自动回滚。"));
+				h("div", { className: "pm_msg" }, "壳更新从 GitHub(Suife-yuanxing/dsh-desktop)Releases 拉取:安装版自动下载并弹窗确认重启,便携版引导手动下载。dsh 更新先检查已启用插件兼容性(不兼容需确认)并预检新版可运行性,失败自动回滚。"));
 		}
 
 		// ---------- 皮肤 tab:自定义媒体导入 + Wallpaper Engine 接入 ----------
@@ -3013,6 +3316,11 @@ window.__ModuleLoader__.load({
 			if (activeTouched || sectionRoots.length) handleActiveChange(sectionRoots, activeTouched);
 			if (sync || activeTouched || sectionRoots.length) return;
 			if (queued) return;
+			// [P1/B2 2026-09-10] 无设置弹窗时跳过防抖重标:mark() 全页 querySelectorAll
+			// ("button") 逐个查 span 比对 LABEL_MAP,流式期间每 200ms 一次全按钮扫描
+			// 纯属空转(导航按钮仅存在于设置弹窗内,弹窗不在即无标可打)。弹窗挂载本身
+			// 是设置面板范围内变更,走上方 sync 路径同步标记,不受本门控影响。
+			if (!document.querySelector('div[role="dialog"]')) return;
 			queued = true;
 			window.setTimeout(function () { queued = false; mark() }, 200);
 		});
@@ -3100,10 +3408,32 @@ window.__ModuleLoader__.load({
 		// 恒 left:68px(问题52 方案)在侧栏展开(280px)时落进侧栏与工作区列表重叠。
 		// 改按侧栏实时右缘 + 2px 锚定(收起 56→58 / 展开 280→282,16px rail 完整容于沟内,
 		// 不与侧栏/工作区列表/内容区重叠);无侧栏时回落贴内容区左缘(flow.left−18)。
-		// fixed rail 与 rect 同为视口坐标,缩放/窗口尺寸自动适配;侧栏开合 240ms 过渡期
-		// rAF 逐帧跟随,落定即停;无可见 chat-flow(SSH/记忆/任务看板/hero 态)时清空 left
-		// 并摘除显示门控类,rail 由 CSS 隐藏,退回 [B] 基底不致重叠。
-		var posRaf = 0, posUntil = 0, lastX = -1;
+		// fixed rail 与 rect 同为视口坐标,缩放/窗口尺寸自动适配;无可见 chat-flow
+		// (SSH/记忆/任务看板/hero 态)时清空 left 并摘除显示门控类,rail 由 CSS 隐藏,
+		// 退回 [B] 基底不致重叠。
+		// [P2/T1 2026-09-11] 定位机器事件化重构(CDP 剖面驱动,外观行为零变化)三层:
+		//   ① 弹窗门:设置等全屏 role=dialog 在场时 rail 被完全覆盖 → 定位/门控整体早退。
+		//      实证:设置页开+关窗口内 flowVisible 80ms self-time 居首(2.9%),全耗在弹窗
+		//      挂载期逐帧跑的 gBCR 上;同期 156 次 pointerenter 输入延迟 30-56ms(挂载忙期
+		//      排队,proc 仅 1ms = 症状非原因)。把可控成本整体移出该窗口。
+		//   ② ResizeObserver 取代 posLoop 的 480ms rAF 逐帧采样:原循环每帧 posOnce()
+		//      (3×querySelector + 3×gBCR 强制回流),被打字/流式期的 120ms MO 防抖反复重启
+		//      ⇒ 持续逐帧回流。RO 在「布局已定、绘制之前」触发并合并通知,回调内读几何
+		//      零强制回流;侧栏 240ms grid 过渡期每帧恰好一次,比 3 帧采样更跟手。
+		//   ③ tick 瘦身:1.2s 统一调度器 + resize 监听保留为兜底(RO 失配/极端路径),
+		//      同样过弹窗门;document.hidden 门由 dshVtTick 既有实现覆盖。
+		var dlgOpen = function () {
+			// 弹窗在场 ⇔ 存在「非 composer 内」的 role=dialog。**不能单用
+			// html.dsh-vt-settings-open 判定**:installSettingsOverlayEscape 的判定被放宽为
+			// 「页内存在任何 role=dialog」(b12c 加固),而 composer 内的上下文计量弹层
+			// (问题95/问题108 同源)同为 role=dialog 却完全不覆盖 rail —— 单靠类会在用户
+			// 点开计量弹层时冻结圆点定位(侧栏开合不再跟随)= 功能回归。故叠加结构性排除,
+			// 与 [问题108] 一级表面寻址同款判据;类检查作为零成本的负向预筛(无弹窗时
+			// 不产生任何 DOM 查询 = 最常见路径零开销)。
+			if (!document.documentElement.classList.contains("dsh-vt-settings-open")) return false;
+			return !!document.querySelector('div[role="dialog"]:not([data-composer-card] div[role="dialog"])');
+		};
+		var lastX = -1;
 		var flowVisible = function (flow) {
 			// 三视图切换时 chat-flow 被摘除为 0×0(offsetParent=null),存在≠可见
 			if (!flow || !flow.offsetParent) return false;
@@ -3111,13 +3441,19 @@ window.__ModuleLoader__.load({
 			return r.width > 0 && r.height > 0;
 		};
 		var posOnce = function () {
+			if (dlgOpen()) return; // ① 弹窗门:rail 被全屏弹窗覆盖,定位纯浪费
 			var rail = document.querySelector(".dsh-node-nav-rail");
 			var flow = document.querySelector('[data-chat-flow=""]');
-			var vis = flowVisible(flow);
+			// [P3/T3-1b 2026-09-12] 单次 gBCR 复用:原 flowVisible 内 offsetParent+gBCR 各读一次、
+			// 下面又再读一次 gBCR.left = 同一调用 3 次布局读;黑匣子实证 RO 回调 fsl(强制回流)
+			// 占 97%(366 帧 4924ms),布局读是稀缺品。rect 判空已覆盖 display:none/0×0(三视图
+			// 切换摘除场景),offsetParent 读省去。
+			var r = flow ? flow.getBoundingClientRect() : null;
+			var vis = !!(r && r.width > 0 && r.height > 0);
 			// [b13问题2] 可见性门控类:与 CSS 规则 body:not(.dsh-vt-chatflow-on) 呼应
 			document.body.classList.toggle("dsh-vt-chatflow-on", vis);
 			if (rail && vis) {
-				var x = Math.round(flow.getBoundingClientRect().left) - 18;
+				var x = Math.round(r.left) - 18;
 				var sb = document.querySelector('div[data-slot="sidebar"]>div[class*="_root"]') || document.querySelector('div[data-slot="sidebar"]');
 				if (sb) {
 					var sbRight = Math.round(sb.getBoundingClientRect().right);
@@ -3129,28 +3465,93 @@ window.__ModuleLoader__.load({
 				lastX = -1; rail.style.left = "";
 			}
 		};
-		var posLoop = function () {
-			var now = Date.now();
-			var tick = function () {
-				posOnce();
-				if (Date.now() < posUntil) posRaf = window.requestAnimationFrame(tick);
-				else posRaf = 0;
-			};
-			if (posRaf) return;
-			posUntil = now + 480; // 覆盖 240ms 开合过渡 + 余量
-			posRaf = window.requestAnimationFrame(tick);
+		// ② RO 通道:观察 flow(侧栏开合/窗口缩放 → 其宽度随之变化,过渡期浏览器每帧
+		// 合并通知一次)与 sidebar 容器;元素身份变化(会话/三视图切换重挂)时只做
+		// re-observe,不做任何 gBCR。目标缺失(SSH/记忆/看板等无 chat-flow 的视图)即
+		// 观察集为空 = 零回调,比现在的 MO+gBCR 判定更便宜。
+		var roObs = null, roFlow = null, roSb = null, roFlowW = -1, roSbW = -1;
+		var roSync = function () {
+			if (typeof ResizeObserver !== "function") return;
+			var flow = document.querySelector('[data-chat-flow=""]');
+			var sb = document.querySelector('div[data-slot="sidebar"]');
+			if (flow === roFlow && sb === roSb) return;
+			if (roObs === null) {
+				roObs = new ResizeObserver(function (entries) {
+					if (document.hidden) return;
+					// [P3/T3-1b 2026-09-12] 宽度门:rail.left 只取决于 flow 左缘与 sidebar 右缘
+					// (横向几何)。高度变化(流式文本增高 / c-v 滚动进出 / 内容增长)与 rail 定位
+					// 无关,却会让 RO 每帧触发 → 此前无条件 posOnce(2 次布局读+可能的写)在长会话
+					// 滚动/流式期逐帧空转。仅宽度变化(侧栏开合过渡/窗口缩放)才值得重定位;
+					// 宽度初值 -1 = 首次见到该目标必放行(挂载初定位),重挂时经 roSync 复位。
+					var go = false;
+					for (var i = 0; i < entries.length; i++) {
+						var cr = entries[i].contentRect || {};
+						if (entries[i].target === roFlow) {
+							if (roFlowW < 0 || Math.abs(cr.width - roFlowW) > 0.5) { roFlowW = cr.width; go = true; }
+						} else if (entries[i].target === roSb) {
+							if (roSbW < 0 || Math.abs(cr.width - roSbW) > 0.5) { roSbW = cr.width; go = true; }
+						}
+					}
+					if (go) posOnce();
+				});
+			}
+			if (flow !== roFlow) {
+				if (roFlow) { try { roObs.unobserve(roFlow); } catch (e) { /* 已卸载 */ } }
+				roFlow = flow;
+				roFlowW = -1;
+				if (flow) roObs.observe(flow);
+			}
+			if (sb !== roSb) {
+				if (roSb) { try { roObs.unobserve(roSb); } catch (e) { /* 已卸载 */ } }
+				roSb = sb;
+				roSbW = -1;
+				if (sb) roObs.observe(sb);
+			}
 		};
 		posOnce();
-		window.addEventListener("resize", posLoop);
+		roSync();
+		window.addEventListener("resize", posOnce);
 		// [b13问题2] 门控类与位置同步走定时器/结构变更通道:窗口隐藏时 rAF 冻结,
-		// 仅靠 posLoop 会让视图切换后的显隐门控停在旧态(后台切页残显根因)。
+		// 仅靠 RO 会让视图切换后的显隐门控停在旧态(后台切页残显根因)。
 		var syncGate = function () {
+			if (dlgOpen()) return; // ① 弹窗门
 			var vis = flowVisible(document.querySelector('[data-chat-flow=""]'));
 			document.body.classList.toggle("dsh-vt-chatflow-on", vis);
 			if (!vis) posOnce();
 		};
-		window.setInterval(function () { syncGate(); posOnce(); }, 1200); // React 重渲染/布局变更/后台切页自愈
-		new MutationObserver(function () { syncGate(); posLoop(); }).observe(document.body, { childList: true, subtree: true });
+		// [P1/A1→F1] c-v 门控计数:会话 flow item ≥ 60 才挂 body.dsh-cv-on(css 数组
+		// [P1/F1] 条据此类对设置区段启用 content-visibility 离屏跳过;对话逐消息
+		// c-v 由既有 [perf] 批次 L197 规则无条件覆盖,不经此门)。选择器失配(上游
+		// 升级改契约)时计数恒 0 → 永不挂类,退化为现状,零功能风险;会话切换/加载
+		// 更多经统一 tick 与防抖结构通道自动重估。
+		var CV_THRESHOLD = 60;
+		var syncCvGate = function () {
+			if (dlgOpen()) return; // ① 弹窗门
+			document.body.classList.toggle("dsh-cv-on",
+				document.querySelectorAll('[data-chat-flow-key]').length >= CV_THRESHOLD);
+		};
+		// [P1/B3] 原 1200ms 独立轮询并入统一调度器 dshVtTick(隐藏门控+恢复补跑)
+		// [P2/T1] 增挂 roSync:RO 观察目标失配(极端重挂路径)时由 tick 兜底重新 observe;
+		// 位置本身的兜底修正由同一拍 posOnce 完成,故 RO 失配无功能风险。
+		dshVtTickFns.push(function () { syncGate(); roSync(); posOnce(); syncCvGate(); });
+		// [P1/B1] 结构变更通道防抖:原 body subtree MO 每 mutation 批即执行 syncGate
+		// (getBoundingClientRect 强制回流)+ 位置跟随(rAF 循环),流式期间每批必触发
+		// (与 q110 修掉的 joi 布局抖动同构)。改 setTimeout 120ms trailing 防抖(手册
+		// 纪律:MO 防抖用 setTimeout 不用 rAF——隐藏窗口 rAF 冻结);统一 tick 与 resize
+		// 监听保留为兜底,最终状态不变,只合并触发次数(流式期间每批数十次 → ≤8 次/秒)。
+		// [P2/T1] 此通道不再启动 480ms rAF 循环:元素身份变化只 re-observe(零 gBCR),
+		// 过渡期跟手交给 RO 逐帧合并通知;posOnce 仅一次直接读几何。
+		// 隐藏期防抖到期直接跳过,恢复可见由 tick 立即补跑。
+		var structDeb = 0;
+		new MutationObserver(function () {
+			if (structDeb) return;
+			structDeb = window.setTimeout(function () {
+				structDeb = 0;
+				if (document.hidden) return;
+				syncGate(); roSync(); posOnce(); syncCvGate();
+			}, 120);
+		}).observe(document.body, { childList: true, subtree: true });
+		syncCvGate();
 	}
 
 	// ---- [问题47] 发送消息乐观回显 ----
@@ -3287,11 +3688,30 @@ window.__ModuleLoader__.load({
 					var s = byId[id];
 					if (s && s.title) map[s.title] = id;
 				}
+				// [R100] displayTitle 补丁(patches.cjs [V])生效后行文本原生=摘要:摘要键补入映射,
+				// data-dsh-sid 首见即可绑定(行轮询/回填泵照常工作)。原题键优先,摘要键只补缺席,
+				// 回声标题(摘要=另一会话原题)不会抢占既有绑定;即便错绑,替换文本相同、回填因
+				// summaries[sid] 已存在而跳过,无可见副作用。
+				for (var id2 in byId) {
+					var s2 = byId[id2];
+					var cv = s2 ? cleanSummary(summaries[id2]) : null;
+					if (cv && !(cv in map)) map[cv] = id2;
+				}
 			} catch (e) { /* store 形状变动自愈 */ }
 			return map;
 		};
 		var renderAll = function () {
 			try {
+				// [R100] 主题发布:清洗后摘要 → window.__dshSessionTopics,供 ui-workspace 的
+				// displayTitle 补丁(patches.cjs [V])读取——行与悬停卡同一函数出同一条标题,
+				// 卡片不再显示 store 原题。每轮整表重建,随缓存加载/脏摘要作废/回填完成自然刷新;
+				// 纯 Web/旧壳(无 [V] 补丁)下此全局无人消费,无害。
+				var topics = {};
+				for (var tk in summaries) {
+					var tv = cleanSummary(summaries[tk]);
+					if (tv) topics[tk] = tv;
+				}
+				window.__dshSessionTopics = topics;
 				var map = idByTitle();
 				var rows = document.querySelectorAll('div[data-slot="sidebar"] [class*="sessionRow"]');
 				for (var i = 0; i < rows.length; i++) {
@@ -4266,6 +4686,94 @@ window.__ModuleLoader__.load({
 		mo.observe(document.body, { attributes: true, attributeFilter: ["data-dsh-sidebar-collapsed"], subtree: true });
 	}
 
+	// ---- [批次153 2026-09-11] 侧边卡片入口钉位(机制/实测数据见 css 数组 [批次153] 注释) ----
+	// 两枚原生入口钮分属「会移动的容器」(会话头中列 / 面板 tab 条),过渡期都在飞;此处由壳注入
+	// 一枚常驻、钉在窗口右缘的入口钮代理它们 ⇒ 开合两向都停在同一点,只换语义(aria-label)与字形。
+	// 设计要点:
+	//  ① 字形从原生钮**实时克隆**并逐态跟进:两态字形实测同形(自包含 path,fill=currentColor,
+	//     无 <use>/id 依赖 ⇒ 克隆零风险);仍按态取「当前那枚」原生钮的字形,上游日后分化也能跟上。
+	//  ② 判态只看 data-sidebar-right-open(React 真值)。**不**用几何/visibility 判态:收起态
+	//     visibility 带 0.38s 延迟过渡、几何在过渡期是中间值 —— 本批实测据此误判过一整轮。
+	//  ③ 显示条件 = 面板宿主在(聊天页)。切到无宿主页面(设置等)即隐藏,不留幽灵按钮。
+	//  ④ 点击代理:开合两向分别转发给 toggle / expand 的 .click()(原生钮仍在 DOM,只是
+	//     visibility:hidden —— 程序化 click 照常触发 React 处理器,本批已实测)。
+	//  ⑤ 传播成本:MO 只监听该一个属性(attributeFilter);切页/面板重挂载由 1s 兜底轮询补,
+	//     **不**加 body 级 childList 全量观察(批次152 已确认渲染开销敏感)。属性写等值时
+	//     Blink 提前返回、不产生 mutation record ⇒ 轮询近零成本。
+	//  ⑥ 不设 title:原生钮只有 aria-label 无 tooltip,加 title 会凭空多出悬停提示(偏离原生)。
+	function installSidebarRightEntry() {
+		if (typeof document === "undefined") return;
+		if (window.__dshBsrEntryLoop) return;          // 热重载/重复 apply 单例守卫
+		window.__dshBsrEntryLoop = true;
+		var PANEL = '[data-sidebar-right-panel]';
+		var EX = '[data-sidebar-right-expand]';
+		var TG = '[data-sidebar-right-toggle]';
+		var entry = null;
+		var lastOpen = null;
+
+		function isOpen() {
+			var p = document.querySelector(PANEL);
+			return !!(p && p.hasAttribute("data-sidebar-right-open"));
+		}
+		function nativeFor(open) {
+			return document.querySelector(open ? TG : EX) || document.querySelector(open ? EX : TG);
+		}
+		function ensureEntry() {
+			if (entry && entry.isConnected) return entry;
+			var src = document.querySelector(EX) || document.querySelector(TG);
+			if (!src) return null;
+			var svg = src.querySelector("svg");
+			if (!svg) return null;
+			var b = document.createElement("button");
+			b.type = "button";
+			b.id = "dsh-bsr-entry";
+			b.appendChild(svg.cloneNode(true));
+			b.addEventListener("click", function (ev) {
+				ev.preventDefault();
+				ev.stopPropagation();
+				var target = nativeFor(isOpen());
+				if (target) target.click();
+			});
+			document.body.appendChild(b);
+			entry = b;
+			lastOpen = null;                           // 新钮 ⇒ 强制重刷语义与字形
+			return entry;
+		}
+		function syncGlyph(open) {
+			var src = nativeFor(open);
+			if (!src) return;
+			var svg = src.querySelector("svg");
+			if (!svg) return;
+			var cur = entry.querySelector("svg");
+			if (!cur || cur.outerHTML !== svg.outerHTML) {
+				if (cur) cur.remove();
+				entry.appendChild(svg.cloneNode(true));
+			}
+		}
+		function sync() {
+			var b = ensureEntry();
+			if (!b) { document.body.classList.remove("dsh-bsr-entry-ready"); return; }
+			var open = isOpen();
+			var host = open || !!document.querySelector(PANEL) || !!document.querySelector(EX) || !!document.querySelector(TG);
+			b.setAttribute("data-bsr-entry-hidden", host ? "false" : "true");
+			if (lastOpen !== open) {
+				var label = open ? "收起右侧边栏" : "打开右侧边栏";
+				b.setAttribute("aria-label", label);
+				b.setAttribute("data-bsr-entry-state", open ? "open" : "closed");
+				syncGlyph(open);
+				lastOpen = open;
+			}
+			document.body.classList.add("dsh-bsr-entry-ready");
+		}
+		sync();
+		// 态翻转即时跟上(单属性过滤,开销可忽略)
+		new MutationObserver(sync).observe(document.body, {
+			attributes: true, attributeFilter: ["data-sidebar-right-open"], subtree: true,
+		});
+		// 兜底:面板重挂载 / 切页 / 热重载(不做 childList 全量观察)
+		window.setInterval(sync, 1000);
+	}
+
 	function installMarketQueue() {
 		mqLoad();
 		mqEnsureDock();
@@ -4279,10 +4787,13 @@ window.__ModuleLoader__.load({
 		mo.observe(document.body, { childList: true, subtree: true });
 	}
 
-	// ---------- [R80] 归档会话管理:通用设置第五卡的管理页 ----------
+	// ---------- [R99] 归档会话管理:通用设置第五卡的管理页 ----------
 	// 数据源= 壳 GET /sessions/archived(归档序 + 投影标题/时间 + 磁盘占用/幽灵)。
 	// 恢复= ctx.workspaces.unarchiveSession(上游 RPC;旧运行时缺席时降级隐藏按钮,
-	// 不产生死按钮)。彻底删除= 壳 POST /sessions/delete(与 R79 同款四处清理;
+	// 不产生死按钮)。[批次155 2026-09-12] 0.1.5 实证:上游已把 unarchive 全链移除
+	// (dsh-workspace registry / workspace-controller 宿主命令与客户端面均无该方法),
+	// canRestore 恒 false → 恢复按钮按设计隐藏;恢复能力回归条件= 上游重新提供
+	// unarchive RPC。彻底删除= 壳 POST /sessions/delete(与 R79 同款四处清理;
 	// 管理页列表本身即归档集,无需先 archiveSession)。幽灵清理= 对 ghost 行逐条
 	// 调删除端点(端点对缺目录幂等)。host 广播 host/archived-sessions-changed 时
 	// 侧栏自刷新;本页动作为主,提供手动刷新按钮。
@@ -4290,6 +4801,140 @@ window.__ModuleLoader__.load({
 	// 确认弹窗双形态(单删/批量 N 项),串行逐条删、进度「x/N…」、失败不中断;
 	// 交互:行 hover/选中着色、按钮按压反馈、弹窗淡入+Esc+默认焦点取消、
 	// 状态行 key 重挂动画、刷新后勾选集对齐存活行。
+	// [P3/T1 2026-09-12 性能黑匣子(飞行记录仪)] 常驻低耗取证,专治「偶发、不可复现」卡顿:
+	// 空闲期零观测成本(observer 仅坏帧回调;心跳 3.3 次/s 定时器;堆采样 1 次/s 定时器),
+	// 记录全部进内存环形缓冲(上限约 200KB),零网络零上传。事后取证三条路:
+	// ① CDP 拉取 window.__dshBlackbox.dump()(diag/p3-blackbox-pull.mjs);
+	// ② 体感卡顿时按 Alt+Shift+J 种人工标记(mark 记录最近一次慢交互);
+	// ③ sessionStorage.dshBbLastBad 坏帧旗标,供拉取工具轮询感知「刚发生过卡顿」。
+	// 组件:LoAF>50ms 帧(Chromium130 可用,含函数级/强制回流归因)+ longtask 兜底;
+	// Event Timing 只留 duration≥100ms 的真实交互;堆锯齿 1s 采样跌幅>15% 记 GC 候选;
+	// 300ms 心跳漂移>50ms 记主线程忙段下界。全组件 document.hidden 门(遮挡期伪长帧不记)。
+	function installPerfBlackbox() {
+		var BB_LOAF_MAX = 200, BB_EVT_MAX = 50, BB_HEAP_MAX = 600, BB_HB_MAX = 200, BB_MARK_MAX = 40;
+		var loaf = [], longtasks = [], evts = [], heap = [], hbeat = [], marks = [];
+		var gcCandidates = 0, lastBadWrite = 0;
+		function ringPush(arr, max, item) { arr.push(item); if (arr.length > max) arr.splice(0, arr.length - max); }
+		function flagBad(kind, val) {
+			var now = Date.now();
+			if (now - lastBadWrite < 2000) return; // 节流:sessionStorage 写是同步 IO,坏帧连发期间最多 2s 一记
+			lastBadWrite = now;
+			try { sessionStorage.setItem("dshBbLastBad", JSON.stringify({ t: now, kind: kind, worst: val })); } catch (e) { /* 隐私模式等 */ }
+		}
+		function fmtLoaf(e) {
+			var scripts = [];
+			try {
+				var ss = (e.scripts || []).slice().sort(function (a, b) { return (b.duration || 0) - (a.duration || 0); }).slice(0, 3);
+				for (var i = 0; i < ss.length; i++) scripts.push({
+					d: Math.round(ss[i].duration || 0),
+					fsl: Math.round(ss[i].forcedStyleAndLayoutDuration || 0), // 强制回流归因(P3 主抓指标)
+					inv: ss[i].invoker || "", invT: ss[i].invokerType || "",
+					src: ss[i].sourceFunctionName || ss[i].sourceURL || ""
+				});
+			} catch (e2) { /* 归因可选,不牵连主记录 */ }
+			return {
+				t: Math.round(e.startTime), d: Math.round(e.duration),
+				bd: Math.round(e.blockingDuration || 0),
+				scripts: scripts
+			};
+		}
+		function addObs(type, opts, cb) {
+			try {
+				var o = new PerformanceObserver(function (list) {
+					try { cb(list.getEntries() || []); } catch (e2) { /* 单观察器失败不牵连 */ }
+				});
+				o.observe(Object.assign({ type: type, buffered: false }, opts || {}));
+				return true;
+			} catch (e) { return false; }
+		}
+		var loafOn = false;
+		try { loafOn = PerformanceObserver.supportedEntryTypes && PerformanceObserver.supportedEntryTypes.indexOf("long-animation-frame") >= 0; } catch (e) { loafOn = false; }
+		if (loafOn) {
+			addObs("long-animation-frame", null, function (entries) {
+				for (var i = 0; i < entries.length; i++) {
+					if (document.hidden) continue;
+					var f = fmtLoaf(entries[i]);
+					ringPush(loaf, BB_LOAF_MAX, f);
+					if (f.d >= 100) flagBad("loaf", f.d);
+				}
+			});
+		} else {
+			addObs("longtask", null, function (entries) {
+				for (var i = 0; i < entries.length; i++) {
+					if (document.hidden) continue;
+					var d = Math.round(entries[i].duration);
+					ringPush(longtasks, BB_LOAF_MAX, { t: Math.round(entries[i].startTime), d: d });
+					if (d >= 100) flagBad("longtask", d);
+				}
+			});
+		}
+		// durationThreshold=100 让浏览器侧先过滤:常规交互零回调成本,只收慢交互
+		addObs("event", { durationThreshold: 100 }, function (entries) {
+			for (var i = 0; i < entries.length; i++) {
+				var ev = entries[i];
+				if (!ev.interactionId) continue; // 只关心真实交互(点击/击键),滚动/hover 不记
+				var rec = {
+					t: Math.round(ev.startTime), type: ev.name, iid: ev.interactionId,
+					delay: Math.round((ev.processingStart || ev.startTime) - ev.startTime),
+					dur: Math.round(ev.duration)
+				};
+				ringPush(evts, BB_EVT_MAX, rec);
+				if (rec.dur >= 200) flagBad("interaction", rec.dur);
+			}
+		});
+		// 堆锯齿:较上次采样跌幅>15% 判「刚发生过 GC」候选;与 LoAF 时间括号在 dump 中关联
+		window.setInterval(function () {
+			if (document.hidden) return;
+			try {
+				var m = performance.memory;
+				if (!m) return;
+				var used = m.usedJSHeapSize;
+				var prev = heap.length ? heap[heap.length - 1].u : used;
+				var isGc = prev > 0 && used / prev < 0.85;
+				if (isGc) gcCandidates++;
+				ringPush(heap, BB_HEAP_MAX, { t: Date.now(), u: used, g: isGc ? 1 : 0 });
+			} catch (e) { /* performance.memory 不可用 */ }
+		}, 1000);
+		// 心跳漂移:期望 300ms,漂移>50ms 记主线程忙段下界;用 setInterval 不用 rAF——不占合成器,
+		// 不违 P2「反 rAF 空转」原则(P2 问题124 同款遮挡豁免)
+		var hbLast = Date.now();
+		window.setInterval(function () {
+			var now = Date.now();
+			var drift = now - hbLast - 300;
+			hbLast = now;
+			if (document.hidden) return;
+			if (drift > 50) {
+				drift = Math.round(drift);
+				ringPush(hbeat, BB_HB_MAX, { t: now, drift: drift });
+				if (drift >= 150) flagBad("heartbeat", drift);
+			}
+		}, 300);
+		var __dshBlackbox = {
+			loafOn: loafOn,
+			mark: function (label) {
+				var lastEvt = evts.length ? evts[evts.length - 1] : null;
+				ringPush(marks, BB_MARK_MAX, { t: Date.now(), perf: Math.round(performance.now()), label: String(label || "mark"), lastEvt: lastEvt });
+				try { console.info("[dsh-bb] mark @", new Date().toISOString(), label || ""); } catch (e) { /* 忽略 */ }
+			},
+			dump: function () {
+				return JSON.stringify({
+					meta: {
+						ts: Date.now(), iso: new Date().toISOString(), url: location.href.slice(0, 120),
+						ua: navigator.userAgent, loafOn: loafOn, gcCandidates: gcCandidates,
+						heapLimit: (performance.memory && performance.memory.jsHeapSizeLimit) || null
+					},
+					loaf: loaf, longtasks: longtasks, events: evts, heap: heap, heartbeat: hbeat, marks: marks
+				});
+			},
+			clear: function () { loaf = []; longtasks = []; evts = []; heap = []; hbeat = []; marks = []; gcCandidates = 0; }
+		};
+		try { window.__dshBlackbox = __dshBlackbox; } catch (e) { /* 忽略 */ }
+		// Alt+Shift+J 人工标记:捕获阶段只读不改行为(preventDefault 一律不调)
+		window.addEventListener("keydown", function (ev) {
+			if (ev.altKey && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && (ev.key === "J" || ev.key === "j")) __dshBlackbox.mark("manual Alt+Shift+J");
+		}, true);
+	}
+
 	// [R81+] 打开期间 5s 轻轮询+签名去重:别处(主页时序/另一窗口)的归档变化
 	// 自动跟进,不再依赖手动刷新;隐藏页/操作中/弹窗中暂停。
 	function installArchiveManager(ctx) {
@@ -4326,6 +4971,16 @@ window.__ModuleLoader__.load({
 				"failList": "失败: ",
 				"confirmBody1": "将永久删除「",
 				"confirmBody2": "」的会话记录,此操作不可恢复。",
+				// [批次133 2026-09-10] 无用(空)会话清理
+				"blankLabel": "无用会话",
+				"blankHint": "空日志或从未发送过消息的会话(侧栏显示为文件夹名)",
+				"blankClean": "清理空会话",
+				"blankTitle": "清理无用会话",
+				"blankBody1": "将永久删除 ",
+				"blankBody2": " 个从未使用过的空会话,此操作不可恢复。",
+				"blankDone1": "已清理空会话 ",
+				"blankBusy1": "正在清理 ",
+				"blankNone": "没有可清理的空会话",
 			},
 			en: {
 				"section.label": "Archived Sessions",
@@ -4357,6 +5012,15 @@ window.__ModuleLoader__.load({
 				"failList": "failed: ",
 				"confirmBody1": "Permanently delete \"",
 				"confirmBody2": "\"? This cannot be undone.",
+				"blankLabel": "Unused sessions",
+				"blankHint": "Blank logs, or sessions that never carried a message (listed as the folder name)",
+				"blankClean": "Clean blank sessions",
+				"blankTitle": "Clean unused sessions",
+				"blankBody1": "Permanently delete ",
+				"blankBody2": " blank sessions that were never used? This cannot be undone.",
+				"blankDone1": "Cleaned blank sessions: ",
+				"blankBusy1": "Cleaning ",
+				"blankNone": "No blank sessions to clean",
 			},
 		}), "dsh-archive-mgr: dictionaries");
 		const t = ctx.locale.bind(NS9);
@@ -4393,6 +5057,29 @@ window.__ModuleLoader__.load({
 			var progS = react.useState(null);
 			var prog = progS[0], setProg = progS[1];
 			var sigRef = react.useRef(""); // [R81+] 清单签名(id 列表+总字节),去重轮询
+			// [批次133 2026-09-10] 无用(空)会话计数:唯一权威源=客户端会话列表投影的 blank 位
+			// (壳端 /sessions/archived 只管归档集,不含空会话;磁盘扫描又要解 zstd,故走投影)。
+			// current(当前会话)显式排除 —— 用户正在用的那个空会话是合法工作态。
+			var blankS = react.useState([]);
+			var blankIds = blankS[0], setBlankIds = blankS[1];
+			var blankInfo = function () {
+				try {
+					var snap = ctx.sessions.list.getSnapshot();
+					var cur = snap.current;
+					var out = [];
+					for (var i = 0; i < snap.ids.length; i++) {
+						var s = snap.byId[snap.ids[i]];
+						if (!s || s.id === cur) continue;
+						// [批次133] 判据 = blank(空日志) **或** title 为空。后者是关键:host 的标题只在
+						// 「首个人类提示」上生成(fallback 标题直接截取首条用户消息文本),故 title 为空
+						// ⟺ 这个会话从未有过人类输入 ⟺ 侧栏行退化成 basename(cwd) 显示 —— 正是用户
+						// 截图里那一排「se'jng'k's / XXX」行。带标题的会话(含记忆系统归档产生的
+						// 「Archive this managed document now.」)不在清理范围内。
+						if (s.blank === true || !s.title) out.push(s.id);
+					}
+					return out;
+				} catch (e) { return []; }
+			};
 			// [R81+] 操作期门控 ref:批量删/单删/恢复进行中或弹窗开着时轮询让位
 			var opRef = react.useRef(false);
 			opRef.current = !!busy || !!prog || !!confirmDel;
@@ -4406,7 +5093,10 @@ window.__ModuleLoader__.load({
 			var load = react.useCallback(function (silent) {
 				return api("/sessions/archived").then(function (j) {
 					if (!j || !j.ok) throw new Error((j && j.error) || "HTTP error");
-					var items = j.sessions || [];
+					// [批次155 2026-09-12] 最新归档排在最前:端点保持归档序(注册表追加序,最新在尾),
+					// 原样渲染让刚归档的会话沉到 60+ 行的底部 —— 用户在顶部扫不到即报「找不到刚刚
+					// 归档的会话」(活体实证)。倒序后刚归档 = 第一行;ghost/旧行相对次序不变。
+					var items = (j.sessions || []).slice().reverse();
 					// [R81+] 数据签名去重:轮询拉到相同清单时跳过 setState(免无谓重渲染)
 					var sig = items.map(function (it) { return it.id; }).join(",") + "|" + (j.totalBytes || 0);
 					var changed = sig !== sigRef.current;
@@ -4419,6 +5109,9 @@ window.__ModuleLoader__.load({
 						return Object.keys(prev).length === kept ? prev : alive;
 					});
 					if (changed) setState({ status: "ready", items: items, totalBytes: j.totalBytes || 0 });
+					// [批次133] 空会话计数随每次 load/轮询同步;清单相同则返回原引用 → 零重渲染
+					var blankNow = blankInfo();
+					setBlankIds(function (prev) { return prev.join(",") === blankNow.join(",") ? prev : blankNow; });
 				}).catch(function (e) {
 					// [R81+] 静默轮询失败不打扰现状(壳瞬时不可达不整页翻错误态),
 					// 只有挂载首拉/手动刷新才降级错误视图
@@ -4488,6 +5181,43 @@ window.__ModuleLoader__.load({
 				});
 				p.then(function () { showMsg(t("ghostClean") + ": " + ghosts.length, "ok"); return load(); })
 					.catch(function (e) { failMsg(t("ghostClean"), e); return load(); })
+					.then(function () { setBusy(null); });
+			};
+			// [批次133 2026-09-10] 一键清理空会话(用户问题 #1 的兜底出口):确认弹窗 → 串行调壳
+			// POST /sessions/delete(与「批量删除」同一通路,端点负责日志目录 + workspace.json 引用 +
+			// 投影缓存 + 摘要缓存四处清理)。代码层已由 [V] 家族根治「不再重复产生」,本入口负责
+			// 清掉历史遗留(实测 ~110 个)。串行+失败不中断,进度复用 prog。
+			var doCleanBlank = function (ids) {
+				var total = ids.length;
+				if (!total) { showMsg(t("blankNone"), ""); return; }
+				var done = 0, okCount = 0, failed = [];
+				setBusy("__blank__");
+				setProg({ done: 0, total: total });
+				var p = Promise.resolve();
+				ids.forEach(function (id) {
+					p = p.then(function () {
+						return api("/sessions/delete", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ sessionId: id }),
+						}).then(function (j) {
+							if (!j || !j.ok) throw new Error((j && j.error) || "HTTP error");
+							okCount++;
+						});
+					}).catch(function () {
+						failed.push(String(id).replace(/^session-/, "").slice(0, 8) || id);
+					}).then(function () {
+						done++;
+						setProg({ done: done, total: total });
+					});
+				});
+				p.then(function () {
+					setProg(null);
+					var line = t("blankDone1") + okCount + "/" + total;
+					if (failed.length) line += " · " + t("failList") + failed.join(", ");
+					showMsg(line, failed.length ? "err" : "ok");
+					return load();
+				}).catch(function (e) { setProg(null); failMsg(t("blankClean"), e); })
 					.then(function () { setBusy(null); });
 			};
 			// [R81] 批量删除:勾选集 → 确认弹窗 → 串行逐条调删除端点(单条失败不中断,
@@ -4590,11 +5320,15 @@ window.__ModuleLoader__.load({
 							h("span", { className: "am_titleTxt" }, title), badges),
 						h("div", { className: "am_meta" }, metaParts.join(" · "))),
 					h("div", { className: "am_actions" },
-						h("button", {
+						// [批次155 2026-09-12] 0.1.5 起上游移除 unarchive 全链(kernel registry/宿主
+						// 命令/客户端面均无,R99 时代 ctx.workspaces.unarchiveSession 在位才可恢复),
+						// canRestore=false 时按钮必须真隐藏(R99 注释本意「不产生死按钮」),不能只靠
+						// doRestore 的 noRuntime 兜底文案。
+						canRestore ? h("button", {
 							type: "button", className: "am_btn", disabled: !!busy || it.ghost,
 							title: it.ghost ? t("noRuntime") : undefined,
 							onClick: function () { doRestore(it.id); },
-						}, t("restore")),
+						}, t("restore")) : null,
 						h("button", {
 							type: "button", className: "am_btnDanger", disabled: !!busy,
 							onClick: function () { setConfirmDel(it); },
@@ -4621,6 +5355,17 @@ window.__ModuleLoader__.load({
 								t("batchDel") + " (" + selIds.length + ")"))
 						: h("span", { className: "am_selHint" }, t("selHint")),
 				) : null,
+				// [批次133 2026-09-10] 无用(空)会话清理条:常显(给出确定性入口),0 个时按钮禁用
+				// (避免死按钮);点击 → 确认弹窗 → doCleanBlank 串行物理清除。
+				h("div", { className: "am_blank" },
+					h("span", null,
+						t("blankLabel") + ": ",
+						h("span", { className: "am_blankN" }, String(blankIds.length)),
+						" · " + t("blankHint")),
+					h("button", {
+						type: "button", className: "am_btn", disabled: !!busy || !blankIds.length,
+						onClick: function () { setConfirmDel({ blank: true, ids: blankIds.slice() }); },
+					}, t("blankClean"))),
 				ghosts.length ? h("div", { className: "am_ghost" },
 					h("span", null, t("ghostBadge") + ": " + ghosts.length),
 					h("button", { type: "button", className: "am_btn", disabled: !!busy, onClick: doCleanGhosts }, t("ghostClean"))) : null,
@@ -4635,16 +5380,19 @@ window.__ModuleLoader__.load({
 				})(),
 				rows.length ? h("div", { className: "am_list" + (prog ? " am_listBusy" : "") }, rows) : h("div", { className: "am_empty" }, t("empty")),
 			confirmDel ? (function () {
-				// [R80fix] style 必须是 React 对象:字符串在 createElement 校验即抛
+				// [R99fix] style 必须是 React 对象:字符串在 createElement 校验即抛
 				// Minified React error #62(The style prop expects a mapping...),
 				// 槽位错误边界把整个 section 卸载 → 管理页空白/卡死。
 				// [R81] 双形态:单删{title,id} / 批量{batch,ids[]};文案/按钮随形态切换,
 				// Esc 关闭,默认焦点落「取消」(危险操作回车=取消更安全)。
-				var isBatch = !!confirmDel.batch;
+				var isBlank = !!confirmDel.blank; // [批次133] 第三形态:空会话清理
+				var isBatch = !!confirmDel.batch || isBlank;
 				var n = isBatch ? confirmDel.ids.length : 1;
-				var body = isBatch
-					? t("batchBody1") + n + t("batchBody2")
-					: t("confirmBody1") + (confirmDel.title || confirmDel.id) + t("confirmBody2");
+				var body = isBlank
+					? t("blankBody1") + n + t("blankBody2")
+					: isBatch
+						? t("batchBody1") + n + t("batchBody2")
+						: t("confirmBody1") + (confirmDel.title || confirmDel.id) + t("confirmBody2");
 				var overlay = h("div", {
 					className: "am_dlgOverlay",
 					style: {
@@ -4663,7 +5411,7 @@ window.__ModuleLoader__.load({
 					},
 				},
 					h("div", { style: { fontSize: 15, fontWeight: 600, marginBottom: 8 } },
-						isBatch ? t("batchTitle") : t("confirmTitle")),
+						isBlank ? t("blankTitle") : isBatch ? t("batchTitle") : t("confirmTitle")),
 					h("div", { style: { fontSize: 13, lineHeight: "20px", color: "var(--dsw-alias-label-secondary)", marginBottom: 18, wordBreak: "break-all" } },
 						body),
 					h("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
@@ -4677,7 +5425,7 @@ window.__ModuleLoader__.load({
 							onClick: function () {
 								var ids = isBatch ? confirmDel.ids : [confirmDel.id];
 								setConfirmDel(null);
-								if (isBatch) doBatchDelete(ids); else doDelete(ids[0]);
+								if (isBlank) doCleanBlank(ids); else if (isBatch) doBatchDelete(ids); else doDelete(ids[0]);
 							},
 						}, isBatch ? t("del") + " ×" + n : t("ok")))));
 				return overlay;
@@ -4826,10 +5574,14 @@ window.__ModuleLoader__.load({
 		installScrollbarProximity();
 		// [问题112] 开合侧边卡片主列下潜钳制(输入框上抬挤压/文本手风琴/重排性能)
 		installPushClamp();
+		// [批次153] 侧边卡片入口钉位(开合两向入口不位移;机制见 css 数组 [批次153] 注释)
+		installSidebarRightEntry();
 		// [R79] 会话删除桥:菜单「删除会话」→ 确认弹窗 → 归档 + 壳端点物理清除
 		installSessionDelete(ctx);
-		// [R80] 归档会话管理:通用设置第五卡的二级管理页
+		// [R99] 归档会话管理:通用设置第五卡的二级管理页
 		installArchiveManager(ctx);
+		// [P3/T1] 常驻性能黑匣子:LoAF/交互延迟/堆锯齿/心跳漂移环形缓冲(体感卡顿时 Alt+Shift+J 种标记)
+		installPerfBlackbox();
 		// [问题4] 提示词增强按钮已迁至独立插件 dsh-enhance-prompt(2026-08),dshvt 不再注入,避免双挂载。
 			// 「插件」区段:唯一的"插件管理"tab(合并原只读清单;上游 all tab 行已禁用)
 			ctx.effect(() => ctx.locale.register(NS2, {
