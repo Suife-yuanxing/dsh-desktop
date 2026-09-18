@@ -11,6 +11,12 @@ directories:
 files:
   - main.js
   - patches.cjs
+  # [P4fix 2026-09-15] 补齐重放助手双件:main.js L49 顶层 require patches-replay-sync.cjs
+  # (缺它 = 启动即崩 Cannot find module,用户实测);L75 Worker 入口 patches-replay-worker.cjs
+  # (缺它 = 重放降级回同步,主进程事件循环被 4-8s 重放阻塞,P3fix/G5 语义丢失)。
+  # 两文件为 09-13 P3fix/G5 新增,files 显式清单未同步是 dist-0.5.17 启动崩根因。
+  - patches-replay-sync.cjs
+  - patches-replay-worker.cjs
   - dsh-plugin-compat.cjs
   - preload.js
   - error.html

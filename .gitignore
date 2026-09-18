@@ -22,9 +22,11 @@ scripts/lg-*
 scripts/debug-*
 scripts/dump-*
 scripts/analyze*
+scripts/batch-scan-*
 scripts/cdp-*
 !scripts/cdp-probe.mjs
 scripts/probe-*
+scripts/probes/
 !scripts/probe-columns.mjs
 !scripts/probe-overlap2.mjs
 !scripts/probe-reload.mjs

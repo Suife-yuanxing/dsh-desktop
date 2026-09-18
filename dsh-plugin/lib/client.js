@@ -191,8 +191,10 @@ window.__ModuleLoader__.load({
 			":root{--dsh-bsr-slide-duration:380ms;--dsh-bsr-slide-ease:cubic-bezier(.16,.67,.11,.99)}",
 			"#root > div[data-slot=\"root\"] > div{transition:grid-template-columns var(--dsh-bsr-slide-duration) var(--dsh-bsr-slide-ease)!important}",
 			// ---- [perf] 侧边栏展开/关闭性能优化:隔离对话区布局,避免大量消息时的重排卡顿 ----
-			// 1) #root 提升为合成层,GPU 加速 margin-right/width 过渡(侧栏开合不触发全页重排)
-			"#root{will-change:margin-right,width}",
+			// [P4/A2 2026-09-15] 原「#root{will-change:margin-right,width}」已移除:问题110 拆除
+			// #root 布局过渡后 margin/width 均为瞬时变化,will-change 对瞬时无益,只留常驻
+			// 层叠上下文 hint(合成器资源浪费)。侧栏 grid 开合过渡(上方 grid-template-columns
+			// 规则)走列轨道 + 对话区 contain 隔离(下一条规则),不受影响。
 			// 2) 对话内容区布局隔离:contain:layout style 阻止侧栏 margin 变化向内传播重排
 			"[data-slot=\"conversation\"]{contain:layout style}",
 			// 3) 对话消息虚拟化:content-visibility:auto 跳过屏幕外消息的渲染(500+条时收益巨大)
@@ -768,19 +770,22 @@ window.__ModuleLoader__.load({
 			'[data-composer-card] [class*="_tools"] button[class*="_add"][aria-label="添加附件"],[data-composer-card] [class*="_tools"] button[class*="_add"][aria-label="Add attachment"],[data-composer-card] [class*="_tools"] button[class*="_add"]:has(+input[type="file"]),[data-composer-card] [class*="_tools"]>*:has(>button[class*="_add"][aria-label="添加附件"]){display:none!important}',
 			'[data-composer-card] [class*="_tools"]>*{order:0!important}',
 			'[data-composer-card] [class*="_tools"]>[class*="_modes"]{order:2!important}',
-			// ---- [批次136 2026-09-10] 会话右缘「轮次导航」长条摘除(用户第二次要求,同批次91/v6) ----
-			// 症状:聊天页右缘一列右对齐的横杠刻度(未读刻度浅、当前轮最长最深),点击可跳轮次
-			// ——像素取证(用户截图):mark 高 4px,右缘齐平,宽度 12/18/30px 三档,间距 15px。
-			// 归属:0.1.5 的 @deepseek-ai/dsh-client-ui-chat `TurnNavigator`(lib/client.js 1749-1800):
-			//   div.[hash]_slot > nav.[hash]_frame[aria-label=轮次导航][style*="--turn-natural-height"]
-			//     > div.[hash]_scroller > div.[hash]_marks > div.[hash]_markPosition > button.[hash]_mark
-			// 常量 TURN_SPACING_PX=10 / RAIL_INSET_PX=6;aria-label zh=轮次导航 / en=Turn navigation。
-			// 为何复发:批次 91 的隐藏走 [U] v6(样式随 alpha.5 conversation bundle 常驻),而 [U] 段
-			// 版本门控只认 0.1.2-alpha.5 ⇒ 0.1.5 面整体 skipped,右缘条随升级回来了。
-			// 修法:钉进 dshvt 必加载面,选择器全部哈希无关(aria 双语言 + 内联样式变量 + :has 包装层,
-			// 包装层一起隐藏防留位);旧 v6 的 nav[style*="--turn-natural-height"] 在 0.1.5 仍有效,
-			// 与本钉语义一致双保险。生效:client 侧,刷新页面即可。
-			'nav[aria-label="轮次导航"],nav[aria-label="Turn navigation"],nav[class*="_frame"][style*="--turn-natural-height"],div[class*="_slot"]:has(>nav[style*="--turn-natural-height"]){display:none!important}',
+			// ---- [批次182 2026-09-16] 裁决反转:原生「轮次导航」恢复右缘原位,node-nav 圆点轨安全摘除 ----
+			// 需求:「帮我恢复在右侧原点处,然后原有的圆点安全去除」(附 node-nav 圆点轨截图)。
+			// 语义:批次 92/136 时代「摘原生长条、留插件圆点」的裁决反转——
+			//   ① 恢复:原生 TurnNavigator(@deepseek-ai/dsh-client-ui-chat,挂会话滚动容器右缘,
+			//     aria-label zh=轮次导航/en=Turn navigation)撤销批次 136 的 display:none,回归右缘原位;
+			//   ② 摘除:「原有的圆点」= 插件 dsh-node-nav 圆点轨整族,按批次 126 先例 display:none
+			//     安全休眠(展示与点击一并停;posOnce 定位 JS、侧栏联动观察器、批次159 的 style 自愈
+			//     对 display:none 天然无害——rail 的 gBCR 返回 0 矩形仅白写一次行内 left;恢复 =
+			//     删除本规则即可整族复活,插件本体与 patches.cjs [B]/[R89b]/[R91]/[R98b159] 数据链不动)。
+			// 门控核查:批次 92 的 [U] v6 旧隐藏版本门控只认 0.1.2-alpha.5,当前部署 0.1.5-rc.2
+			//   (desktop-config.json dshVersion)整体 skipped,不会二次藏掉恢复的原生条。
+			// 特异性:body 前缀 (0,1,1) 稳压批次 159 定位骨架 .dsh-node-nav-rail{display:flex!important}
+			//   的 (0,1,0),与数组位置无关;已知类族 rail/dot(-active/-unloaded)/line/bottom/miss/preview
+			//   全被 [class*=] 前缀一网打尽,插件未来新增类同样免疫。
+			// 生效:client 侧,刷新页面即可(无需重启 dsh/重打包)。
+			'body [class*="dsh-node-nav-"]{display:none!important}',
 			// ---- [批次138 2026-09-10] 会话头部右上角三入口摘除(用户截图裁决:去掉系统窗口按钮左侧三件) ----
 			// 症状:窗口控制钮(交通灯)左侧并排三件——①工作区胶囊(彩色文件夹+⌄) ②⋯菜单 ③右侧栏展开钮(▯|)。
 			// 归属(0.1.5-rc.1 代码级取证):上游 0.1.5 会话头部新增右上角簇,容器
@@ -2452,9 +2457,12 @@ window.__ModuleLoader__.load({
 				SURFA + "{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;background-image:radial-gradient(260px circle at var(--lg-px,50vw) var(--lg-py,50vh), rgba(255,255,255," + (darkBg ? ".18" : ".36") + "), transparent 65%),linear-gradient(115deg, transparent 42%, rgba(255,255,255," + (darkBg ? ".06" : ".09") + ") 50%, transparent 58%),radial-gradient(55% 45% at 88% 94%, rgba(255,255,255," + (darkBg ? ".06" : ".08") + "), transparent 60%);background-size:100% 100%,220% 220%,100% 100%;background-repeat:no-repeat;background-position:0 0,0% 100%,100% 100%;animation:dshLgFlow 14s ease-in-out infinite alternate}",
 				MASKA + "{-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;padding:2px}",
 				// 硬编码白底兜底(续):代码块/行内代码不走背景令牌(实测 rgb(249,250,251)/rgb(235,238,242))。
-				// md-code-block 是上游语义类(非哈希)可稳定寻址;容器留 5% 白底+模糊保代码区可辨,
+				// md-code-block 是上游语义类(非哈希)可稳定寻址;容器留 5% 白底保代码区可辨,
 				// 内部 pre/banner 子层透明避免叠白。
-				'.md-code-block{background:rgba(255,255,255,.05)!important;backdrop-filter:blur(2px)}',
+				// [P4/B2 2026-09-15] 摘 backdrop-filter:blur(2px) —— 视觉接近不可见(可辨性由
+				// 白底承担),液态玻璃下长会话滚动时视口内每个代码块逐帧 backdrop 采样是滚动
+				// 成本源;c-v 只救离屏块,此刀救视口内滚动。
+				'.md-code-block{background:rgba(255,255,255,.05)!important}',
 				'.md-code-block pre,.md-code-block [class*="_banner"]{background:transparent!important}',
 				'[data-chat-flow] code:not(pre code),[data-slot="conversation.chat.node"] code:not(pre code){background:rgba(255,255,255,.08)!important}',
 				// ---- [问题76→问题77] 可读性氛围补偿(壁纸态)第三轮精调:多停靠点渐变/两级交互态/双层细影 ----
@@ -2491,6 +2499,14 @@ window.__ModuleLoader__.load({
 				//    往返流动;第一(指针流光)/第三(右下角补光)位置恒定。多出的位置值
 				//    对两层元素无害(CSS 忽略多余层位置)。reduced-motion 时全部关闭。
 				'@keyframes dshLgFlow{from{background-position:0 0,0% 100%,100% 100%}to{background-position:0 0,100% 0%,100% 100%}}',
+				// [P4/E1 2026-09-15] 交互期暂停常驻流动扫光:dshLgFlow 是 background-position
+				// 动画(每帧 paint 表面伪元素,常驻),与任何交互的 React 提交同帧叠加排队。
+				// pointerdown/keydown 挂 html.dsh-lg-busy 300ms 摘除(installLgBusyGate),
+				// 动画暂停 → 交互帧零 paint 排队;14s 慢动画停 0.3s 视觉差 <2%(用户已接受
+				// 微小视觉变化)。选择器不镜像 SURFA 的 PN 排除链:无动画的 ::after 上
+				// paused 无副作用,宽松反而免疫上游类名漂移。reduced-motion 下本就关停
+				// (R66),无叠加风险。
+				'html.dsh-lg-busy [data-composer-card]::after,html.dsh-lg-busy [class*="_panel"]::after,html.dsh-lg-busy .dsh-vt-glasspane{animation-play-state:paused!important}',
 				'@media (prefers-reduced-motion:reduce){[data-composer-card]::after,[class*="_panel"]:not([class*="panelBody"])::after,div[data-slot="sidebar.workspaces"],.dsh-vt-glasspane{animation:none!important}}',
 				// ---- [R60] 液态玻璃·三级表面(设置面板内容卡,插件模块重点) ----
 				// 限定 [class*="_overlay"] 内:mq_dock(fixed 队列坞,自带实底玻璃)与侧栏
@@ -3526,9 +3542,14 @@ window.__ModuleLoader__.load({
 		// 更多经统一 tick 与防抖结构通道自动重估。
 		var CV_THRESHOLD = 60;
 		var syncCvGate = function () {
-			if (dlgOpen()) return; // ① 弹窗门
-			document.body.classList.toggle("dsh-cv-on",
-				document.querySelectorAll('[data-chat-flow-key]').length >= CV_THRESHOLD);
+			// [P4/B1 2026-09-15] c-v 门扩展:设置弹窗打开期间(区段 ≥8)也挂 dsh-cv-on ——
+			// 离屏 section 跳过渲染,切区段/弹窗挂载期的布局成本直接受益(qSA 纯遍历无 gBCR,
+			// 统一 tick 1200ms 一次成本可忽略;原 dlgOpen 早退为 tick 期省查询,弹窗在场判定
+			// 现由 section 计数本身承担)。CSS 规则(contain-intrinsic-size:auto 800px)记忆
+			// 实测尺寸,首显无白屏;轻会话(<60 条)开设置页同样生效。
+			var flowHeavy = document.querySelectorAll('[data-chat-flow-key]').length >= CV_THRESHOLD;
+			var settingsOpen = document.querySelectorAll('[data-slot="settings.section"]').length >= 8;
+			document.body.classList.toggle("dsh-cv-on", flowHeavy || settingsOpen);
 		};
 		// [P1/B3] 原 1200ms 独立轮询并入统一调度器 dshVtTick(隐藏门控+恢复补跑)
 		// [P2/T1] 增挂 roSync:RO 观察目标失配(极端重挂路径)时由 tick 兜底重新 observe;
@@ -4935,6 +4956,27 @@ window.__ModuleLoader__.load({
 		}, true);
 	}
 
+	// [P4/E1 2026-09-15] 交互期暂停常驻流动扫光:配合 css 数组 [P4/E1] 规则
+	// (html.dsh-lg-busy 下 dshLgFlow 动画 animation-play-state:paused)。监听为
+	// 捕获+passive、零 gBCR/零 DOM 查询,挂类仅在状态翻转时写(300ms 静止后摘除)。
+	// 皮肤未激活时类挂了也无规则命中,零副作用。
+	function installLgBusyGate() {
+		if (typeof document === "undefined") return;
+		if (window.__dshLgBusy) return; // 热重载/重复 apply 单例守卫
+		window.__dshLgBusy = true;
+		var busyT = 0;
+		var busyOn = function () {
+			var de = document.documentElement;
+			if (!de.classList.contains("dsh-lg-busy")) de.classList.add("dsh-lg-busy");
+			clearTimeout(busyT);
+			busyT = setTimeout(function () {
+				try { document.documentElement.classList.remove("dsh-lg-busy"); } catch (e) { /* 已卸载 */ }
+			}, 300);
+		};
+		document.addEventListener("pointerdown", busyOn, true);
+		document.addEventListener("keydown", busyOn, true);
+	}
+
 	// [R81+] 打开期间 5s 轻轮询+签名去重:别处(主页时序/另一窗口)的归档变化
 	// 自动跟进,不再依赖手动刷新;隐藏页/操作中/弹窗中暂停。
 	function installArchiveManager(ctx) {
@@ -5582,6 +5624,8 @@ window.__ModuleLoader__.load({
 		installArchiveManager(ctx);
 		// [P3/T1] 常驻性能黑匣子:LoAF/交互延迟/堆锯齿/心跳漂移环形缓冲(体感卡顿时 Alt+Shift+J 种标记)
 		installPerfBlackbox();
+		// [P4/E1] 交互期暂停 dshLgFlow 常驻扫光(见函数头注释)
+		installLgBusyGate();
 		// [问题4] 提示词增强按钮已迁至独立插件 dsh-enhance-prompt(2026-08),dshvt 不再注入,避免双挂载。
 			// 「插件」区段:唯一的"插件管理"tab(合并原只读清单;上游 all tab 行已禁用)
 			ctx.effect(() => ctx.locale.register(NS2, {

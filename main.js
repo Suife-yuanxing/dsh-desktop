@@ -43,17 +43,50 @@ try {
 } catch {
   replayLocalPatches = require('./patches.cjs').replayAll
 }
+// [P3fix/G5 2026-09-13] startDsh spawn 前同步重放助手(字面量 require,动态加载收拢在
+// 助手模块 patches-replay-sync.cjs 内):运行期重放已全部挪入 worker 线程,仅此一处
+// 保留主进程同步执行。
+const { replaySync } = require('./patches-replay-sync.cjs')
 // [q194 2026-09-04] 每次调用重读 ~/.dsh/patches.cjs:壳是长驻进程,require 缓存会把
 // 启动时的旧重放器留在内存,patches.cjs 的后续编辑(新补丁段/新适配)会被守护线程与
 // 重启流程按旧链覆盖回去(v2→v1 实证)。重读失败回退启动时缓存。
-function loadFreshReplayer() {
-  try {
-    const patchesPath = path.join(os.homedir(), '.dsh', 'patches.cjs')
-    delete require.cache[require.resolve(patchesPath)]
-    return require(patchesPath).replayAll
-  } catch {
-    return replayLocalPatches
-  }
+// [P3fix/G5 2026-09-13] 运行期重放挪入 worker 线程(入口 patches-replay-worker.cjs,静态
+// 资源:无 eval、不接收外部路径,patches.cjs 路径在 worker 内按 homedir 自算)。replayAll
+// 是纯同步实现(实测 616 次文件读共 53MB,IO 仅 0.15-0.26s,其余 ~4-8s 全是主线程正则/
+// 字符串 CPU)——在主进程事件循环里执行 = 周期性整窗输入冻结(ok=true 时代每 7.5min 强制
+// 轮仍在 Windows「未响应」5s 灰条阈值边缘)。主进程仅保留 spawn 前 boot 重放为同步(窗口
+// 未揭,且补丁必须先于服务进程加载插件产物落位)。worker 启动失败/超时回退同步路径。
+const { Worker } = require('node:worker_threads')
+const REPLAY_WORKER_TIMEOUT_MS = 120_000
+function runReplayInWorker({ timeoutMs = REPLAY_WORKER_TIMEOUT_MS } = {}) {
+  return new Promise((resolve) => {
+    let w = null
+    let settled = false
+    let timer = null
+    const finish = (v) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try { if (w) w.terminate() } catch { /* 已退出 */ }
+      resolve(v)
+    }
+    timer = setTimeout(() => finish({ result: null, logs: [], error: `worker 超时(>${timeoutMs}ms),已终止` }), timeoutMs)
+    try {
+      w = new Worker(path.join(__dirname, 'patches-replay-worker.cjs'))
+    } catch (e) {
+      // worker 起不来:回退同步重放(asar 内嵌正本;HOME 正本加载在 worker 内完成)
+      try {
+        const r = replayLocalPatches(() => {})
+        finish({ result: r, logs: [], error: null, fallbackSync: true })
+      } catch (e2) {
+        finish({ result: null, logs: [], error: String((e2 && e2.message) || e2) })
+      }
+      return
+    }
+    w.on('message', (m) => finish(m))
+    w.on('error', (e) => finish({ result: null, logs: [], error: String((e && e.message) || e) }))
+    w.on('exit', (code) => finish({ result: null, logs: [], error: 'worker 提前退出 code=' + code }))
+  })
 }
 
 // [问题99] 补丁守护:周期性幂等重放,覆盖「壳运行期间外部覆盖产物」的窗口
@@ -68,6 +101,10 @@ function loadFreshReplayer() {
 function startPatchGuardian(intervalMs = 45_000) {
   let lastOk = null
   let lastSig = null
+  let lastFailFp = null
+  let lastReplayFailed = false
+  let retriedAfterFail = false
+  let replayInFlight = false
   let tickCount = 0
   const indicator = (p) => { try { const s = fs.statSync(p); return `${s.mtimeMs}:${s.size}` } catch { return 'X' } }
   const guardianSignature = () => [
@@ -80,16 +117,68 @@ function startPatchGuardian(intervalMs = 45_000) {
     try {
       tickCount += 1
       const sig = guardianSignature()
-      if (lastOk === true && lastSig === sig && tickCount % 10 !== 0) return
-      // [q194 2026-09-04] 守护每次重读最新重放器(否则 require 缓存旧链会把新补丁覆盖回去)
-      const r = loadFreshReplayer()(() => {})
-      if (r.ok) lastSig = sig
-      if (r.ok !== lastOk) {
-        log(`[patch-guardian] 状态翻转 ok=${r.ok}(外部覆盖后自动重放恢复或存在失配)`)
-        lastOk = r.ok
+      // [P3fix/G1 2026-09-13] 快路径不再要求 lastOk===true:签名未变即跳过(FAIL 同口径),
+      // 仅保留每 10 轮(~7.5min)强制全量兜底。原条件下"上游漂移保持现状"型永久失配把
+      // lastOk 永久压在 false,快路径整体死亡 → 主进程每 45s 全量重放(实测 402 目标
+      // ~15-25s 纯 CPU/次,IO 仅 0.15s)→ 所有窗口输入周期性冻结——"经常无响应"根因。
+      // 唯一让步:上轮同签名 FAIL 时允许重试一次(市场安装进行中被轮询撞上的瞬时失配,
+      // 下一轮即愈),再 FAIL 则退避到强制轮。外部真实变更必触碰指示文件 → 签名变化照常重放。
+      const forced = tickCount % 10 === 0
+      const sigUnchanged = lastSig === sig
+      if (!sigUnchanged) retriedAfterFail = false
+      if (sigUnchanged && !forced) {
+        if (!(lastReplayFailed && !retriedAfterFail)) return
+        retriedAfterFail = true
       }
-      if (!r.ok) for (const it of r.items) if (!it.ok) log(`[patch-guardian] FAIL ${it.file}: ${(it.failures || []).join('; ')}`)
+      // [P3fix/G5 2026-09-13] 重放经 worker 线程执行(见 runReplayInWorker):主进程事件循环
+      // 不再被 ~4-8s 同步重放阻塞;worker 新 isolate 每轮读 HOME 正本,q194 热重载语义由
+      // 隔离性天然满足。in-flight 期间跳过新 tick(重放时长>轮询间隔时防堆积)。
+      if (replayInFlight) return
+      replayInFlight = true
+      runReplayInWorker().then(({ result, error }) => {
+        replayInFlight = false
+        const r = result || { ok: false, items: [] }
+        lastSig = sig
+        lastReplayFailed = !r.ok
+        if (r.ok) retriedAfterFail = false
+        if (r.ok !== lastOk) {
+          log(`[patch-guardian] 状态翻转 ok=${r.ok}(外部覆盖后自动重放恢复或存在失配)`)
+          lastOk = r.ok
+        }
+        // [P3fix/G3 2026-09-13] FAIL 去重 + 走 dshLog 合批:指纹(失败文件×失败数)未变不再
+        // 每轮刷屏(desktop.log 曾 15,207/52,292 行为 FAIL);强制轮补一行持续摘要留痕。
+        if (!r.ok) {
+          if (error) dshLog(`[patch-guardian] 重放执行异常: ${error}`)
+          const bad = r.items.filter((it) => !it.ok)
+          const fp = bad.map((it) => `${it.file}#${(it.failures || []).length}`).join('|')
+          if (fp !== lastFailFp) {
+            for (const it of bad) dshLog(`[patch-guardian] FAIL ${it.file}: ${(it.failures || []).join('; ')}`)
+            lastFailFp = fp
+          } else if (forced) {
+            dshLog(`[patch-guardian] FAIL 持续(第 ${Math.floor(tickCount / 10)} 次强制复核): ${bad.map((it) => it.file).join(', ')}`)
+          }
+        } else {
+          lastFailFp = null
+        }
+      }).catch((e) => { replayInFlight = false; log(`[patch-guardian] 异常: ${(e && e.message) || e}`) })
     } catch (e) { log(`[patch-guardian] 异常: ${e.message}`) }
+  }, intervalMs)
+  if (timer.unref) timer.unref()
+  return timer
+}
+
+// [P3fix/G4 2026-09-13] 主进程事件循环滞后看门狗(P3 §五.T1 伴随件,本次补实施):
+// 1s 心跳测 setInterval 漂移,仅越界时经 dshLog 写一行(无常驻 IO、不制造新空转)。
+// 渲染侧黑匣子(独立进程)看不见主进程阻塞,此看门狗与其跨进程对时,专抓
+// "全窗口输入延迟但渲染侧无辜"类问题——本次 patch-guardian 风暴即此类。
+// 阻塞期间心跳只在解除后补发一次,天然单行,无日志风暴风险。
+function startMainLagWatchdog({ intervalMs = 1000, thresholdMs = 250 } = {}) {
+  let last = Date.now()
+  const timer = setInterval(() => {
+    const now = Date.now()
+    const drift = now - last - intervalMs
+    last = now
+    if (drift > thresholdMs) dshLog(`[lag-watchdog] 主进程事件循环滞后 ${drift}ms(阈值 ${thresholdMs}ms)`)
   }, intervalMs)
   if (timer.unref) timer.unref()
   return timer
@@ -181,10 +270,22 @@ let cfg = loadConfig()
 
 // ---------- 基础工具 ----------
 
+// [P3fix/G3 2026-09-13] desktop.log 轮转:>5MB 改名为 .1(覆盖旧 .1)。守护器 FAIL 刷屏
+// 曾把日志养到 13MB/5.2 万行(其中 29% 是 FAIL),检索与诊断都被淹没。stat 每次落盘前
+// 顺手做一次,开销可忽略;被占用(EPERM)则下轮再试。log() 与 dshLog 链内各调一次。
+const LOG_MAX_BYTES = 5 * 1024 * 1024
+function rotateLogIfNeeded() {
+  try {
+    if (fs.statSync(LOG_FILE).size <= LOG_MAX_BYTES) return
+    try { fs.renameSync(LOG_FILE, LOG_FILE + '.1') } catch { /* 被占用则下轮再试 */ }
+  } catch { /* 日志尚不存在 */ }
+}
+
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`
   console.log(line)
   try {
+    rotateLogIfNeeded()
     fs.mkdirSync(LOG_DIR, { recursive: true })
     fs.appendFileSync(LOG_FILE, line + '\n')
   } catch { /* 日志失败不阻塞主流程 */ }
@@ -211,7 +312,7 @@ function dshLog(msg) {
     try {
       if (!dshLogDirReady) { fs.mkdirSync(LOG_DIR, { recursive: true }); dshLogDirReady = true }
     } catch { return }
-    dshLogChain = dshLogChain.then(() => fs.appendFile(LOG_FILE, text)).catch(() => {})
+    dshLogChain = dshLogChain.then(() => { rotateLogIfNeeded(); return fs.appendFile(LOG_FILE, text) }).catch(() => {})
   }, 500)
 }
 
@@ -512,8 +613,10 @@ function startDsh({ skipReplay = false } = {}) {
   // (2×372KB 重放器重解析+全量目标扫描);托盘重启/自动恢复/版本切换仍走默认重放。
   if (!skipReplay) {
     try {
-      const r = loadFreshReplayer()((l) => log(l))
-      if (!r.ok) log('补丁重放存在 FAIL(不阻断启动,详见上方日志)')
+      // [P3fix/G5 2026-09-13] 同步重放经助手模块(HOME 正本,语义与原 loadFreshReplayer
+      // 一致);逐行日志走 dshLog 合批,不再 ~460 行逐行同步落盘。
+      const r = replaySync((l) => dshLog(l))
+      if (!r.ok) log('补丁重放存在 FAIL(不阻断启动,详见日志)')
     } catch (e) { log(`补丁重放异常: ${e.message}`) }
   }
   // [v0.5.0] 双轨解析:'local' 直跑本地构建 bin.js;'official'(含能力探测失败折返)
@@ -1546,7 +1649,7 @@ function writeFederatedSwitch(enable) {
   if (!enable) {
     if (!hit) return { ok: true }
     if (!isCanonicalFederationRow(hit, lines)) return { ok: false, error: `条目 ${FEDERATION_ENTRY_ID} 有手写内容,请手动编辑` }
-    lines.splice(hit.start, hit.end)
+    lines.splice(hit.start, hit.end - hit.start) // [批次182 修复] 第二参是删除个数不是结束索引,原写法会吃掉条目之后的全部内容
     while (lines[hit.start] !== undefined && lines[hit.start].trim() === '' && lines[hit.start + 1] !== undefined && lines[hit.start + 1].trim() === '') lines.splice(hit.start, 1)
   } else {
     if (hit) {
@@ -1786,6 +1889,9 @@ function createMainWindow({ show = false } = {}) {
       // 壁纸视频带声播放:Chromium 默认要求用户手势才允许非静音自动播放,
       // 桌面壳内放开(本地内容,等价原生应用行为)。
       autoplayPolicy: 'no-user-gesture-required',
+      // [P4/D1 2026-09-15 性能批次] 关闭拼写检查:Electron 默认 spellcheck:true,
+      // composer 每次击键跑拼写管线;技术/中文输入场景红线无实用价值,纯打字路径开销。
+      spellcheck: false,
     },
   })
   mainWindows.add(win)
@@ -2246,7 +2352,7 @@ function togglePluginEntry(entryId, disable) {
   } else {
     if (!hit) return { ok: true } // 无覆盖行 = 已是默认启用,幂等
     if (!hit.managed) return { ok: false, error: `条目 ${entryId} 在 cordis.patch.yml 中有手写内容,请手动编辑` }
-    lines.splice(hit.start, hit.end)
+    lines.splice(hit.start, hit.end - hit.start) // [批次182 修复] 第二参是删除个数不是结束索引,原写法会吃掉条目之后的全部内容
     // 清掉删除后可能紧邻的重复空行
     while (lines[hit.start] !== undefined && lines[hit.start].trim() === '' && lines[hit.start + 1] !== undefined && lines[hit.start + 1].trim() === '') lines.splice(hit.start, 1)
   }
@@ -2258,20 +2364,34 @@ function togglePluginEntry(entryId, disable) {
 // 行格式由本壳独占管理(toggle 的管理行判定不含 config,互不干扰):
 //   - id: system-prompt
 //     config:
-//       persona: |-
+//       personaPrefix: |-
 //         <6 空格缩进的正文行>
+//       persona: |-            (legacy 回退键,兼容 0.1.1-0.1.4 老引擎)
+//         <6 空格缩进的正文行>
+// [批次182 2026-09-16] 0.1.5 起上游字段为 personaPrefix(批次143 定谳);写侧双键并落
+// (原生键优先 + legacy 回退),读侧认双键 —— 新引擎读原生键,老引擎读 legacy 键,
+// 不再依赖 patches.cjs [Y] 家族的运行时别名兼容(该家族随批退役)。
 // 恢复默认 = 删除该行。默认值与 web-app bundle 层一致。
 
 const PERSONA_ENTRY_ID = 'system-prompt'
 const DEFAULT_PERSONA = 'You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.'
 
-/** home patch 中 system-prompt 行是否为壳管理的标准格式。 */
+/** home patch 中 system-prompt 行是否为壳管理的标准格式。
+ * [批次182] 接受三种形态:canonical 双键(personaPrefix+persona)/ 仅 legacy persona / 仅原生 personaPrefix。 */
 function isCanonicalPersonaRow(hit, lines) {
   const block = lines.slice(hit.start, hit.end)
-  return block[0] === `- id: ${PERSONA_ENTRY_ID}`
-    && block[1] === '  config:'
-    && /^ {4}persona: \|-$/.test(block[2] ?? '')
-    && block.slice(3).every((l) => l === '' || l.startsWith('      '))
+  if (block[0] !== `- id: ${PERSONA_ENTRY_ID}` || block[1] !== '  config:') return false
+  const body = block.slice(2)
+  const hasPrefix = /^ {4}personaPrefix: \|-$/.test(body[0] ?? '')
+  const hasLegacy = /^ {4}persona: \|-$/.test(body[0] ?? '')
+  if (!hasPrefix && !hasLegacy) return false
+  const isBody = (l) => l === '' || l.startsWith('      ')
+  if (hasPrefix) {
+    const second = body.findIndex((l, i) => i > 0 && /^ {4}persona: \|-$/.test(l))
+    if (second > 0) return body.slice(1, second).every(isBody) && body.slice(second + 1).every(isBody)
+    return body.slice(1).every(isBody)
+  }
+  return body.slice(1).every(isBody)
 }
 
 /** 读 persona 覆盖;persona 为 null 表示无覆盖(用默认)。 */
@@ -2282,7 +2402,13 @@ function readPersonaOverride() {
   if (!isCanonicalPersonaRow(hit, lines)) {
     return { error: `cordis.patch.yml 中 ${PERSONA_ENTRY_ID} 行不是本工具的标准格式,请手动编辑该文件` }
   }
-  const text = lines.slice(hit.start + 3, hit.end)
+  // [批次182] 双键定位:首正文键为 personaPrefix 时,正文取到 persona: 行之前;
+  // 其余形态(仅 persona / 仅 personaPrefix)正文 = 首键行之后到条目末尾。
+  const body = lines.slice(hit.start + 2, hit.end)
+  const firstIsPrefix = /^ {4}personaPrefix: \|-$/.test(body[0] ?? '')
+  const secondKey = firstIsPrefix ? body.findIndex((l, i) => i > 0 && /^ {4}persona: \|-$/.test(l)) : -1
+  const to = secondKey > 0 ? secondKey : body.length
+  const text = body.slice(1, to)
     .map((l) => (l === '' ? '' : l.slice(6)))
     .join('\n')
   return { persona: text }
@@ -2297,11 +2423,13 @@ function writePersonaOverride(text) {
   if (restore) {
     if (!hit) return { ok: true }
     if (!isCanonicalPersonaRow(hit, lines)) return { ok: false, error: `条目 ${PERSONA_ENTRY_ID} 有手写内容,请手动编辑` }
-    lines.splice(hit.start, hit.end)
+    lines.splice(hit.start, hit.end - hit.start) // [批次182 修复] 第二参是删除个数不是结束索引,原写法会吃掉条目之后的全部内容
     while (lines[hit.start] !== undefined && lines[hit.start].trim() === '' && lines[hit.start + 1] !== undefined && lines[hit.start + 1].trim() === '') lines.splice(hit.start, 1)
   } else {
-    const block = [`- id: ${PERSONA_ENTRY_ID}`, '  config:', '    persona: |-',
-      ...text.split('\n').map((l) => (l.trim() === '' ? '' : '      ' + l))]
+    // [批次182] 双键并落:personaPrefix(0.1.5+ 原生)优先 + persona(legacy 回退),正文同源
+    const bodyLines = text.split('\n').map((l) => (l.trim() === '' ? '' : '      ' + l))
+    const block = [`- id: ${PERSONA_ENTRY_ID}`, '  config:', '    personaPrefix: |-',
+      ...bodyLines, '    persona: |-', ...bodyLines]
     if (hit) {
       if (!isCanonicalPersonaRow(hit, lines)) return { ok: false, error: `条目 ${PERSONA_ENTRY_ID} 有手写内容,请手动编辑` }
       lines.splice(hit.start, hit.end - hit.start, ...block)
@@ -3896,15 +4024,21 @@ async function boot() {
   stage('probe')
   if (await isPortUp()) {
     setTimeout(() => {
-      try {
-        const r = loadFreshReplayer()((l) => log(l))
+      // [P3fix/G5 2026-09-13] 重放经 worker 线程:此处窗口已揭(q195 复用路径立即揭窗),
+      // 原同步重放会在启动后 ~5s 阻塞主进程 4-8s(启动后第一次「卡一下」的来源)。
+      // 逐行日志走 dshLog 合批(此前 ~460 行逐行同步落盘)。
+      runReplayInWorker().then(({ result, logs, error }) => {
+        for (const l of (logs || [])) dshLog(l)
+        if (error) dshLog(`[patches] 重放执行异常: ${error}`)
+        const r = result || { ok: false, items: [] }
         if (!r.ok) notify('DeepSeek Harness', '本地插件补丁重放失败,详见日志(桌面日志目录)。')
-      } catch (e) { log(`补丁重放异常: ${e.message}`) }
+      }).catch((e) => log(`补丁重放异常: ${(e && e.message) || e}`))
     }, 5_000)
     // [问题99] 常驻守护:市场/CLI/pnpm 对账可能在壳运行中覆盖 node_modules 里的补丁产物
     // (历史上市场批量更新、卸载流程都发生过),boot/startDsh 时点重放覆盖不到这些窗口。
     // 每 45s 幂等重放一次——已是补丁态时哨兵快速通道零写盘零开销;状态翻转才记日志。
     startPatchGuardian()
+    startMainLagWatchdog()
     log(`检测到 dsh 服务已在运行,直接复用(壳启动 ${((Date.now() - bootT0) / 1000).toFixed(1)}s)`)
     // [q196] 'ready'(100%/鲸鱼谢幕)由 bootGate 在揭窗节拍时触发;此阶段先报界面加载中
     stage('ui')
@@ -3917,12 +4051,16 @@ async function boot() {
   // [q197] 这份是 spawn 路径的唯一次重放(原 boot 与 startDsh 各重放一次);耗时入日志,
   // 下一轮提速以此为准。startDsh 由调用方传 skipReplay,托盘重启/自动恢复语义不变。
   const replayT0 = Date.now()
-  try {
-    const r = loadFreshReplayer()((l) => log(l))
-    if (!r.ok) notify('DeepSeek Harness', '本地插件补丁重放失败,详见日志(桌面日志目录)。')
-  } catch (e) { log(`补丁重放异常: ${e.message}`) }
+  // [P3fix/G5 2026-09-13] boot 本为 async:await worker 完成重放(时序语义不变——补丁先于
+  // spawn 落位),等待期间主进程事件循环照常跑(启动页/splash IPC 不冻结);逐行日志走 dshLog。
+  const rep = await runReplayInWorker()
+  for (const l of (rep.logs || [])) dshLog(l)
+  if (rep.error) dshLog(`[patches] 重放执行异常: ${rep.error}`)
+  const replayR = rep.result || { ok: false, items: [] }
+  if (!replayR.ok) notify('DeepSeek Harness', '本地插件补丁重放失败,详见日志(桌面日志目录)。')
   log(`补丁重放耗时 ${Date.now() - replayT0}ms`)
   startPatchGuardian()
+  startMainLagWatchdog()
   stage('spawn')
   if (!startDsh({ skipReplay: true })) {
     closeSplash()
