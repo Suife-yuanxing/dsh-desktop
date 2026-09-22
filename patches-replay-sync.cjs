@@ -9,7 +9,15 @@ const path = require('node:path')
 function replaySync(log) {
   let replayer
   try {
-    replayer = require(path.join(os.homedir(), '.dsh', 'patches.cjs')).replayAll
+    // [q203 2026-09-22] require 缓存失效重读:壳是长驻进程,HOME 正本在运行期被编辑/
+    // 改号时裸 require 会命中启动时加载的旧模块——2026-09-22 R105 双写事故的直接放大器:
+    // 改号脚本 13:42:50 把活体文件哨兵(r104→r105)与 .bak 后缀改名,13:52 重启同步重放
+    // 仍执行壳启动时缓存的 r104 时代模块,守卫(查 r104 哨兵)落空 + 基底被改名抽走 →
+    // 对已打内容重插一份。q194 注释所述「每次调用重读」在本路径补实(运行期守护走
+    // worker 新 isolate,天然无此问题)。过期缓存删除为 no-op,缺失文件仍走 asar 回退。
+    const homeReplayer = path.join(os.homedir(), '.dsh', 'patches.cjs')
+    delete require.cache[require.resolve(homeReplayer)]
+    replayer = require(homeReplayer).replayAll
   } catch {
     replayer = require('./patches.cjs').replayAll
   }

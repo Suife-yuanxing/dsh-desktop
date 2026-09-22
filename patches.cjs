@@ -1324,7 +1324,7 @@ function patchEgoBrowserHeadlessCopy() {
   if (!fs.existsSync(p)) return [{ file: FILE, missing: true }]
   let ver = 'unknown'
   try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
-  const { rep, failures } = makeCtx('dsh-ego-browser/client.js(headless-copy)')
+  const { rep, rex, failures } = makeCtx('dsh-ego-browser/client.js(headless-copy)')
   const current = fs.readFileSync(p, 'utf8')
   const MARK = '[R98 headless-copy 2026-09-12,patches.cjs [R98] 段守护]'
   if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
@@ -1338,13 +1338,12 @@ function patchEgoBrowserHeadlessCopy() {
     '<b>⚠️ 检测到人机验证</b> — 请在「Agent 浏览器」画面（侧边卡片）中手动完成验证（画面支持点击操作），agent 会继续。',
     1, 'float-captcha-copy')
   // 侧边 Tab 版(better-sidebar 形态,JSX 拼接)
-  c = rep(c,
-    '"需要账号登录时，请到桌面上那个 ", h("b", null, "「ego lite — agent」"), " Chrome 窗口完成登录。"',
+  // [批次182 2026-09-16] 0.8.4 打包产物 React 别名 h → h$1:字面量锚点改 rex 正则通吃别名漂移
+  c = rex(c, /"需要账号登录时，请到桌面上那个 ", h(\$\d+)\("b", null, "「ego lite — agent」"\), " Chrome 窗口完成登录。"/,
     '"需要账号登录时，请直接在侧边卡片「Agent 浏览器」画面中完成登录（画面支持点击与输入）。"',
     1, 'tab-login-copy')
-  c = rep(c,
-    'h("b", null, "⚠️ 检测到人机验证"), " — 请在桌面那个 ", h("b", null, "「ego lite — agent」"), " 浏览器窗口手动完成验证，agent 会继续。"',
-    'h("b", null, "⚠️ 检测到人机验证"), " — 请在侧边卡片「Agent 浏览器」画面中手动完成验证（画面支持点击操作），agent 会继续。"',
+  c = rex(c, /h(\$\d+)\("b", null, "(?:\?\?|\u26a0\ufe0f) 检测到人机验证"\), " — 请在桌面那个 ", h(\$\d+)\("b", null, "「ego lite — agent」"\), " 浏览器窗口手动完成验证，agent 会继续。"/,
+    'h$1("b", null, "\u26a0\ufe0f 检测到人机验证"), " — 请在侧边卡片「Agent 浏览器」画面中手动完成验证（画面支持点击操作），agent 会继续。"',
     1, 'tab-captcha-copy')
   if (failures.length) return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
   c = c + '\n// ' + MARK + '\n'
@@ -1429,17 +1428,16 @@ function patchEgoBrowserUrlTargetRelease() {
   if (!current.includes('urlTarget')) {
     return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行移除 urlTarget 认领' }]
   }
-  const FROM = 'urlTarget: function(url) {\n\t\t\t\t\treturn /^https?:$/.test(url.protocol) && !/\\.(pdf|txt|md|docx?|xlsx?|pptx?)$/i.test(url.pathname);\n\t\t\t\t},'
-  const c = rep(current, FROM,
-    '// ' + MARK + ' 恒 false:不再认领外链。better-sidebar 外链路由是 urlTargetOf(url) ?? "browser",\n' +
-    '\t\t\t\t// 声明 urlTarget 的插件 Tab 优先于内置「浏览器」Tab —— 此处曾认领一切 http/https 网页,\n' +
-    '\t\t\t\t// 致点击会话里的链接被塞进「Agent 浏览器」观看屏。放行后外链回归默认路由:内置「浏览器」\n' +
-    '\t\t\t\t// Tab(Ctrl/Cmd+点击临时放行系统浏览器的既有约定不变);「Agent 浏览器」Tab 仍由 SSE\n' +
-    '\t\t\t\t// tool-call 自动翻开,观看/接管 agent 浏览的本职不受影响。\n' +
-    '\t\t\t\turlTarget: function(url) {\n' +
-    '\t\t\t\t\treturn false;\n' +
-    '\t\t\t\t},',
-    1, 'urlTarget-release')
+  // [批次182 2026-09-16] 0.8.4 缩进从 5 tab 变 3 tab:锚点改单行字面量(url.pathname 全文件唯一),
+  // 不再受整块缩进漂移影响;TO 同步单行形态。
+  const FROM = 'urlTarget: function(url) {\n\t\t\treturn /^https?:$/.test(url.protocol) && !/\\.(pdf|txt|md|docx?|xlsx?|pptx?)$/i.test(url.pathname);\n\t\t},'
+  const TO = '// ' + MARK + ' 恒 false:不再认领外链。better-sidebar 外链路由是 urlTargetOf(url) ?? "browser",\n' +
+    '// 声明 urlTarget 的插件 Tab 优先于内置「浏览器」Tab —— 此处曾认领一切 http/https 网页,\n' +
+    '// 致点击会话里的链接被塞进「Agent 浏览器」观看屏。放行后外链回归默认路由:内置「浏览器」\n' +
+    '// Tab(Ctrl/Cmd+点击临时放行系统浏览器的既有约定不变);「Agent 浏览器」Tab 仍由 SSE\n' +
+    '// tool-call 自动翻开,观看/接管 agent 浏览的本职不受影响。\n' +
+    '\t\t\t\turlTarget: function(url) {\n\t\t\t\t\treturn false;\n\t\t\t\t},'
+  const c = rep(current, FROM, TO, 1, 'urlTarget-release')
   if (failures.length) {
     if (/urlTarget:\s*function\(url\)\s*\{\s*\n\s*return false;/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行恒 false' }]
     return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
@@ -1471,6 +1469,10 @@ function patchSystemPromptPersona() {
   const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
   if (fs.existsSync(npxRoot)) {
     for (const h of fs.readdirSync(npxRoot)) {
+      // [Y2 2026-09-16] npm 平铺布局种子(0.1.5-rc.2 官方包无 .pnpm):顶层直接有包实体,
+      // 旧扫描对平铺种子整体落空 → 人设字段别名补丁未落盘(问题54 第四形态)。
+      const flatSp = path.join(npxRoot, h, 'node_modules', '@deepseek-ai', 'dsh-system-prompt', 'lib', 'index.js')
+      if (fs.existsSync(flatSp)) files.push(flatSp)
       const pnpmRoot = path.join(npxRoot, h, 'node_modules', '.pnpm')
       if (!fs.existsSync(pnpmRoot)) continue
       for (const d of fs.readdirSync(pnpmRoot)) {
@@ -1483,6 +1485,10 @@ function patchSystemPromptPersona() {
   // 2) profile 顶层副本(旧布局可能自带一份,存在即一起打)
   const profCopy = path.join(PLUGINS, '@deepseek-ai', 'dsh-system-prompt', 'lib', 'index.js')
   if (fs.existsSync(profCopy)) files.push(profCopy)
+  // [Y3 2026-09-16] host 侧 profile 顶层 node_modules(rc.2 起 junction → 种子包;
+  // 非 junction 的真实副本同样可达;与种子路径指向同文件时靠哨兵幂等去重)
+  const hostProfCopy = path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-system-prompt', 'lib', 'index.js')
+  if (fs.existsSync(hostProfCopy)) files.push(hostProfCopy)
   // 3) 本地构建轨 monorepo 源码(当前旧字段形态 → 走 skipped 分支)
   const localCopy = process.env.DSH_LOCAL_SYSTEM_PROMPT
     || ['D:\\deepseek harness\\deepseek-harness\\packages\\core\\system-prompt\\lib\\index.js',
@@ -1519,7 +1525,7 @@ function patchSystemPromptPersona() {
 // ---- [E](已废弃:SettingsRoot 打进 dsh web Vite 主 bundle assets/index-*.js,patch 源码仓无效;
 //          改由 dshvt client.js 运行时 MutationObserver 给导航 button 注入 data-section-id,与 entry 自愈同款) ----
 
-// ---- [U] ui-conversation 自定义快捷面板(alpha.5 +按钮死点根治,v2 2026-09-03;v7 附件通道 2026-09-06) ----
+// ---- [U] ui-conversation 自定义快捷面板(alpha.5 +按钮死点根治,v2 2026-09-03;v7 附件通道 2026-09-06;v9 触发字符词边界 2026-09-19) ----
 // 死点:alpha.5 onToggleCommandMenu → inputTriggers.toggleSource('command', {trigger:'/', ...})
 // 路径中 `this.deps.roster.sources('/').find(item=>item.name==='command')` 在当前 bundle
 // 组合下未命中,函数静默 dismiss()(0 错误、0 DOM);键盘输入 '/' 走 controller.track 检测路径
@@ -1638,11 +1644,30 @@ function patchConversationPlusQuickActions() {
     "    return false;",
     "  }",
     "};",
+    "const __dshQuickActionsBoundary = function(el, ch) {",
+    "  let before = null;",
+    "  try {",
+    "    const sel = window.getSelection();",
+    "    if (sel !== null && sel !== void 0 && sel.rangeCount > 0) {",
+    "      const r = sel.getRangeAt(0);",
+    "      if (r.collapsed && el.contains(r.startContainer)) {",
+    "        const pre = r.cloneRange();",
+    "        pre.selectNodeContents(el);",
+    "        pre.setEnd(r.startContainer, r.startOffset);",
+    "        before = pre.toString();",
+    "      }",
+    "    }",
+    "  } catch (e0) { /* ignore */ }",
+    "  if (before === null || before === void 0) before = el.textContent || '';",
+    "  const tail = before.slice(-1);",
+    "  if (tail !== '' && !/\\s/.test(tail)) return ' ' + ch;",
+    "  return ch;",
+    "};",
     "const __dshQuickActionsType = function(ch) {",
     "  const el = __dshQuickActionsComposer();",
     "  if (el === null || el === void 0) { __dshQuickActionsToast('当前输入框不可用:请先选择工作区进入会话'); return; }",
     "  el.focus();",
-    "  __dshQuickActionsPaste({ text: ch });",
+    "  __dshQuickActionsPaste({ text: __dshQuickActionsBoundary(el, ch) });",
     "};",
     "const __dshQuickActionsPick = function() {",
     "  let inp = document.getElementById('__dsh-quick-actions-file');",
@@ -1743,6 +1768,50 @@ function patchConversationPlusQuickActions() {
     "    }",
     "  } catch (err3) { /* ignore */ }",
     "}"
+  ].join('\n')
+  // v9(2026-09-19,q202「使用 @ 添加上下文」草稿有文字时不弹):触发字符词边界前置。
+  // 上游语法(部署 rc.2 dsh-client-ui-input-trigger/lib/client.js 实证)—— @ = activeAtToken
+  // /(?:^|\s)(@([^\s]*))$/u,仅行首或空白后触发(防 user@host 误触,中文标点后也不行);
+  // / = boundaryOk,词字符(\p{L}\p{N}_ 含中文)后不触发。v7 的 __dshQuickActionsType 直接
+  // paste '@' 落在文字后 → paste → editor.update → onEditorUpdate → track 检测必跑但失配
+  // → 静默不弹。修法:插入前读光标前文本(DOM Range,回落 textContent 尾),尾字符非空白
+  // 则前置一个空格。与 dsh-file-drop 0.3.5 boundaryText 同款(双副本)。注意:不能用尾部
+  // 空格方案("@ ")——检测从光标左扫遇空白立即判 null,菜单永不开。
+  const V9_MARK = '__dshQuickActionsBoundary'
+  const V9_TYPE_OLD = [
+    "const __dshQuickActionsType = function(ch) {",
+    "  const el = __dshQuickActionsComposer();",
+    "  if (el === null || el === void 0) { __dshQuickActionsToast('当前输入框不可用:请先选择工作区进入会话'); return; }",
+    "  el.focus();",
+    "  __dshQuickActionsPaste({ text: ch });",
+    "};",
+  ].join('\n')
+  const V9_TYPE_NEW = [
+    "const __dshQuickActionsBoundary = function(el, ch) {",
+    "  let before = null;",
+    "  try {",
+    "    const sel = window.getSelection();",
+    "    if (sel !== null && sel !== void 0 && sel.rangeCount > 0) {",
+    "      const r = sel.getRangeAt(0);",
+    "      if (r.collapsed && el.contains(r.startContainer)) {",
+    "        const pre = r.cloneRange();",
+    "        pre.selectNodeContents(el);",
+    "        pre.setEnd(r.startContainer, r.startOffset);",
+    "        before = pre.toString();",
+    "      }",
+    "    }",
+    "  } catch (e0) { /* ignore */ }",
+    "  if (before === null || before === void 0) before = el.textContent || '';",
+    "  const tail = before.slice(-1);",
+    "  if (tail !== '' && !/\\s/.test(tail)) return ' ' + ch;",
+    "  return ch;",
+    "};",
+    "const __dshQuickActionsType = function(ch) {",
+    "  const el = __dshQuickActionsComposer();",
+    "  if (el === null || el === void 0) { __dshQuickActionsToast('当前输入框不可用:请先选择工作区进入会话'); return; }",
+    "  el.focus();",
+    "  __dshQuickActionsPaste({ text: __dshQuickActionsBoundary(el, ch) });",
+    "};",
   ].join('\n')
   // v2 渲染器源码(pristine 注入用;2 空格函数体)
   const rendererSourceV2 = [
@@ -1854,7 +1923,8 @@ function patchConversationPlusQuickActions() {
     if (current.includes(LISTENER_MARK)) {
       const needsV7 = !current.includes(V7_MARK)
       const needsV8 = !current.includes(V8_MARK)
-      if (current.includes(V6_MARK) && !needsV7 && !needsV8) return { file: label, version: pkgVer, ok: true, already: true }
+      const needsV9 = !current.includes(V9_MARK)
+      if (current.includes(V6_MARK) && !needsV7 && !needsV8 && !needsV9) return { file: label, version: pkgVer, ok: true, already: true }
       let c2 = current
       if (!current.includes(V5_MARK)) {
         if (current.includes(V4_MARK)) {
@@ -1880,6 +1950,9 @@ function patchConversationPlusQuickActions() {
       }
       // v8(直升):工具行排序钉收编(不依赖 dsh-file-drop 插件在册)
       if (needsV8) c2 = rep(c2, V8_TAIL_OLD, V8_TAIL_NEW, 1, 'v8-order-pin')
+      // v9(直升):触发字符词边界前置 —— 仅升级已注入 v7 旧 helper 的包;pristine v7
+      // 注入的 HELPERS_SOURCE 已自带 v9(含 V9_MARK),此时 rep 必落空,按 needsV7 短路。
+      if (needsV9 && !needsV7) c2 = rep(c2, V9_TYPE_OLD, V9_TYPE_NEW, 1, 'v9-trigger-boundary')
       if (failures.length) return { file: label, version: pkgVer, ok: false, failures: [...failures] }
       fs.writeFileSync(p, c2, 'utf8')
       return { file: label, version: pkgVer, ok: true, already: false }
@@ -2160,6 +2233,32 @@ function patchConversation() {
   }
 
   return [{ ...rewrite(p, '.bak-dsh', apply, failures), version: ver }]
+}
+
+// ---- [R104] ui-chat 思维链回合收拢(2026-09-19): turn 关闭瞬间自动折叠该回合全部思考行 ----
+//   症状: ReasoningRow.expanded 是组件本地 useState,全 bundle 无任何代码在回合结束时写它;
+//         任务中展开过的思考行在任务结束后永久保持展开,只能逐行手点收起。
+//   修法: AssistantNodeView 渲染 AssistantMarkdown 处注入 key=回合状态;turn.status 翻转
+//         closed → key 变化 → 子树重挂 → 该回合全部 ReasoningRow 复位 useState(false)=收拢;
+//         之后 status 恒为 closed、key 不再变,手动再展开稳定保留;历史回合初始即 closed,行为不变。
+//   目标: @deepseek-ai/dsh-client-ui-chat 0.1.5-rc.2 lib/client.js(本地仓无此源码包;
+//         junction 位于 profiles/node_modules 一级 → npx 缓存发布版;生效=刷新页面)。
+function patchUiChatThinkCollapse() {
+  const pkgDir = [
+    path.join(PLUGINS, '@deepseek-ai', 'dsh-client-ui-chat.devlink-disabled'),
+    path.join(PLUGINS, '@deepseek-ai', 'dsh-client-ui-chat'),
+    path.join(PLUGINS, '..', '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat.devlink-disabled'),
+    path.join(PLUGINS, '..', '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat'),
+  ].find((d) => fs.existsSync(path.join(d, 'lib', 'client.js')))
+  if (!pkgDir) return [{ file: 'ui-chat', missing: true }]
+  const p = path.join(pkgDir, 'lib', 'client.js')
+  const ver = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')).version
+  const { rep, failures } = makeCtx('ui-chat')
+  const apply = (c) => rep(c,
+    'return (0, react_jsx_runtime.jsx)(AssistantMarkdown, {\n\t\t\t\tblocks: data.blocks,',
+    'return (0, react_jsx_runtime.jsx)(AssistantMarkdown, {\n\t\t\t\tkey: tail ? "dsh-tc" : "dsh-tr", /* [R104] think-collapse-on-turn-close */\n\t\t\t\tblocks: data.blocks,',
+    1, 'think-collapse-on-turn-close')
+  return [{ ...rewriteFresh(p, '.bak-r104', apply, failures, null), version: ver }]
 }
 
 // ---- [C] 设置页信息架构:第三方 section 重排 + 社区插件并入插件市场 ----
@@ -2496,6 +2595,15 @@ function patchPresets() {
       // 在 agent 作用域顶掉部署级人设(问题54 同根因复发:全局人设"时有时无")。
       // 按包名前缀扫 .pnpm 全部哈希副本,兼容官方种子更新与多版本并存。
       // 注意:必须与旧路径互不 continue,两种布局可能各自存在或同时缺失。
+      // [J3 2026-09-16] npm 平铺布局种子(0.1.5-rc.2 官方包无 .pnpm):顶层 dsh-agent-presets 实体,
+      // 与 [Y2] 同根因:旧扫描对平铺种子整体落空 → standard/cordis/minimal/ptc persona shadow 行回潮。
+      const flatPresetsRoot = path.join(npxRoot, h, 'node_modules', '@deepseek-ai', 'dsh-agent-presets', 'presets')
+      if (fs.existsSync(flatPresetsRoot)) {
+        for (const name of fs.readdirSync(flatPresetsRoot)) {
+          const f = path.join(flatPresetsRoot, name, 'agent.cordis.yml')
+          if (fs.existsSync(f)) files.push(f)
+        }
+      }
       const pnpmRoot = path.join(npxRoot, h, 'node_modules', '.pnpm')
       if (!fs.existsSync(pnpmRoot)) continue
       for (const d of fs.readdirSync(pnpmRoot)) {
@@ -5172,9 +5280,178 @@ function patchWhaleWidget() {
   return [{ ...rewrite(p, '.bak-p4w', apply, failures), version: ver }]
 }
 
+// ---- [R105] 归档会话恢复链重建(0.1.5 架构,2026-09-21) ----
+// 需求(用户原话): 「当前归档会话管理只能删除归档会话不能恢复会话,现在新增可恢复归档会话」。
+// 背景: 批次 110 在旧架构(apiproxy + client-runtime)加过 unarchive 全链,但 0.1.5 上游
+//      **整体删除 unarchive**(批次 163 三界对账定谳),恢复钮按 R99 降级为真隐藏
+//      (dsh-plugin/lib/client.js canRestore ? 恢复钮 : null)——现状只剩「彻底删除」。
+// 0.1.5 现行全链(活体实测,9 触点): 注册表 dsh-workspace → 宿主命令
+//      dsh-api-workspace-controller(lib/types/commands.js) → 宿主 Service + @Remote 装饰器
+//      (lib/index.js) → 宿主 typert 描述符(lib/typert.host.js) → 远端描述符
+//      (lib/typert.remote-client.js) → 客户端 Model/Service(lib/types/client/{model,service}.js)
+//      → 客户端聚合描述符(dsh-api-remotes/lib/client.js) → UI 透传(dsh-client-ui-workspace)。
+// 关键机制裁决(读 gateway 源码实证,决定触点集):
+//      ① **宿主侧有 SRC 回退**: TypertGatewayService.resolveDescriptor 在 strict 描述符缺席时
+//         走 resolveSrcDescriptor——反射 `typertRemote` 绑定 + remoteMethods(@Remote 装饰器标记)
+//         动态合成描述符 ⇒ **宿主描述符文件未必需补**(装饰器在位即可派发)。
+//      ② **客户端强制 strict**: ApiGatewayClient.mountContribution → validateContribution
+//         → requireStrictDescriptor,且 installMethods 只认 contribution.descriptors 里的条目
+//         ⇒ **客户端聚合描述符(dsh-api-remotes/lib/client.js)是硬性必需**,否则
+//         ctx.remote.workspace.unarchiveSession 不存在 ⇒ 客户端 Model 调不到。
+//      ③ 恢复经既有 archived 增量广播(domain/changed → feed.publish → acceptIncrement
+//         → replaceArchived),**零新增事件**;侧栏即时回归由上游机制承担。
+// 本家族 4 件(全部只碰 c40503 活体树,profiles junction 直通,改源即线上):
+//   T1 注册表 unarchiveSession(幂等 / 幽灵 id 可清 / 不动 sessionIds 记账槽 / 无存在性校验)
+//   T2 宿主命令 + Service 转发 + @Remote("unarchiveSession") 装饰器(commands.js / index.js)
+//   T3 客户端 Model + Service 透传(model.js / service.js / client.js)——canRestore 由此转真
+//   T4 客户端聚合描述符(dsh-api-remotes/lib/client.js: zod 常量 + descriptor 条目)
+// 双侧 typert 描述符文件(typert.host.js / typert.remote-client.js)按机制①暂不补: 宿主有 SRC
+//   回退,补了也无害但非必需;若实机出现 definition-unavailable 再按需补(降级路径见报告 §五)。
+// 幂等: 自有 R105_MARK 哨兵(与 PATCH_MARK 分离,便于单独回退);基底 = 补丁前活体字节,
+//   每文件独立 .bak-r105,整族可单独还原(摘除 replayAll 注册行重放即回现状)。
+// 生效面: 宿主侧 T1/T2(**host 重启**后 load);客户端侧 T3/T4 + 页面(dshvt client.js)刷新页面。
+// 零实体风险协议: 先隔离 headless 实例(独立 profile)验证,实体仅只读比对。
+const R105_MARK = '/*dsh-local-patch:r105-archive-restore*/'
+// [q203 2026-09-22] 内容签名兜底: 哨兵可能被上游漂移分支当作"已漂移内容"重新处理——沙箱实证
+// 无哨兵的双写内容会被再插一次(count 2→3,即本次崩溃的放大器)。签名安全前提: 0.1.5-rc.2
+// 上游已整体删除 unarchive(批次 163 三界对账定谳),四个目标文件补丁前 0 命中;版本门钉死 rc.2。
+const R105_SIG = 'unarchiveSession'
+
+// [R105-T1] 注册表 unarchiveSession: 从 archivedSessionIds 过滤并持久化。
+// 锚点 = archiveSession 方法整块结束 + 紧随的 sessionKnown JSDoc 开头(活体字节)。
+const R105_T1_ANCHOR_FROM = '\tarchiveSession(sessionId) {\n\t\treturn this.enqueueOperation(async () => {\n\t\t\tif (this.requireState().archivedSessionIds.includes(sessionId)) return;\n\t\t\tif (!await this.sessionKnown(sessionId)) throw new WorkspaceUnknownSessionError(sessionId);\n\t\t\tconst state = this.requireState();\n\t\t\tawait this.setState({\n\t\t\t\t...state,\n\t\t\t\tarchivedSessionIds: [...state.archivedSessionIds, sessionId]\n\t\t\t});\n\t\t});\n\t}\n'
+const R105_T1_ANCHOR_TO = '\tarchiveSession(sessionId) {\n\t\treturn this.enqueueOperation(async () => {\n\t\t\tif (this.requireState().archivedSessionIds.includes(sessionId)) return;\n\t\t\tif (!await this.sessionKnown(sessionId)) throw new WorkspaceUnknownSessionError(sessionId);\n\t\t\tconst state = this.requireState();\n\t\t\tawait this.setState({\n\t\t\t\t...state,\n\t\t\t\tarchivedSessionIds: [...state.archivedSessionIds, sessionId]\n\t\t\t});\n\t\t});\n\t}\n\t/**\n\t* Remove one session from the registry-global archive set durably\n\t* (unarchive). The session rejoins every grouping surface through the\n\t* accounting slot archiving preserved. Idempotent for a non-archived id;\n\t* unlike `archiveSession` no session-existence check runs, so purged\n\t* ghost ids resolve as a no-op list cleanup.\n\t* @param sessionId - The session to unarchive.\n\t* @returns resolution after durability.\n\t*/\n\tunarchiveSession(sessionId) {\n\t\treturn this.enqueueOperation(async () => {\n\t\t\tconst state = this.requireState();\n\t\t\tif (!state.archivedSessionIds.includes(sessionId)) return;\n\t\t\tawait this.setState({\n\t\t\t\t...state,\n\t\t\t\tarchivedSessionIds: state.archivedSessionIds.filter((id) => id !== sessionId)\n\t\t\t});\n\t\t});\n\t}\n'
+
+// [R105-T2a] 宿主命令: unarchiveSession → registry(无存在性校验, 故无需 WorkspaceUnknownSessionError 分支)
+// 双形态锚点: lib/index.js 是 tab 缩进 bundle(运行入口, package.json main), lib/types/commands.js 是
+// 4 空格缩进的 type-plane 副本——两处都内联 WorkspaceCommands,缺一即运行期缺方法(沙箱段实证)。
+const R105_T2A_FROM = '\t\treturn { archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds] };\n\t}\n\trequireWorkspace(workspaceId) {'
+const R105_T2A_TO = '\t\treturn { archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds] };\n\t}\n\t/**\n\t * Remove one Session from the registry-global archive set.\n\t * @param request - Session identity to unarchive.\n\t * @returns the complete resulting archive set.\n\t */\n\tasync unarchiveSession(request) {\n\t\tawait this.ctx.workspaceRegistry.unarchiveSession(request.sessionId);\n\t\treturn { archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds] };\n\t}\n\trequireWorkspace(workspaceId) {'
+const R105_T2A_FROM_SP = '        return { archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds] };\n    }\n    requireWorkspace(workspaceId) {'
+const R105_T2A_TO_SP = '        return { archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds] };\n    }\n    /**\n     * Remove one Session from the registry-global archive set.\n     * @param request - Session identity to unarchive.\n     * @returns the complete resulting archive set.\n     */\n    async unarchiveSession(request) {\n        await this.ctx.workspaceRegistry.unarchiveSession(request.sessionId);\n        return { archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds] };\n    }\n    requireWorkspace(workspaceId) {'
+/** T2a 双形态: tab bundle 与 4 空格 type-plane 副本同语义,按在场形态择一命中。 */
+function r105ApplyHostCommand(rep, failures) {
+  return (c) => {
+    if (c.includes(R105_T2A_FROM)) return rep(c, R105_T2A_FROM, R105_T2A_TO, 1, 'T2a-host-command(tab)')
+    if (c.includes(R105_T2A_FROM_SP)) return rep(c, R105_T2A_FROM_SP, R105_T2A_TO_SP, 1, 'T2a-host-command(space)')
+    failures.push(`[R105] T2a-host-command: 两种缩进形态均未命中(${String(c.length)}B)`)
+    return c
+  }
+}
+
+// [R105-T2b] 宿主 Service 转发 + 装饰器(三锚点: 类字段声明 / 静态装饰器赋值 / __esDecorate 块 + 转发方法)
+const R105_T2B_FIELDS_FROM = '\tlet _archiveSession_decorators;\n\tlet _follow_decorators;'
+const R105_T2B_FIELDS_TO = '\tlet _archiveSession_decorators;\n\tlet _unarchiveSession_decorators;\n\tlet _follow_decorators;'
+const R105_T2B_ASSIGN_FROM = '\t\t\t_archiveSession_decorators = [Remote("archiveSession")];\n'
+const R105_T2B_ASSIGN_TO = '\t\t\t_archiveSession_decorators = [Remote("archiveSession")];\n\t\t\t_unarchiveSession_decorators = [Remote("unarchiveSession")];\n'
+const R105_T2B_DECORATE_FROM = '\t\t\t}, null, _instanceExtraInitializers);\n\t\t\t__esDecorate(this, null, _follow_decorators, {'
+const R105_T2B_DECORATE_TO = '\t\t\t}, null, _instanceExtraInitializers);\n\t\t\t__esDecorate(this, null, _unarchiveSession_decorators, {\n\t\t\t\tkind: "method",\n\t\t\t\tname: "unarchiveSession",\n\t\t\t\tstatic: false,\n\t\t\t\tprivate: false,\n\t\t\t\taccess: {\n\t\t\t\t\thas: (obj) => "unarchiveSession" in obj,\n\t\t\t\t\tget: (obj) => obj.unarchiveSession\n\t\t\t\t},\n\t\t\t\tmetadata: _metadata\n\t\t\t}, null, _instanceExtraInitializers);\n\t\t\t__esDecorate(this, null, _follow_decorators, {'
+const R105_T2B_FORWARD_FROM = '\t\tarchiveSession(request) {\n\t\t\treturn this.commands.archiveSession(request);\n\t\t}\n'
+const R105_T2B_FORWARD_TO = '\t\tarchiveSession(request) {\n\t\t\treturn this.commands.archiveSession(request);\n\t\t}\n\t\t/**\n\t\t* Restore one archived Session to every Workspace grouping surface.\n\t\t* @param request - Session identity to unarchive.\n\t\t* @returns the complete resulting archive set.\n\t\t*/\n\t\tunarchiveSession(request) {\n\t\t\treturn this.commands.unarchiveSession(request);\n\t\t}\n'
+
+// [R105-T3a] 客户端 Model: 调 remote 并安装返回的全量归档集(与 archiveSession 同款)
+const R105_T3A_FROM = '\t\t\tasync archiveSession(sessionId) {\n\t\t\t\tconst result = await this.remote.archiveSession({ sessionId });\n\t\t\t\tif (result.ok) this.installArchived(result.value.archivedSessionIds);\n\t\t\t\treturn result;\n\t\t\t}\n'
+const R105_T3A_TO = '\t\t\tasync archiveSession(sessionId) {\n\t\t\t\tconst result = await this.remote.archiveSession({ sessionId });\n\t\t\t\tif (result.ok) this.installArchived(result.value.archivedSessionIds);\n\t\t\t\treturn result;\n\t\t\t}\n\t\t\t/**\n\t\t\t* Unarchive one Session and install the returned complete archive set.\n\t\t\t* @param sessionId - Session to unarchive.\n\t\t\t* @returns generated Remote result.\n\t\t\t*/\n\t\t\tasync unarchiveSession(sessionId) {\n\t\t\t\tconst result = await this.remote.unarchiveSession({ sessionId });\n\t\t\t\tif (result.ok) this.installArchived(result.value.archivedSessionIds);\n\t\t\t\treturn result;\n\t\t\t}\n'
+
+// [R105-T3b] 客户端 Model(types 层, 4 空格缩进形态)
+const R105_T3B_FROM = '    async archiveSession(sessionId) {\n        const result = await this.remote.archiveSession({ sessionId });\n        if (result.ok)\n            this.installArchived(result.value.archivedSessionIds);\n        return result;\n    }\n'
+const R105_T3B_TO = '    async archiveSession(sessionId) {\n        const result = await this.remote.archiveSession({ sessionId });\n        if (result.ok)\n            this.installArchived(result.value.archivedSessionIds);\n        return result;\n    }\n    /**\n     * Unarchive one Session and install the returned complete archive set.\n     * @param sessionId - Session to unarchive.\n     * @returns generated Remote result.\n     */\n    async unarchiveSession(sessionId) {\n        const result = await this.remote.unarchiveSession({ sessionId });\n        if (result.ok)\n            this.installArchived(result.value.archivedSessionIds);\n        return result;\n    }\n'
+
+// [R105-T3c] 客户端 Service: 命令面透传(canRestore 判的就是这一层)
+const R105_T3C_FROM = '\t\t\tasync archiveSession(sessionId) {\n\t\t\t\tconst result = await this.model.archiveSession(sessionId);\n\t\t\t\tif (!result.ok) throw commandError("session archive", result.error);\n\t\t\t}\n'
+const R105_T3C_TO = '\t\t\tasync archiveSession(sessionId) {\n\t\t\t\tconst result = await this.model.archiveSession(sessionId);\n\t\t\t\tif (!result.ok) throw commandError("session archive", result.error);\n\t\t\t}\n\t\t\tasync unarchiveSession(sessionId) {\n\t\t\t\tconst result = await this.model.unarchiveSession(sessionId);\n\t\t\t\tif (!result.ok) throw commandError("session unarchive", result.error);\n\t\t\t}\n'
+
+// [R105-T3d] 客户端 Service(types 层)
+const R105_T3D_FROM = '    async archiveSession(sessionId) {\n        const result = await this.model.archiveSession(sessionId);\n        if (!result.ok)\n            throw commandError(\'session archive\', result.error);\n    }\n'
+const R105_T3D_TO = '    async archiveSession(sessionId) {\n        const result = await this.model.archiveSession(sessionId);\n        if (!result.ok)\n            throw commandError(\'session archive\', result.error);\n    }\n    async unarchiveSession(sessionId) {\n        const result = await this.model.unarchiveSession(sessionId);\n        if (!result.ok)\n            throw commandError(\'session unarchive\', result.error);\n    }\n'
+
+// [R105-T4a] 客户端聚合: zod 请求/结果 schema 常量(与 archiveSession 同构)
+const R105_T4A_FROM = '\t\tconst _deepseek_ai_dsh_api_workspace_controller_workspace_archiveSession_result$schema = object({ "archivedSessionIds": array(intersection(string(), unknown())).readonly() });\n'
+const R105_T4A_TO = '\t\tconst _deepseek_ai_dsh_api_workspace_controller_workspace_archiveSession_result$schema = object({ "archivedSessionIds": array(intersection(string(), unknown())).readonly() });\n\t\tconst _deepseek_ai_dsh_api_workspace_controller_workspace_unarchiveSession_parameter_0$schema = object({ "sessionId": intersection(string(), unknown()).readonly() });\n\t\tconst _deepseek_ai_dsh_api_workspace_controller_workspace_unarchiveSession_result$schema = object({ "archivedSessionIds": array(intersection(string(), unknown())).readonly() });\n'
+
+// [R105-T4b] 客户端聚合: descriptor 条目(插在 archiveSession 条目之后、create 之前)
+const R105_T4B_FROM = '\t\t\t\t\tsourceLocation: {\n\t\t\t\t\t\t"file": "packages/api/workspace-controller/src/index.ts",\n\t\t\t\t\t\t"line": 108,\n\t\t\t\t\t\t"column": 3\n\t\t\t\t\t}\n\t\t\t\t},\n\t\t\t\t{\n\t\t\t\t\tid: "@deepseek-ai/dsh-api-workspace-controller#workspace/create",'
+const R105_T4B_TO = '\t\t\t\t\tsourceLocation: {\n\t\t\t\t\t\t"file": "packages/api/workspace-controller/src/index.ts",\n\t\t\t\t\t\t"line": 108,\n\t\t\t\t\t\t"column": 3\n\t\t\t\t\t}\n\t\t\t\t},\n\t\t\t\t{\n\t\t\t\t\tid: "@deepseek-ai/dsh-api-workspace-controller#workspace/unarchiveSession",\n\t\t\t\t\tservice: "workspaceController",\n\t\t\t\t\tnamespace: "workspace",\n\t\t\t\t\tmethod: "unarchiveSession",\n\t\t\t\t\tinvocation: { kind: "direct" },\n\t\t\t\t\tparameters: [{\n\t\t\t\t\t\tname: "request",\n\t\t\t\t\t\twire: "request",\n\t\t\t\t\t\tsource: "json",\n\t\t\t\t\t\tcodec: {\n\t\t\t\t\t\t\tmode: "strict",\n\t\t\t\t\t\t\ttypeSymbol: "@deepseek-ai/dsh-api-workspace-controller/types#WorkspaceArchiveSessionRequest",\n\t\t\t\t\t\t\tschema: _deepseek_ai_dsh_api_workspace_controller_workspace_unarchiveSession_parameter_0$schema\n\t\t\t\t\t\t}\n\t\t\t\t\t}],\n\t\t\t\t\tresult: {\n\t\t\t\t\t\tmode: "strict",\n\t\t\t\t\t\ttypeSymbol: "@deepseek-ai/dsh-api-workspace-controller/types#WorkspaceArchiveValue",\n\t\t\t\t\t\tschema: _deepseek_ai_dsh_api_workspace_controller_workspace_unarchiveSession_result$schema\n\t\t\t\t\t},\n\t\t\t\t\tsourceLocation: {\n\t\t\t\t\t\t"file": "packages/api/workspace-controller/src/index.ts",\n\t\t\t\t\t\t"line": 108,\n\t\t\t\t\t\t"column": 3\n\t\t\t\t\t}\n\t\t\t\t},\n\t\t\t\t{\n\t\t\t\t\tid: "@deepseek-ai/dsh-api-workspace-controller#workspace/create",'
+
+// 版本门: 只有产出这批包(workspace-controller 携带 archiveSession 全链)的 0.1.5 树才适用。
+// 0.1.2-alpha.5 / 0.1.0-rc.x 历史 seed 的 controller 形态不同(锚点不重合),按版本安全跳过,
+// 不把它们拖成 FAIL(既有 [Q]/[S] 家族的多副本纪律)。
+const R105_PKG_VERSION = '0.1.5-rc.2'
+
+/** 候选树根: 活体树(profiles junction realpath)优先,其余为 npx 平铺/pnpm 双布局。 */
+function r105TreeRoots() {
+  const roots = []
+  const add = (p) => { if (p && fs.existsSync(p) && !roots.includes(p)) roots.push(p) }
+  try {
+    const live = fs.realpathSync(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-api-workspace-controller'))
+    add(path.dirname(path.dirname(live)))
+  } catch { /* profiles junction 缺席(纯 npx 运行)时静默,由下方 npx 扫描兜底 */ }
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      add(path.join(npxRoot, h, 'node_modules'))
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules'))
+    }
+  }
+  return roots
+}
+
+function patchArchiveRestore(rootsOverride) {
+  const results = []
+  // 只打**运行期可达**的 4 个文件(沙箱段实证):
+  //   · lib/index.js = package.json main(宿主入口),内联 WorkspaceFeed + WorkspaceCommands +
+  //     WorkspaceController —— 宿主命令与 Service 都在这里,type-plane 的 lib/types/*.js 不加载
+  //   · lib/client.js = exports["./client"](客户端入口),内联 ClientWorkspaceModel + 命令 Service
+  //   · dsh-api-remotes/lib/client.js = 客户端聚合描述符(强制 strict,必需)
+  const TARGETS = [
+    ['workspace-registry', 'dsh-workspace', 'lib/index.js', (rep) => (c) =>
+      rep(c, R105_T1_ANCHOR_FROM, R105_T1_ANCHOR_TO, 1, 'T1-registry-unarchive')],
+    ['controller-host', 'dsh-api-workspace-controller', 'lib/index.js', (rep, failures) => (c) => {
+      c = r105ApplyHostCommand(rep, failures)(c)
+      c = rep(c, R105_T2B_FIELDS_FROM, R105_T2B_FIELDS_TO, 1, 'T2b-decorator-field')
+      c = rep(c, R105_T2B_ASSIGN_FROM, R105_T2B_ASSIGN_TO, 1, 'T2b-decorator-assign')
+      c = rep(c, R105_T2B_DECORATE_FROM, R105_T2B_DECORATE_TO, 1, 'T2b-esdecorate-block')
+      c = rep(c, R105_T2B_FORWARD_FROM, R105_T2B_FORWARD_TO, 1, 'T2b-service-forward')
+      return c
+    }],
+    ['controller-client', 'dsh-api-workspace-controller', 'lib/client.js', (rep) => (c) => {
+      c = rep(c, R105_T3A_FROM, R105_T3A_TO, 1, 'T3a-client-model-bundle')
+      c = rep(c, R105_T3C_FROM, R105_T3C_TO, 1, 'T3c-client-service-bundle')
+      return c
+    }],
+    ['remotes-aggregate', 'dsh-api-remotes', 'lib/client.js', (rep) => (c) => {
+      c = rep(c, R105_T4A_FROM, R105_T4A_TO, 1, 'T4a-aggregate-schema-consts')
+      c = rep(c, R105_T4B_FROM, R105_T4B_TO, 1, 'T4b-aggregate-descriptor')
+      return c
+    }],
+  ]
+  let touched = 0
+  for (const root of (rootsOverride ?? r105TreeRoots())) {
+    for (const [label, pkg, rel, buildApply] of TARGETS) {
+      const f = path.join(root, '@deepseek-ai', pkg, rel)
+      if (!fs.existsSync(f)) continue
+      const ver = (() => {
+        try { return JSON.parse(fs.readFileSync(path.join(root, '@deepseek-ai', pkg, 'package.json'), 'utf8')).version } catch { return undefined }
+      })()
+      const fileTag = `${label}@${path.basename(path.dirname(path.dirname(root)))}`
+      if (ver !== R105_PKG_VERSION) { results.push({ file: fileTag, ok: true, skipped: true, reason: `版本 ${String(ver)} 非 ${R105_PKG_VERSION},安全跳过`, version: String(ver) }); continue }
+      const current = fs.readFileSync(f, 'utf8')
+      if (current.includes(R105_MARK) || current.includes(R105_SIG)) { results.push({ file: fileTag, ok: true, already: true, version: ver }); touched++; continue }
+      const { rep, failures } = makeCtx(label)
+      const apply = buildApply(rep, failures)
+      // [q99] rewriteFresh: 哨兵快路径 + 上游漂移刷新基底 + FAIL 不写盘;apply 为纯函数
+      const r = rewriteFresh(f, '.bak-r105', apply, failures, R105_MARK)
+      results.push({ ...r, file: fileTag, version: ver })
+      if (r.ok) touched++
+    }
+  }
+  if (!touched && !results.length) results.push({ file: 'archive-restore', missing: true })
+  return results
+}
+
 function replayAll(log = () => {}) {
   const out = { ok: true, items: [] }
-  for (const r of [...patchBetterSidebar(), ...patchBetterSidebarBrowserLinkNav(), ...patchBetterSidebarEmbedAllow(), ...patchBetterSidebarAgentTermSideCard(), ...patchPresentedCardRedirect(), ...patchPresentedMentionSidebar(), ...patchCommandContributionGuard(), ...patchSlashMenuGroupTitles(), ...patchSlashMenuGroupTitleWording(), ...patchNodeNav(), ...patchNodeNavHost(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchEgoBrowserWorkerSpawn(), ...patchEgoBrowserCastWorker(), ...patchEgoBrowserWorkerSelfKill(), ...patchEgoBrowserUrlTargetRelease(), ...patchEgoBrowserHeadlessHost(), ...patchEgoBrowserHeadlessRuntime(), ...patchEgoBrowserHeadlessCopy(), ...patchSystemPromptPersona(), ...patchConversation(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchVisionRouterPortal(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchGeneralOtherV9(), ...patchSkinSubpages(), ...patchSkinSubpagesK10(), ...patchSkinSubpagesK11(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchPluginCardOrder(), ...patchMnemonProjection(), ...patchMnemonClockGate(), ...patchBetterSidebarClockGate(), ...patchConversationHeightGate(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchConversationPlusQuickActions(), ...patchBlankSessionDup(), ...patchSessionFormatV0Lenient(), ...patchModelSelectionSessionGone(), ...patchModelSelectionMenu(), ...patchModelSelectionKeepOpen(), ...patchModelSelectionUiPolish(), ...patchPiAiMergeConsecutiveMessages(), ...patchSessionTopicHoverCard(), ...patchRightbarDefaultRatio(), ...patchWhaleWidget()]) {
+  for (const r of [...patchBetterSidebar(), ...patchBetterSidebarBrowserLinkNav(), ...patchBetterSidebarEmbedAllow(), ...patchBetterSidebarAgentTermSideCard(), ...patchPresentedCardRedirect(), ...patchPresentedMentionSidebar(), ...patchCommandContributionGuard(), ...patchSlashMenuGroupTitles(), ...patchSlashMenuGroupTitleWording(), ...patchNodeNav(), ...patchNodeNavHost(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchEgoBrowserWorkerSpawn(), ...patchEgoBrowserCastWorker(), ...patchEgoBrowserWorkerSelfKill(), ...patchEgoBrowserUrlTargetRelease(), ...patchEgoBrowserHeadlessHost(), ...patchEgoBrowserHeadlessRuntime(), ...patchEgoBrowserHeadlessCopy(), ...patchSystemPromptPersona(), ...patchConversation(), ...patchUiChatThinkCollapse(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchVisionRouterPortal(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchGeneralOtherV9(), ...patchSkinSubpages(), ...patchSkinSubpagesK10(), ...patchSkinSubpagesK11(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchPluginCardOrder(), ...patchMnemonProjection(), ...patchMnemonClockGate(), ...patchBetterSidebarClockGate(), ...patchConversationHeightGate(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchConversationPlusQuickActions(), ...patchBlankSessionDup(), ...patchSessionFormatV0Lenient(), ...patchModelSelectionSessionGone(), ...patchModelSelectionMenu(), ...patchModelSelectionKeepOpen(), ...patchModelSelectionUiPolish(), ...patchPiAiMergeConsecutiveMessages(), ...patchSessionTopicHoverCard(), ...patchRightbarDefaultRatio(), ...patchWhaleWidget(), ...patchArchiveRestore()]) {
     if (r.missing) { log(`[patches] ${r.file}: 未安装,跳过`); continue }
     out.items.push(r)
     if (r.ok) log(`[patches] ${r.file}@${r.version}: ${r.skipped ? '锚点不适配,安全跳过' : r.already ? '已是补丁态' : '已恢复本地定制'}`)
@@ -5324,9 +5601,290 @@ function patchModelSelectionUiPolish(target) {
 	return [{ file: 'model-selection/lib/client.js', ok: true, already: true, version: ver }]
 }
 
-module.exports = { replayAll, patchModelSelectionMenu, patchModelSelectionKeepOpen, patchModelSelectionUiPolish }
+module.exports = { replayAll, patchArchiveRestore, patchModelSelectionMenu, patchModelSelectionKeepOpen, patchModelSelectionUiPolish }
 if (require.main === module) {
   const r = replayAll((l) => console.log(l))
   console.log(r.ok ? 'ALL PATCHES OK' : 'PATCH FAILURES — see above')
   process.exit(r.ok ? 0 : 1)
 }
+
+// ---- [q203 合并 2026-09-22] genui/wwa 家族回迁(开发于壳外部署面 ~/.dsh/patches.cjs,未进 git 仓库) ----
+// 段内 failures 必须自持:部署面原稿里该标识符在模块作用域无绑定(makeCtx 的 failures 是函数局部),
+// 任一目标 FAIL 会 ReferenceError → require 抛错 → 壳 loadReplayer 静默回退旧 asar 重放器(问题99 复发面)。
+const failures = []
+
+// [P0 2026-09-16] dsh-genui fence-registry 桥:宿主前端 fence 分发 + 插件 registry 通道注册。
+// 动机: dsh-genui 0.11.0 在 0.1.5-rc.2 上无 fence-registry 宿主 API,只能走 MutationObserver
+// DOM 通道(会话切换整树替换时存在挂载表竞态 => 「不同会话不渲染」)。本桥让插件回到它
+// 原生支持的 registry 通道:宿主 markdown 渲染器查全局注册表,插件 apply 时注册其渲染器;
+// React 原生 commit 随会话子树自然卸载/重建,零 DOM 观察、零 sweep 竞态。
+// 幂等: 哨兵 /*dsh-local-patch:genui-registry-bridge-v1*/;锚点失配 = 记 FAIL(不写盘)。
+function _applyGenuiBridge() {
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const MARK = '/*dsh-local-patch:genui-registry-bridge-v1*/'
+  const NL = String.fromCharCode(10)
+  const results = []
+
+  // ---- host: web-frontend entry bundle (fence dispatch) ----
+  const HOST_ROOT = path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx',
+    'dsh-0.1.5-rc.2-pnpm-seed', 'node_modules', '.pnpm')
+  const hostFiles = []
+  try {
+    for (const dir of fs.readdirSync(HOST_ROOT)) {
+      if (!dir.startsWith('@deepseek-ai+dsh-web-app@')) continue
+      const assets = path.join(HOST_ROOT, dir, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets')
+      for (const f of fs.readdirSync(assets)) {
+        if (/^index-[A-Za-z0-9_-]+\.js$/.test(f)) hostFiles.push(path.join(assets, f))
+      }
+    }
+  } catch (_) {}
+  if (hostFiles.length === 0) {
+    results.push({ file: '<web-frontend index-*.js>', status: 'missing' })
+  }
+  for (const hostFile of hostFiles) {
+    try {
+      const src = fs.readFileSync(hostFile, 'utf8')
+      if (src.includes(MARK)) { results.push({ file: hostFile, status: 'already' }); continue }
+      // derive the CodeBlock component name from the unique md-code-block class
+      const idx = src.indexOf('md-code-block')
+      if (idx < 0) throw new Error('md-code-block not found (host drift)')
+      const back = src.slice(Math.max(0, idx - 40000), idx)
+      const fns = [...back.matchAll(/function ([A-Za-z_$][\w$]*)\(/g)]
+      const cbName = fns[fns.length - 1] && fns[fns.length - 1][1]
+      if (!cbName) throw new Error('CodeBlock fn name unresolved (host drift)')
+      const dispatch = 'd.jsx(' + cbName + ',{code:`${t.value}' + NL + '`,lang:a,streaming:i.streaming,copyLabel:i.labels.code.copyLabel,copiedLabel:i.labels.code.copiedLabel},r)'
+      const n = src.split(dispatch).length - 1
+      if (n !== 1) throw new Error('fence dispatch anchor matched ' + n + ' times (host drift)')
+      const replacement = MARK
+        + '(globalThis.__DSH_FENCE_RENDERERS__??=(()=>{const m=new Map();'
+        + 'return{register:(l,r)=>m.set(l,r),get:l=>m.get(l),has:l=>m.has(l)}})(),'
+        // [v3 2026-09-17] 语言守卫:仅 dsh-ui 围栏走注册渲染器。原形态缺 a==="dsh-ui" 校验,
+        // 会把 yaml/text/无标签等一切非流式围栏交给 genui 渲染器 JSON.parse,报
+        // 「dsh-ui fence JSON 解析失败Unexpected token 'X', "中文…" is not valid JSON」横幅
+        // (实测现场: 已删除:/gid /地址：http:// 三处 aria2 文本围栏 + tokenrhythm yaml 配置块)。
+        + '!i.streaming&&a==="dsh-ui"&&globalThis.__DSH_FENCE_RENDERERS__.has("dsh-ui")?'
+        + '(globalThis.__DSH_FENCE_RENDERERS__.get("dsh-ui")(t.value,r,{streaming:!1})'
+        + '??' + dispatch + ')'
+        + ':' + dispatch + ')'
+      const bak = hostFile + '.bak-genui-bridge'
+      if (!fs.existsSync(bak)) fs.copyFileSync(hostFile, bak)
+      fs.writeFileSync(hostFile, src.replace(dispatch, replacement))
+      results.push({ file: hostFile, status: 'patched' })
+    } catch (e) {
+      results.push({ file: hostFile, status: 'FAIL', error: String((e && e.message) || e) })
+    }
+  }
+
+  // ---- client: dsh-genui bundle (registry-channel shim) ----
+  const CLIENT = path.join(process.env.USERPROFILE || process.env.HOME,
+    '.dsh', 'profiles', 'web', 'node_modules', '@changfenhuang', 'dsh-genui', 'lib', 'client.js')
+  try {
+    if (!fs.existsSync(CLIENT)) throw new Error('dsh-genui client.js not found')
+    const src = fs.readFileSync(CLIENT, 'utf8')
+    if (src.includes(MARK)) {
+      results.push({ file: CLIENT, status: 'already' })
+    } else {
+      const anchor = 'let t=p.registerFenceRenderer,n=typeof t==`function`&&!Dp();'
+      const n = src.split(anchor).length - 1
+      if (n !== 1) throw new Error('client channel anchor matched ' + n + ' times (upstream drift)')
+      const replacement = 'let t=p.registerFenceRenderer,'
+        + 'n=(typeof t==`function`||typeof globalThis.__DSH_FENCE_RENDERERS__?.register==`function`)&&!Dp();'
+        + MARK
+        + 'if(n&&typeof t!==`function`){t=(L,R)=>globalThis.__DSH_FENCE_RENDERERS__.register(L,R)}'
+      const bak = CLIENT + '.bak-genui-bridge'
+      if (!fs.existsSync(bak)) fs.copyFileSync(CLIENT, bak)
+      fs.writeFileSync(CLIENT, src.replace(anchor, replacement))
+      results.push({ file: CLIENT, status: 'patched' })
+    }
+  } catch (e) {
+    results.push({ file: CLIENT, status: 'FAIL', error: String((e && e.message) || e) })
+  }
+
+  for (const r of results) {
+    console.log('[genui-bridge] ' + r.status + ' :: ' + r.file + (r.error ? ' :: ' + r.error : ''))
+  }
+  const failed = results.filter(r => r.status === 'FAIL' || r.status === 'missing')
+  if (failed.length > 0) {
+    failures.push('[genui-bridge] ' + failed.length + ' file(s) failed: '
+      + failed.map(f => path.basename(f.file) + ' ' + (f.error || f.status)).join('; '))
+  }
+}
+try { _applyGenuiBridge() } catch (e) { failures.push('[genui-bridge] unexpected: ' + String(e)) }
+
+// [P0-v2 2026-09-16] genui-registry early 创建：修复 v1 桥的时序缺陷。
+// v1 在 CodeBlock 分发点惰性创建 __DSH_FENCE_RENDERERS__，但插件激活早于任何
+// fence 渲染 → boot 探测必 undefined → 永远回退 dom 通道。v2 在 entry bundle
+// 文件头（模块求值最早期）创建 registry，插件 boot 即可探测到。
+// 幂等: 哨兵 /*dsh-local-patch:genui-registry-early-v2*/;文件缺失 = FAIL。
+function _applyGenuiRegistryEarly() {
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const MARK = '/*dsh-local-patch:genui-registry-early-v2*/'
+  const PRELUDE = MARK
+    + 'globalThis.__DSH_FENCE_RENDERERS__??=(()=>{const m=new Map();'
+    + 'return{register:(l,r)=>{m.set(l,r)},get:l=>m.get(l),has:l=>m.has(l)}})();\n'
+  const results = []
+  const targets = []
+  targets.push(path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx',
+    'c40503fdf38a82ea', 'node_modules', '@deepseek-ai', 'dsh-web-frontend',
+    'dist', 'assets', 'index-BKQ_L1z6.js'))
+  try {
+    const seedRoot = path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx',
+      'dsh-0.1.5-rc.2-pnpm-seed', 'node_modules', '.pnpm')
+    for (const dir of fs.readdirSync(seedRoot)) {
+      if (!dir.startsWith('@deepseek-ai+dsh-web-app@')) continue
+      const assets = path.join(seedRoot, dir, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets')
+      for (const f of fs.readdirSync(assets)) {
+        if (/^index-[A-Za-z0-9_-]+\.js$/.test(f)) targets.push(path.join(assets, f))
+      }
+    }
+  } catch (_) {}
+  for (const file of targets) {
+    try {
+      if (!fs.existsSync(file)) { results.push({ file, status: 'missing' }); continue }
+      const src = fs.readFileSync(file, 'utf8')
+      if (src.includes(MARK)) { results.push({ file, status: 'already' }); continue }
+      const bak = file + '.bak-genui-bridge'
+      if (!fs.existsSync(bak)) fs.copyFileSync(file, bak)
+      fs.writeFileSync(file, PRELUDE + src)
+      results.push({ file, status: 'patched' })
+    } catch (e) {
+      results.push({ file, status: 'FAIL', error: String((e && e.message) || e) })
+    }
+  }
+  for (const r of results) {
+    console.log('[genui-registry-early] ' + r.status + ' :: ' + r.file + (r.error ? ' :: ' + r.error : ''))
+  }
+  const failed = results.filter(r => r.status === 'FAIL' || r.status === 'missing')
+  if (failed.length > 0) {
+    failures.push('[genui-registry-early] ' + failed.length + ' file(s) failed: '
+      + failed.map(f => path.basename(f.file) + ' ' + (f.error || f.status)).join('; '))
+  }
+}
+try { _applyGenuiRegistryEarly() } catch (e) { failures.push('[genui-registry-early] unexpected: ' + String(e)) }
+
+// [v3 2026-09-17] genui 桥分发点语言守卫:修复「任意非流式围栏被 dsh-ui 渲染器误接管」。
+// v1 桥的分发条件只查注册表 has("dsh-ui"),未校验当前围栏语言 a —— yaml/text/无标签围栏
+// 全部被 genui 渲染器 JSON.parse,失败即渲染「dsh-ui fence JSON 解析失败Unexpected token
+// 'X', "…" is not valid JSON」横幅 + dsh-ui header 代码块(实测:已删除:/gid /地址：http://
+// 三处 aria2 文本围栏、tokenrhythm yaml 配置块、glm 图片声明 yaml 块)。
+// 本补丁对已打 v1 的 bundle 原位升级:补 a==="dsh-ui" 守卫 + 落 v3 哨兵。
+// 幂等: 含 v3 哨兵 = already;无 v3 且无旧锚 = FAIL(宿主漂移)。
+function _applyGenuiLangGuard() {
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const MARK = '/*dsh-local-patch:genui-bridge-lang-guard-v3*/'
+  const OLD = '!i.streaming&&globalThis.__DSH_FENCE_RENDERERS__.has("dsh-ui")'
+  const NEW = MARK + '!i.streaming&&a==="dsh-ui"&&globalThis.__DSH_FENCE_RENDERERS__.has("dsh-ui")'
+  const results = []
+  const targets = []
+  try {
+    const c40503 = path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx',
+      'c40503fdf38a82ea', 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets')
+    for (const f of fs.readdirSync(c40503)) {
+      if (/^index-[A-Za-z0-9_-]+\.js$/.test(f)) targets.push(path.join(c40503, f))
+    }
+  } catch (_) {}
+  try {
+    const seedRoot = path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx',
+      'dsh-0.1.5-rc.2-pnpm-seed', 'node_modules', '.pnpm')
+    for (const dir of fs.readdirSync(seedRoot)) {
+      if (!dir.startsWith('@deepseek-ai+dsh-web-app@')) continue
+      const assets = path.join(seedRoot, dir, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets')
+      for (const f of fs.readdirSync(assets)) {
+        if (/^index-[A-Za-z0-9_-]+\.js$/.test(f)) targets.push(path.join(assets, f))
+      }
+    }
+  } catch (_) {}
+  for (const file of targets) {
+    try {
+      if (!fs.existsSync(file)) { results.push({ file, status: 'missing' }); continue }
+      const src = fs.readFileSync(file, 'utf8')
+      if (src.includes(MARK)) { results.push({ file, status: 'already' }); continue }
+      const n = src.split(OLD).length - 1
+      if (n !== 1) { results.push({ file, status: 'FAIL', error: 'lang-guard anchor matched ' + n + ' times (host drift)' }); continue }
+      const bak = file + '.bak-genui-bridge'
+      if (!fs.existsSync(bak)) fs.copyFileSync(file, bak)
+      fs.writeFileSync(file, src.replace(OLD, NEW))
+      results.push({ file, status: 'patched' })
+    } catch (e) {
+      results.push({ file, status: 'FAIL', error: String((e && e.message) || e) })
+    }
+  }
+  for (const r of results) {
+    console.log('[genui-lang-guard] ' + r.status + ' :: ' + r.file + (r.error ? ' :: ' + r.error : ''))
+  }
+  const failed = results.filter(r => r.status === 'FAIL' || r.status === 'missing')
+  if (failed.length > 0) {
+    failures.push('[genui-lang-guard] ' + failed.length + ' file(s) failed: '
+      + failed.map(f => path.basename(f.file) + ' ' + (f.error || f.status)).join('; '))
+  }
+}
+try { _applyGenuiLangGuard() } catch (e) { failures.push('[genui-lang-guard] unexpected: ' + String(e)) }
+
+// [wwa-glyph] workspace-write-auto 第四档图标（2026-09-17 沙箱评审落地）:
+// conversation 插件 PermissionSelect 的 permissionGlyphs Map 按 option id 出图,
+// 未知 id 无图标;本家族为 workspace-write-auto 插入「盾形轮廓 + 闪电」glyph
+// (16x16,shieldOutline 描边 + fill 闪电,风格与 read-only check / full-access ! 一致;
+// 语义:同一围界 + 自动免打扰)。中文档名走 overlay 预设表 name 字段透传,不在本补丁范围。
+// 哨兵 dsh-local-patch:wwa-preset-glyph-v1,seed 升级后壳启动自动重放。
+function _applyPermissionGlyphWwa() {
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const MARK = '/*dsh-local-patch:wwa-preset-glyph-v1*/'
+  const ENTRY = '["workspace-write-auto", (0, react_jsx_runtime.jsxs)("svg", {\n'
+    + '\t\t\t\twidth: "16",\n\t\t\t\theight: "16",\n\t\t\t\tviewBox: "0 0 16 16",\n\t\t\t\tfill: "none",\n\t\t\t\t"aria-hidden": true,\n'
+    + '\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("path", {\n\t\t\t\t\td: shieldOutline,\n\t\t\t\t\tstroke: "currentColor",\n\t\t\t\t\tstrokeWidth: "1.31831",\n\t\t\t\t\tstrokeLinejoin: "round"\n\t\t\t\t}), (0, react_jsx_runtime.jsx)("path", {\n\t\t\t\t\td: "M9 4L5.9 8.7H7.8L7.3 12.2L10.6 7.4H8.6Z",\n\t\t\t\t\tfill: "currentColor"\n\t\t\t\t})]\n\t\t\t})]'
+  const results = []
+  const targets = []
+  const walk = (root, depth) => {
+    try {
+      for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+        const p = path.join(root, e.name)
+        if (!e.isDirectory()) continue
+        if (e.name === 'dsh-client-ui-conversation') {
+          const f = path.join(p, 'lib', 'client.js')
+          if (fs.existsSync(f)) targets.push(f)
+        } else if (depth > 0 && /^(node_modules|\.pnpm|@deepseek-ai|dsh-)/.test(e.name)) walk(p, depth - 1)
+      }
+    } catch (_) {}
+  }
+  try {
+    walk(path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx', 'c40503fdf38a82ea'), 4)
+    const npxRoot = path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx')
+    for (const dir of fs.readdirSync(npxRoot)) {
+      if (!/pnpm-seed$/.test(dir)) continue
+      walk(path.join(npxRoot, dir), 4)
+      walk(path.join(npxRoot, dir, 'node_modules', '.pnpm'), 4)
+    }
+  } catch (_) {}
+  for (const file of targets) {
+    try {
+      const src = fs.readFileSync(file, 'utf8')
+      if (src.includes(MARK)) { results.push({ file, status: 'already' }); continue }
+      const anchor = src.indexOf('const permissionGlyphs = new Map([')
+      const close = anchor === -1 ? -1 : src.indexOf(']);', anchor)
+      if (close === -1 || !src.slice(anchor, close).includes('"read-only"')) {
+        results.push({ file, status: 'missing', error: 'permissionGlyphs anchor not found' }); continue
+      }
+      const head = src.slice(0, close).replace(/[ \t]*\n[ \t]*$/, '')
+      const out = head + ',\n\t\t\t' + MARK + '\n\t\t\t' + ENTRY + '\n\t\t' + src.slice(close)
+      const bak = file + '.bak-wwa-glyph'
+      if (!fs.existsSync(bak)) fs.copyFileSync(file, bak)
+      fs.writeFileSync(file, out)
+      results.push({ file, status: 'patched' })
+    } catch (e) {
+      results.push({ file, status: 'FAIL', error: String((e && e.message) || e) })
+    }
+  }
+  for (const r of results) {
+    console.log('[wwa-glyph] ' + r.status + ' :: ' + r.file + (r.error ? ' :: ' + r.error : ''))
+  }
+  const failed = results.filter(r => r.status === 'FAIL' || r.status === 'missing')
+  if (failed.length > 0) {
+    console.error('[wwa-glyph] ' + failed.length + ' file(s) failed: '
+      + failed.map(f => path.basename(f.file) + ' ' + (f.error || f.status)).join('; '))
+  }
+}
+try { _applyPermissionGlyphWwa() } catch (e) { console.error('[wwa-glyph] unexpected: ' + String(e)) }
