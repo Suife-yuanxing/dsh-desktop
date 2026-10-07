@@ -167,7 +167,7 @@ function patchBetterSidebar() {
         results.push({
           file: 'bsr/' + f,
           ok: true,
-          skipped: true,
+          retired: true,
           reason: '上游已退役自绘右侧面板(0.19.0+ 浮动卡片不存在),A 链无需守护',
         })
         continue
@@ -180,6 +180,10 @@ function patchBetterSidebar() {
       // A1 JS 剔除(锚点经 0.12.1/0.12.3 双版本验证,esbuild 未压缩输出稳定)
       if (isFull) {
         // C6 设置导航「侧边卡片」order 100 → 21(沉底到 Agent 预设之后、更新之前)
+        // [2026-09-25 状态注记] C6 已属死码:设置导航的**显示序**现由壳插件强制(dsh-plugin
+        //   问题83 的 NAV_ORDER 表经 flex order: agent-preset=340 → sidebar-card=350,
+        //   updates=910 垫底),与插件注册的 order 值解耦;活体实测导航「侧边卡片」正排在
+        //   「Agent 预设」之后 = C6 本意已由壳承担。本行仅为壳缺位时的兜底,不再算活效面。
         if (c.includes('id: "better-sidebar"')) {
           c = rex(c, /id: "better-sidebar",(\s*\n\s*)order: 100,/, 'id: "better-sidebar",$1order: 21,', 1, 'settings-order')
         }
@@ -507,7 +511,7 @@ function patchPresentedCardRedirect() {
     // better-sidebar 编辑器)已由上游原生提供,属「上游已解」,退化为 skipped:不写盘、
     // 不计 FAIL;上游若回退旧漏斗形态,本家族自动恢复守护。
     if (!current.includes('dsh-better-sidebar: open-path interception')) {
-      results.push({ file, ok: true, skipped: true, reason: '上游已原生接管聊天区文件打开(0.19.0+),R92 无需守护' })
+      results.push({ file, ok: true, superseded: true, reason: '上游已原生接管聊天区文件打开(0.19.0+),R92 无需守护' })
       continue
     }
     const { rep, failures } = makeCtx(file)
@@ -547,7 +551,14 @@ function patchPresentedCardRedirect() {
 //       重复命中由 MARK 幂等吸收。
 // 生效面: 客户端产物 —— dsh-client-hmr 每 500ms 轮询产物 mtime,改盘后**就地热重载**该模块
 //       (实测无需重启 dsh;不生效再刷新页面)。
+// 2026-09-24(0.1.7-rc.1): 上游把 presented 路径并进 producedFileMentions(..., owner.openFile),
+//       R94 目标达成 → 见 PRESENTED_MENTION_UPSTREAM 退役判定;旧轨(0.1.5-rc.3 及以下)继续打。
 const PRESENTED_MENTION_MARK = '/* [dsh-desktop] R94 presented-mention-sidebar */'
+// [rc.1 2026-09-24] 上游自愈判定: 0.1.7-rc.1 起 chatFileMentions.forClosing 把 presented 路径
+//   并入 producedFileMentions 的 paths(第三参仍是 owner.openFile,aria 文案改「在侧边栏打开 {name}」),
+//   R94 的诉求(正文提及一律落侧边卡片)由上游达成 → 本家族在 rc.1+ 退役(superseded,不算 FAIL)。
+//   锚点取「presented 也进 openFile 那条链」的语义字节,前缀与之无关的部分不取,降低版本漂移面。
+const PRESENTED_MENTION_UPSTREAM = 'presented.map((file) => file.path)])], owner.openFile,'
 function patchPresentedMentionSidebar() {
   const FROM = '\t\t\t\t\tconst file = deliveries.get(path);\n' +
     '\t\t\t\t\tif (file === void 0) owner.openFile(path);\n' +
@@ -561,6 +572,8 @@ function patchPresentedMentionSidebar() {
   const patchFile = (p, label) => {
     const current = fs.readFileSync(p, 'utf8')
     if (current.includes(PRESENTED_MENTION_MARK)) return { file: label, ok: true, already: true }
+    // 上游已达成(0.1.7-rc.1+): presented 也走 owner.openFile → 补丁退役,不打也不报错
+    if (current.includes(PRESENTED_MENTION_UPSTREAM)) return { file: label, ok: true, superseded: true, reason: '上游已把正文提及统一为 openFile(R94 目标达成)' }
     // 旧形态副本(0.1.0-rc.5 / 0.1.1 / 0.1.2 时代)连 present.open 这条链都没有 → 非活体,静默跳过
     if (!current.includes('/api/present.open')) return { file: label, ok: true, skipped: true, reason: '旧形态(无 present.open 链),非活体副本' }
     const { rep, failures } = makeCtx(label)
@@ -620,6 +633,11 @@ function patchPresentedMentionSidebar() {
 //       (根因侧同步修好: `dsh-file-drop/lib/client.js` 的 description 改回函数。)
 // 载体纪律: 与 [R94] 同款 —— 核心包客户端产物、自有 MARK 幂等、失败不写盘、只认锚点在场的
 //       副本,历史 seed 静默 skipped;改盘后需**刷新页面**才对用户生效(见 [R94] 注释与手册)。
+// [R95 双形态 2026-09-25] 0.1.7 线(rc.1/rc.2 实测):上游把 description 收敛为**可选**、
+//   并新增 label/icon 两个可选取值器 —— 但「非 undefined 即按函数调用」的契约没变
+//   (字符串 description 仍抛 TypeError 连坐整组),`available(session)` 也仍裸调用;
+//   candidates() 全程无 try/catch ⇒ 本家族在 0.1.7 上同样必需。故单列一套 rc.1/rc.2 锚点,
+//   与 0.1.5 形态按在场择一命中(循环体五处差异:label 行新增、其余同行)。
 const COMMAND_CONTRIB_MARK = '/* [dsh-desktop] R95 contribution-shape-guard */'
 function patchCommandContributionGuard() {
   const FROM = 'for (const contribution of this.live.contributions.values()) {\n' +
@@ -645,12 +663,44 @@ function patchCommandContributionGuard() {
     '\t\t\t\t\t\tdescription: typeof r95Describe === "function" ? r95Describe() : String(r95Describe ?? "")\n' +
     '\t\t\t\t\t});\n' +
     '\t\t\t\t}'
+  // [R95 0.1.7 形态] 锚点取 rc.1/rc.2 实测活体字节(0.1.7-rc.2 seed 直读,562B 整块):
+  //   与 0.1.5 形态的差异 = description 行变可选展开 + label/icon 两行新增;缩进同为 5 个 tab。
+  const FROM_17 = 'for (const contribution of this.live.contributions.values()) {\n' +
+    '\t\t\t\t\tif (!contribution.available(session)) continue;\n' +
+    '\t\t\t\t\tif (seen.has(contribution.name)) throw new Error(`ui-commands: contribution /${contribution.name} collides with a host command`);\n' +
+    '\t\t\t\t\trows.push({\n' +
+    '\t\t\t\t\t\tname: contribution.name,\n' +
+    '\t\t\t\t\t\t...contribution.label === void 0 ? {} : { label: contribution.label() },\n' +
+    '\t\t\t\t\t\t...contribution.description === void 0 ? {} : { description: contribution.description() },\n' +
+    '\t\t\t\t\t\t...contribution.icon === void 0 ? {} : { icon: contribution.icon }\n' +
+    '\t\t\t\t\t});\n' +
+    '\t\t\t\t}'
+  const TO_17 = 'for (const contribution of this.live.contributions.values()) {\n' +
+    '\t\t\t\t\t' + COMMAND_CONTRIB_MARK + '\n' +
+    '\t\t\t\t\t// [R95] 形状容错:历史字符串 description 照常渲染、available 抛错只跳过本条 —— 见家族文件头\n' +
+    '\t\t\t\t\tlet r95Usable = false;\n' +
+    '\t\t\t\t\ttry { r95Usable = !!contribution.available(session); }\n' +
+    '\t\t\t\t\tcatch (error) { console.error(`[ui-commands] contribution /${contribution.name} availability check threw; skipped`, error); continue; }\n' +
+    '\t\t\t\t\tif (!r95Usable) continue;\n' +
+    '\t\t\t\t\tif (seen.has(contribution.name)) throw new Error(`ui-commands: contribution /${contribution.name} collides with a host command`);\n' +
+    '\t\t\t\t\tconst r95Describe = contribution.description;\n' +
+    '\t\t\t\t\tif (r95Describe !== void 0 && typeof r95Describe !== "function") console.warn(`[ui-commands] contribution /${contribution.name} declares a non-function description; rendering it verbatim`);\n' +
+    '\t\t\t\t\trows.push({\n' +
+    '\t\t\t\t\t\tname: contribution.name,\n' +
+    '\t\t\t\t\t\t...contribution.label === void 0 ? {} : { label: contribution.label() },\n' +
+    '\t\t\t\t\t\t...r95Describe === void 0 ? {} : { description: typeof r95Describe === "function" ? r95Describe() : String(r95Describe) },\n' +
+    '\t\t\t\t\t\t...contribution.icon === void 0 ? {} : { icon: contribution.icon }\n' +
+    '\t\t\t\t\t});\n' +
+    '\t\t\t\t}'
   const patchFile = (p, label) => {
     const current = fs.readFileSync(p, 'utf8')
     if (current.includes(COMMAND_CONTRIB_MARK)) return { file: label, ok: true, already: true }
-    if (!current.includes(FROM)) return { file: label, ok: true, skipped: true, reason: '该副本无此形状的 contributions 循环(非活体/版本不同)' }
+    const is17 = current.includes(FROM_17)
+    const useFrom = is17 ? FROM_17 : FROM
+    const useTo = is17 ? TO_17 : TO
+    if (!current.includes(useFrom)) return { file: label, ok: true, skipped: true, reason: '该副本无此形状的 contributions 循环(非活体/版本不同)' }
     const { rep, failures } = makeCtx(label)
-    const c = rep(current, FROM, TO, 1, 'contribution-shape-guard')
+    const c = rep(current, useFrom, useTo, 1, is17 ? 'contribution-shape-guard(0.1.7)' : 'contribution-shape-guard')
     if (failures.length) return { file: label, ok: false, failures: [...failures] }
     fs.writeFileSync(p, c, 'utf8')
     return { file: label, ok: true, already: false }
@@ -1098,7 +1148,7 @@ function patchTurnRewind() {
     // 这条引线**不存在**,守护退化为安全跳过(不再是红色 canary,消除每 45s 的假 FAIL 噪音)。
     // 反之,仍引用该包却是陌生形态(未来半态/新写法)⇒ 保持 FAIL 保留原样不写盘,等人工研判。
     if (!current.includes('@deepseek-ai/dsh-settings')) {
-      return [{ file: '@anionex/dsh-turn-rewind/lib/settings.js', version: ver, ok: true, skipped: true, reason: '上游已自适配(不再引用 dsh-settings),无需守护' }]
+      return [{ file: '@anionex/dsh-turn-rewind/lib/settings.js', version: ver, ok: true, superseded: true, reason: '上游已自适配(不再引用 dsh-settings),无需守护' }]
     }
     return [{ file: '@anionex/dsh-turn-rewind/lib/settings.js', version: ver, ok: false, failures: ['[turn-rewind] settings.js 仍引用 @deepseek-ai/dsh-settings 但形态陌生(上游新版/半态?),保留原样不写盘'] }]
   }
@@ -1149,7 +1199,7 @@ function patchEgoBrowserSettings() {
     if (current.includes('@deepseek-ai/dsh-settings')) {
       return [{ file: 'dsh-ego-browser/lib/index.js', version: ver, ok: false, failures: ['[ego-browser] index.js 非官方原版亦非已适配形态(上游新版/半态?),保留原样不写盘'] }]
     }
-    return [{ file: 'dsh-ego-browser/lib/index.js', version: ver, ok: true, skipped: true }]
+    return [{ file: 'dsh-ego-browser/lib/index.js', version: ver, ok: true, superseded: true, reason: '上游 0.8.3+ 已自行移除 settingsNamespace 引用(dsh-settings 崩加载面不存在),守护退役' }]
   }
   let c = current
   c = rep(c,
@@ -1193,8 +1243,8 @@ function patchEgoBrowserWorkerSpawn() {
   const RE = /argv: \[\n([ \t]*)process\.execPath,\n[ \t]*WORKER_BIN,\n[ \t]*initCfg\n([ \t]*)\],\n([ \t]*)stdio: \{/
   if (!RE.test(current)) {
     // 机会性判据(手册 §2.7b):上游可能自行补齐 —— 能力已在就安全跳过,不制造假 FAIL
-    if (!current.includes('WORKER_BIN')) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已重写 worker 拉起方式(无 WORKER_BIN 锚)' }]
-    if (/WORKER_BIN[\s\S]{0,300}?cwd:/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行补齐 cwd/env' }]
+    if (current.includes('WORKER_BIN') === false) return [{ file: FILE, version: ver, ok: true, superseded: true, reason: '上游已重写 worker 拉起方式(无 WORKER_BIN 锚)' }]
+    if (/WORKER_BIN[\s\S]{0,300}?cwd:/.test(current)) return [{ file: FILE, version: ver, ok: true, superseded: true, reason: '上游已自行补齐 cwd/env' }]
     return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] ensureWorker spawn 形态陌生(上游改写?),保留原样待人工研判'] }]
   }
   const c = rex(current, new RegExp(RE.source, 'g'),
@@ -1228,7 +1278,7 @@ function patchEgoBrowserCastWorker() {
   if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
   const RE = /return wsUrl \? \{\n([ \t]*)port: state\.port \?\? null,\n([ \t]*)wsUrl\n([ \t]*)\} : null;/
   if (!RE.test(current)) {
-    if (/return wsUrl \? \{[\s\S]{0,240}?pid:/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行带回 pid' }]
+    if (/return wsUrl \? \{[\s\S]{0,240}?pid:/.test(current)) return [{ file: FILE, version: ver, ok: true, superseded: true, reason: '上游已自行带回 pid' }]
     return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] resolveBrowser 返回形态陌生(上游改写?),保留原样待人工研判'] }]
   }
   const c = rex(current, new RegExp(RE.source, 'g'),
@@ -1274,7 +1324,7 @@ function patchEgoBrowserHeadlessHost() {
   if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
   const FROM = 'if (env.EGO_LINUX_HEADLESS === void 0 && isHeadlessDetected(platform, env)) env.EGO_LINUX_HEADLESS = "1";'
   if (!current.includes(FROM)) {
-    if (current.includes('EGO_LINUX_HEADLESS') && /platform === "win32"\s*\|\|/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行支持 win32 headless 注入' }]
+    if (current.includes('EGO_LINUX_HEADLESS') && /platform === "win32"\s*\|\|/.test(current)) return [{ file: FILE, version: ver, ok: true, superseded: true, reason: '上游已自行支持 win32 headless 注入' }]
     return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] resolveEgoEnv headless 注入形态陌生(上游改写?),保留原样待人工研判'] }]
   }
   const c = rep(current, FROM,
@@ -1301,7 +1351,7 @@ function patchEgoBrowserHeadlessRuntime() {
   if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
   const FROM = '  const envHeadless = hasDisplay\n    ? false\n    : !["", "0", "false", "no"].includes(\n        (process.env.EGO_LINUX_HEADLESS ?? "").toLowerCase(),\n      );'
   if (!current.includes(FROM)) {
-    if (current.includes('EGO_LINUX_HEADLESS') && !/envHeadless = hasDisplay/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行放开 win32 envHeadless' }]
+    if (current.includes('EGO_LINUX_HEADLESS') && !/envHeadless = hasDisplay/.test(current)) return [{ file: FILE, version: ver, ok: true, superseded: true, reason: '上游已自行放开 win32 envHeadless(issue #35,显式值优先且接受 1/true/yes/on)' }]
     return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] runtime envHeadless 形态陌生(上游改写?),保留原样待人工研判'] }]
   }
   const c = rep(current, FROM,
@@ -1328,6 +1378,13 @@ function patchEgoBrowserHeadlessCopy() {
   const current = fs.readFileSync(p, 'utf8')
   const MARK = '[R98 headless-copy 2026-09-12,patches.cjs [R98] 段守护]'
   if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
+  // [批次189b 2026-10-06 退役] 0.8.6 上游重写登录/人机验证文案(agent 浏览器窗口+弹出按钮指引;
+  // 旧「桌面上那个 ego lite — agent Chrome 窗口」形态全文件 0 命中) ⇒ 守护退役。
+  // 复活条件:上游回退旧文案(内容门,认字节不认版本号)。
+  if (!current.includes('ego lite — agent')) {
+    console.log('[ego-headless-copy] retired :: 上游已重写该文案(0.8.6 agent 浏览器窗口指引),守护退役(批次189b)')
+    return [{ file: FILE, version: ver, ok: true, retired: true, reason: '上游已重写该文案,守护退役' }]
+  }
   // 浮动面板版(无 better-sidebar 时的回退形态)
   let c = rep(current,
     '需要账号登录时，请到桌面上那个 <b>「ego lite — agent」</b> Chrome 窗口完成登录。',
@@ -1386,7 +1443,7 @@ function patchEgoBrowserWorkerSelfKill() {
   if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
   const FROM = "const ps = `Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*ego-cast-worker.mjs*' -and $_.ProcessId -ne ${self} } | Select-Object -ExpandProperty ProcessId`;"
   if (!current.includes(FROM)) {
-    if (current.includes('stopSiblingWorkers') && current.includes('ancestors')) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行修复 selfkill' }]
+    if (current.includes('stopSiblingWorkers') && current.includes('ancestors')) return [{ file: FILE, version: ver, ok: true, superseded: true, reason: '上游已自行修复 selfkill(祖先链过滤器与 [R98b] 同语义)' }]
     return [{ file: FILE, version: ver, ok: false, failures: ['[ego-browser] stopSiblingWorkers ps 模板形态陌生(上游改写?),保留原样待人工研判'] }]
   }
   const c = rep(current, FROM,
@@ -1426,7 +1483,7 @@ function patchEgoBrowserUrlTargetRelease() {
   const MARK = '[R98c urlTarget-release 2026-09-12,patches.cjs [R98c] 段守护]'
   if (current.includes(MARK)) return [{ file: FILE, version: ver, ok: true, already: true }]
   if (!current.includes('urlTarget')) {
-    return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行移除 urlTarget 认领' }]
+    return [{ file: FILE, version: ver, ok: true, superseded: true, reason: '上游已自行移除 urlTarget 认领(整字段不在场)' }]
   }
   // [批次182 2026-09-16] 0.8.4 缩进从 5 tab 变 3 tab:锚点改单行字面量(url.pathname 全文件唯一),
   // 不再受整块缩进漂移影响;TO 同步单行形态。
@@ -1439,7 +1496,7 @@ function patchEgoBrowserUrlTargetRelease() {
     '\t\t\t\turlTarget: function(url) {\n\t\t\t\t\treturn false;\n\t\t\t\t},'
   const c = rep(current, FROM, TO, 1, 'urlTarget-release')
   if (failures.length) {
-    if (/urlTarget:\s*function\(url\)\s*\{\s*\n\s*return false;/.test(current)) return [{ file: FILE, version: ver, ok: true, skipped: true, reason: '上游已自行恒 false' }]
+    if (/urlTarget:\s*function\(url\)\s*\{\s*\n\s*return false;/.test(current)) return [{ file: FILE, version: ver, ok: true, superseded: true, reason: '上游已自行恒 false' }]
     return [{ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }]
   }
   fs.writeFileSync(p, c, 'utf8')
@@ -1525,508 +1582,12 @@ function patchSystemPromptPersona() {
 // ---- [E](已废弃:SettingsRoot 打进 dsh web Vite 主 bundle assets/index-*.js,patch 源码仓无效;
 //          改由 dshvt client.js 运行时 MutationObserver 给导航 button 注入 data-section-id,与 entry 自愈同款) ----
 
-// ---- [U] ui-conversation 自定义快捷面板(alpha.5 +按钮死点根治,v2 2026-09-03;v7 附件通道 2026-09-06;v9 触发字符词边界 2026-09-19) ----
-// 死点:alpha.5 onToggleCommandMenu → inputTriggers.toggleSource('command', {trigger:'/', ...})
-// 路径中 `this.deps.roster.sources('/').find(item=>item.name==='command')` 在当前 bundle
-// 组合下未命中,函数静默 dismiss()(0 错误、0 DOM);键盘输入 '/' 走 controller.track 检测路径
-// 不经 toggleSource 故能弹出 111 条 slash 候选。两种路径在 alpha.5 行为分叉。
-// 修复:不依赖 toggleSource,纯 DOM 渲染自定义快捷面板(📎 添加附件 / 使用 @ / 使用 / /
-// 使用 § 等 4 行),每行点击聚焦输入框 + 插入触发字符(附件行走文件选择器)。
-// v2 变更:① 渲染器改收 anchorButton 参数——onToggleCommandMenu 把 React 事件的
-// currentTarget(=被点击的 + 按钮)传入,彻底摆脱 querySelector('button[aria-label=指令]')
-// 对「隐藏旧按钮/多实例/文案变化」的脆弱假设(v1 死因:找不到/找错锚点→静默 return);
-// ② 兜底:anchorButton 为空时按「可见 + aria-label 含 指令/Commands」过滤查找;
-// ③ 错误探针 window.__dshQuickActionsError(诊断用)。
-// 三态分流(幂等):v2 哨兵在场=already;v1 哨兵在场=v1→v2 定点升级;pristine=整体注入。
-function patchConversationPlusQuickActions() {
-  const results = []
-  const V2_SIG = 'const __dshQuickActionsRender = function(anchorButton) {'
-  const V1_SIG = 'const __dshQuickActionsRender = function() {'
-  // v4 主题自适应调色板:渲染时实测页面背景色 → 深/暖橘/中性白 三套配色,跟随主题切换
-  // (面板每次点开重建,每次都重新取色,无需监听主题变化)
-  const PALETTE_LINES = [
-    "  const pal = (function () {",
-    "    let raw = '';",
-    "    try {",
-    "      const els = [document.body, document.documentElement, document.getElementById('root'), document.getElementById('app')];",
-    "      for (let i = 0; i < els.length; i++) {",
-    "        if (!els[i]) continue;",
-    "        const c = getComputedStyle(els[i]).backgroundColor || '';",
-    "        if (c && c.indexOf('rgba(0, 0, 0, 0') !== 0 && c !== 'transparent') { raw = c; break; }",
-    "      }",
-    "    } catch (e1) { /* ignore */ }",
-    "    const m = raw.match(/(\\d+)[,\\s]+(\\d+)[,\\s]+(\\d+)/);",
-    "    const r = m ? +m[1] : 31, g = m ? +m[2] : 31, b = m ? +m[3] : 35;",
-    "    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;",
-    "    if (lum < 0.6) return { bg: '#1f1f23', fg: '#ffffff', icon: '#f0f0f0', hover: 'rgba(255,255,255,0.06)', border: 'rgba(255,255,255,0.10)', shadow: '0 8px 24px rgba(0,0,0,0.4)' };",
-    "    if ((r - b) > 12) return { bg: 'rgba(255,250,241,0.97)', fg: '#4a3826', icon: '#e0762c', hover: 'rgba(224,118,44,0.13)', border: 'rgba(214,138,66,0.32)', shadow: '0 8px 24px rgba(180,110,50,0.24)' };",
-    "    return { bg: 'rgba(255,255,255,0.98)', fg: '#3a3a3a', icon: '#8a8a8a', hover: 'rgba(0,0,0,0.05)', border: 'rgba(0,0,0,0.08)', shadow: '0 8px 24px rgba(0,0,0,0.14)' };",
-    "  })();",
-    ""
-  ].join('\n')
-  const V4_CSSTEXT_NEW = "  menu.style.cssText = 'position:fixed;left:' + rect.left + 'px;bottom:' + (window.innerHeight - rect.top + 8) + 'px;z-index:999999;background:' + pal.bg + ';color:' + pal.fg + ';border:1px solid ' + pal.border + ';border-radius:10px;box-shadow:' + pal.shadow + ';padding:6px 0;min-width:240px;font-family:system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.4;';"
-  const V4_INNERHTML_NEW = "    row.innerHTML = '<span style=\"display:inline-flex;align-items:center;justify-content:center;width:18px;font-size:16px;color:' + pal.icon + ';\">' + item.icon + '</span><span>' + item.label + '</span>';"
-  const V4_HOVER_NEW = "    row.addEventListener('mouseenter', function() { row.style.background = pal.hover; });"
-  // v3 落地形态(升级 FROM 串)
-  const V3_CSSTEXT_OLD = "  menu.style.cssText = 'position:fixed;left:' + rect.left + 'px;bottom:' + (window.innerHeight - rect.top + 8) + 'px;z-index:999999;background:#1f1f23;color:#fff;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.4);padding:6px 0;min-width:240px;font-family:system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.4;';"
-  const V3_INNERHTML_OLD = "    row.innerHTML = '<span style=\"display:inline-flex;align-items:center;justify-content:center;width:18px;font-size:16px;\">' + item.icon + '</span><span>' + item.label + '</span>';"
-  const V3_HOVER_OLD = "    row.addEventListener('mouseenter', function() { row.style.background = 'rgba(255,255,255,0.06)'; });"
-  const V4_MARK = '0.299 * r'
-  // v5:移除 § 技能行 + 附件行改 SVG 线条回形针(currentColor 随主题) + 圆角高亮/轻微右移滑过交互
-  const V5_MARK = 'M21.44 11.05'
-  const V5_ATTACH_NEW = "    { icon: '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48\"/></svg>', label: '添加附件', trigger: null },"
-  const V5_ROWCSS_NEW = "    row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:8px 12px;margin:2px 8px;border-radius:8px;cursor:pointer;transition:background 140ms ease,transform 140ms ease;';"
-  const V5_HOVER_NEW = "    row.addEventListener('mouseenter', function() { row.style.background = pal.hover; row.style.transform = 'translateX(2px)'; });"
-  const V5_LEAVE_NEW = "    row.addEventListener('mouseleave', function() { row.style.background = 'transparent'; row.style.transform = 'translateX(0)'; });"
-  // v4 落地形态(升级 FROM 串)
-  const V4_SECTION_OLD = "trigger: '/' },\n    { icon: '\\u00A7', label: '使用 \\u00A7 选择技能', trigger: '\\u00A7' }"
-  const V4_ATTACH_OLD = "    { icon: '\\u{1F4CE}', label: '添加附件', trigger: null },"
-  const V4_ROWCSS_OLD = "    row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:8px 14px;cursor:pointer;transition:background 120ms;';"
-  const V4_LEAVE_OLD = "    row.addEventListener('mouseleave', function() { row.style.background = 'transparent'; });"
-  // v6:隐藏 alpha.5 原生「轮次导航」(dsh-session-turn-outline 投影的右缘跳转条,与 node-nav
-  // 圆点功能重复,用户要求去除)。选择器双保险:aria-label(中文界面)+ 内联样式变量
-  // --turn-natural-height(语言/构建哈希无关)。样式由 [U] 模块引导器注入,幂等(id 去重)。
-  const V6_MARK = 'dsh-hide-turn-outline'
-  const V5_LISTENER_TAIL_OLD = "      if (typeof window !== 'undefined') window.__dshQuickActionsError = 'listener:' + (err && err.message ? err.message : String(err));\n    }\n  }, true);\n}"
-  const V6_LISTENER_TAIL_NEW = "      if (typeof window !== 'undefined') window.__dshQuickActionsError = 'listener:' + (err && err.message ? err.message : String(err));\n    }\n  }, true);\n  try {\n    if (!document.getElementById('dsh-hide-turn-outline')) {\n      var st = document.createElement('style');\n      st.id = 'dsh-hide-turn-outline';\n      st.textContent = 'nav[aria-label=\"轮次导航\"],nav[style*=\"--turn-natural-height\"]{display:none!important}';\n      (document.head || document.documentElement).appendChild(st);\n    }\n  } catch (err2) { /* ignore */ }\n}"
-  // v7(2026-09-06):「添加附件」死点根治。alpha.5 composer 是 Lexical contenteditable
-  // (无 textarea、无 document 级 drop 监听),v2-v6 的附件行逻辑(找页面上现成的
-  // 附件按钮 / input[type=file] 来点)会点进无关宿主(皮肤上传/插件导入等)的选择器
-  // ——用户实证:文件夹能弹,选完文件不进输入框。v7 正道:自建 file input 弹系统
-  // 选择器,选完后按 alpha.5 两条官方入站通道注入——
-  //   ① 图片 → 在 composer 可编辑根元素合成 ClipboardEvent('paste')(files 进
-  //      DataTransfer)→ Lexical PASTE_COMMAND → keymap intakeFiles → intakeImages
-  //      → addImages → 附件轨(上游限额/解码校验全数生效);
-  //   ② 文本/代码/文档 → 同通道 paste 纯文本 `@文件名 ` → keymap pasteText →
-  //      keyboard.paste 机器粘贴事务 → 草稿(输入触发器按普通草稿受理)。
-  // 「使用 @ / 使用 /」两行同步改走 paste 通道(旧 beforeinput/value 写法对
-  // contenteditable 无效)。hero(无会话)无输入机 → 可编辑根缺席 → toast 指引。
-  const V7_MARK = '__dshQuickActionsPick'
-  const HELPERS_SOURCE = [
-    "// v7 helpers:alpha.5(Lexical contenteditable)附件/触发字符注入通道",
-    "const __dshQuickActionsComposer = function() {",
-    "  const card = document.querySelector('[data-composer-card]');",
-    "  if (card !== null && card !== void 0) {",
-    "    const ed = card.querySelector('[contenteditable=\"true\"]');",
-    "    if (ed !== null && ed !== void 0) return ed;",
-    "    const ta = card.querySelector('textarea');",
-    "    if (ta !== null && ta !== void 0) return ta;",
-    "  }",
-    "  return null;",
-    "};",
-    "const __dshQuickActionsToast = function(text) {",
-    "  try {",
-    "    const old = document.getElementById('__dsh-quick-actions-toast');",
-    "    if (old !== null && old !== void 0) old.remove();",
-    "    const pill = document.createElement('div');",
-    "    pill.id = '__dsh-quick-actions-toast';",
-    "    pill.textContent = text;",
-    "    pill.setAttribute('role', 'status');",
-    "    pill.style.cssText = 'position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483000;background:#1f1f23;color:#fff;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);padding:8px 16px;font:13px/1.5 system-ui,-apple-system,sans-serif;max-width:min(520px,80vw);opacity:0;transition:opacity 0.2s ease;';",
-    "    document.body.appendChild(pill);",
-    "    requestAnimationFrame(function() { pill.style.opacity = '1'; });",
-    "    setTimeout(function() { pill.style.opacity = '0'; setTimeout(function() { pill.remove(); }, 300); }, 2600);",
-    "  } catch (e0) { /* ignore */ }",
-    "};",
-    "const __dshQuickActionsPaste = function(payload) {",
-    "  const el = __dshQuickActionsComposer();",
-    "  if (el === null || el === void 0) { __dshQuickActionsToast('当前输入框不可用:请先选择工作区进入会话'); return false; }",
-    "  try {",
-    "    const dt = new DataTransfer();",
-    "    if (payload.files !== void 0) { for (let i = 0; i < payload.files.length; i++) dt.items.add(payload.files[i]); }",
-    "    if (payload.text !== void 0) dt.setData('text/plain', payload.text);",
-    "    const ev = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });",
-    "    el.dispatchEvent(ev);",
-    "    return true;",
-    "  } catch (e1) {",
-    "    if (typeof window !== 'undefined') window.__dshQuickActionsError = 'paste:' + (e1 && e1.message ? e1.message : String(e1));",
-    "    __dshQuickActionsToast('放入失败: ' + (e1 && e1.message ? e1.message : e1));",
-    "    return false;",
-    "  }",
-    "};",
-    "const __dshQuickActionsBoundary = function(el, ch) {",
-    "  let before = null;",
-    "  try {",
-    "    const sel = window.getSelection();",
-    "    if (sel !== null && sel !== void 0 && sel.rangeCount > 0) {",
-    "      const r = sel.getRangeAt(0);",
-    "      if (r.collapsed && el.contains(r.startContainer)) {",
-    "        const pre = r.cloneRange();",
-    "        pre.selectNodeContents(el);",
-    "        pre.setEnd(r.startContainer, r.startOffset);",
-    "        before = pre.toString();",
-    "      }",
-    "    }",
-    "  } catch (e0) { /* ignore */ }",
-    "  if (before === null || before === void 0) before = el.textContent || '';",
-    "  const tail = before.slice(-1);",
-    "  if (tail !== '' && !/\\s/.test(tail)) return ' ' + ch;",
-    "  return ch;",
-    "};",
-    "const __dshQuickActionsType = function(ch) {",
-    "  const el = __dshQuickActionsComposer();",
-    "  if (el === null || el === void 0) { __dshQuickActionsToast('当前输入框不可用:请先选择工作区进入会话'); return; }",
-    "  el.focus();",
-    "  __dshQuickActionsPaste({ text: __dshQuickActionsBoundary(el, ch) });",
-    "};",
-    "const __dshQuickActionsPick = function() {",
-    "  let inp = document.getElementById('__dsh-quick-actions-file');",
-    "  if (inp === null || inp === void 0) {",
-    "    inp = document.createElement('input');",
-    "    inp.type = 'file';",
-    "    inp.multiple = true;",
-    "    inp.id = '__dsh-quick-actions-file';",
-    "    inp.setAttribute('data-dsh-quick-actions', '');",
-    "    inp.style.display = 'none';",
-    "    inp.addEventListener('change', function() {",
-    "      try {",
-    "        const fs = [].slice.call(inp.files || []);",
-    "        const IMG = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif', 'tif', 'tiff'];",
-    "        const images = [];",
-    "        const refs = [];",
-    "        for (let i = 0; i < fs.length; i++) {",
-    "          const f = fs[i];",
-    "          const m = /\\.([A-Za-z0-9]+)$/.exec(f.name || '');",
-    "          const ext = m ? m[1].toLowerCase() : '';",
-    "          if (IMG.indexOf(ext) >= 0) images.push(f);",
-    "          else refs.push(f);",
-    "        }",
-    "        let refOk = 0;",
-    "        for (let r = 0; r < refs.length; r++) {",
-    "          if (__dshQuickActionsPaste({ text: '@' + refs[r].name + ' ' })) refOk++;",
-    "        }",
-    "        let imgOk = 0;",
-    "        if (images.length > 0 && __dshQuickActionsPaste({ files: images })) imgOk = images.length;",
-    "        inp.value = '';",
-    "        const parts = [];",
-    "        if (imgOk > 0) parts.push(imgOk + ' 张图片已加入附件');",
-    "        if (refOk > 0) parts.push(refOk + ' 个文件已以 @引用 放入输入框');",
-    "        if (parts.length > 0) __dshQuickActionsToast(parts.join(';'));",
-    "      } catch (e2) {",
-    "        if (typeof window !== 'undefined') window.__dshQuickActionsError = 'change:' + (e2 && e2.message ? e2.message : String(e2));",
-    "      }",
-    "    });",
-    "    document.body.appendChild(inp);",
-    "  }",
-    "  inp.click();",
-    "};",
-    "if (typeof window !== 'undefined') { window.__dshQuickActionsPick = __dshQuickActionsPick; window.__dshQuickActionsPaste = __dshQuickActionsPaste; }",
-    ""
-  ].join('\n')
-  // v2-v6 落地形态的行点击块(升级 FROM;与 rendererSourceV2 原点击段逐字节一致)
-  const V7_CLICK_OLD = [
-    "    row.addEventListener('click', function(e) {",
-    "      e.stopPropagation();",
-    "      menu.remove();",
-    "      if (item.trigger === null) {",
-    "        const attachBtn = document.querySelector('button[aria-label*=\"\\u9644\\u4EF6\"], button[aria-label*=\"attachment\"], [data-attach-trigger]');",
-    "        if (attachBtn !== null && attachBtn !== void 0) attachBtn.click();",
-    "        else { const fileInput = document.querySelector('input[type=\"file\"]'); if (fileInput !== null && fileInput !== void 0) fileInput.click(); }",
-    "      } else {",
-    "        const editor = document.querySelector('[data-chat-input], [contenteditable=\"true\"], textarea');",
-    "        if (editor !== null && editor !== void 0) {",
-    "          editor.focus();",
-    "          try { editor.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: item.trigger, bubbles: true })); } catch (e1) { /* ignore */ }",
-    "          if (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT') {",
-    "            const start = editor.selectionStart || ((editor.value || '').length);",
-    "            const end = editor.selectionEnd || start;",
-    "            const oldValue = editor.value || '';",
-    "            editor.value = oldValue.slice(0, start) + item.trigger + oldValue.slice(end);",
-    "            editor.selectionStart = editor.selectionEnd = start + 1;",
-    "            editor.dispatchEvent(new Event('input', { bubbles: true }));",
-    "          }",
-    "        }",
-    "      }",
-    "    });"
-  ].join('\n')
-  const V7_CLICK_NEW = [
-    "    row.addEventListener('click', function(e) {",
-    "      e.stopPropagation();",
-    "      menu.remove();",
-    "      if (item.trigger === null) __dshQuickActionsPick();",
-    "      else __dshQuickActionsType(item.trigger);",
-    "    });"
-  ].join('\n')
-  // v8(2026-09-06):工具行排序钉收编。批次 60 的 `_modes{order:2!important}` 钉原随
-  // dsh-file-drop 插件常驻;alpha.5 部署下宿主客户端 include 裁掉了 workspace link:
-  // 插件(批次 95 同款症状,本次 bundles/junction 均好仍被裁,宿主组合侧另案),钉失位 →
-  // 悬停「+」tooltip 气泡抢 nth-child(2) 的 order:2,「专家/完全权限」悬停期互换复发。
-  // 钉改由本补丁随 conversation bundle 常驻(独立 style 标签,幂等 id 去重),
-  // 与插件 CSS 同值双写无害;插件未来回归后两者并存亦兼容。
-  const V8_MARK = 'dsh-tools-order-pin'
-  const V8_TAIL_OLD = "      (document.head || document.documentElement).appendChild(st);\n    }\n  } catch (err2) { /* ignore */ }\n}"
-  const V8_TAIL_NEW = [
-    "      (document.head || document.documentElement).appendChild(st);",
-    "    }",
-    "  } catch (err2) { /* ignore */ }",
-    "  try {",
-    "    if (!document.getElementById('dsh-tools-order-pin')) {",
-    "      var st2 = document.createElement('style');",
-    "      st2.id = 'dsh-tools-order-pin';",
-    "      st2.textContent = '[data-composer-card] [class*=\"_tools\"] > [class*=\"_modes\"]{order:2 !important}';",
-    "      (document.head || document.documentElement).appendChild(st2);",
-    "    }",
-    "  } catch (err3) { /* ignore */ }",
-    "}"
-  ].join('\n')
-  // v9(2026-09-19,q202「使用 @ 添加上下文」草稿有文字时不弹):触发字符词边界前置。
-  // 上游语法(部署 rc.2 dsh-client-ui-input-trigger/lib/client.js 实证)—— @ = activeAtToken
-  // /(?:^|\s)(@([^\s]*))$/u,仅行首或空白后触发(防 user@host 误触,中文标点后也不行);
-  // / = boundaryOk,词字符(\p{L}\p{N}_ 含中文)后不触发。v7 的 __dshQuickActionsType 直接
-  // paste '@' 落在文字后 → paste → editor.update → onEditorUpdate → track 检测必跑但失配
-  // → 静默不弹。修法:插入前读光标前文本(DOM Range,回落 textContent 尾),尾字符非空白
-  // 则前置一个空格。与 dsh-file-drop 0.3.5 boundaryText 同款(双副本)。注意:不能用尾部
-  // 空格方案("@ ")——检测从光标左扫遇空白立即判 null,菜单永不开。
-  const V9_MARK = '__dshQuickActionsBoundary'
-  const V9_TYPE_OLD = [
-    "const __dshQuickActionsType = function(ch) {",
-    "  const el = __dshQuickActionsComposer();",
-    "  if (el === null || el === void 0) { __dshQuickActionsToast('当前输入框不可用:请先选择工作区进入会话'); return; }",
-    "  el.focus();",
-    "  __dshQuickActionsPaste({ text: ch });",
-    "};",
-  ].join('\n')
-  const V9_TYPE_NEW = [
-    "const __dshQuickActionsBoundary = function(el, ch) {",
-    "  let before = null;",
-    "  try {",
-    "    const sel = window.getSelection();",
-    "    if (sel !== null && sel !== void 0 && sel.rangeCount > 0) {",
-    "      const r = sel.getRangeAt(0);",
-    "      if (r.collapsed && el.contains(r.startContainer)) {",
-    "        const pre = r.cloneRange();",
-    "        pre.selectNodeContents(el);",
-    "        pre.setEnd(r.startContainer, r.startOffset);",
-    "        before = pre.toString();",
-    "      }",
-    "    }",
-    "  } catch (e0) { /* ignore */ }",
-    "  if (before === null || before === void 0) before = el.textContent || '';",
-    "  const tail = before.slice(-1);",
-    "  if (tail !== '' && !/\\s/.test(tail)) return ' ' + ch;",
-    "  return ch;",
-    "};",
-    "const __dshQuickActionsType = function(ch) {",
-    "  const el = __dshQuickActionsComposer();",
-    "  if (el === null || el === void 0) { __dshQuickActionsToast('当前输入框不可用:请先选择工作区进入会话'); return; }",
-    "  el.focus();",
-    "  __dshQuickActionsPaste({ text: __dshQuickActionsBoundary(el, ch) });",
-    "};",
-  ].join('\n')
-  // v2 渲染器源码(pristine 注入用;2 空格函数体)
-  const rendererSourceV2 = [
-    V2_SIG,
-    "  let menu = document.getElementById('__dsh-quick-actions-menu');",
-    "  if (menu) { menu.remove(); return; }",
-    "  const btn = (anchorButton !== null && anchorButton !== void 0) ? anchorButton : (function () {",
-    "    const cands = [].slice.call(document.querySelectorAll('button[aria-label]'));",
-    "    for (let i = 0; i < cands.length; i++) {",
-    "      const r2 = cands[i].getBoundingClientRect();",
-    "      const lab = cands[i].getAttribute('aria-label') || '';",
-    "      if ((lab.indexOf('指令') !== -1 || lab === 'Commands') && r2.width > 0 && r2.height > 0) return cands[i];",
-    "    }",
-    "    return null;",
-    "  })();",
-    "  if (btn === null || btn === void 0) { if (typeof window !== 'undefined') window.__dshQuickActionsError = 'no-anchor'; return; }",
-    "  const rect = btn.getBoundingClientRect();",
-    "  const items = [",
-    V5_ATTACH_NEW,
-    "    { icon: '@', label: '使用 @ 添加上下文', trigger: '@' },",
-    "    { icon: '/', label: '使用 / 选择能力', trigger: '/' }",
-    "  ];",
-    "  menu = document.createElement('div');",
-    "  menu.id = '__dsh-quick-actions-menu';",
-    PALETTE_LINES,
-    V4_CSSTEXT_NEW,
-    "  for (let i = 0; i < items.length; i++) {",
-    "    const item = items[i];",
-    "    const row = document.createElement('div');",
-    V5_ROWCSS_NEW,
-    V4_INNERHTML_NEW,
-    V5_HOVER_NEW,
-    V5_LEAVE_NEW,
-    "    row.addEventListener('click', function(e) {",
-    "      e.stopPropagation();",
-    "      menu.remove();",
-    "      if (item.trigger === null) __dshQuickActionsPick();",
-    "      else __dshQuickActionsType(item.trigger);",
-    "    });",
-    "    menu.appendChild(row);",
-    "  }",
-    "  document.body.appendChild(menu);",
-    "  setTimeout(function() {",
-    "    const handler = function(ev) {",
-    "      if (menu && !menu.contains(ev.target) && ev.target !== btn) { menu.remove(); document.removeEventListener('click', handler, true); }",
-    "    };",
-    "    document.addEventListener('click', handler, true);",
-    "  }, 0);",
-    "};",
-    ""
-  ].join('\n')
-  // v1 按钮定位块(v1→v2 升级的 FROM;行首无缩进,与函数体 2 空格形态一致)
-  const V1_LOOKUP_FROM = "  let menu = document.getElementById('__dsh-quick-actions-menu');\n  if (menu) { menu.remove(); return; }\n  const btn = document.querySelector('button[aria-label=\"指令\"]');\n  if (btn === null || btn === void 0) return;\n  const rect = btn.getBoundingClientRect();"
-  const V2_LOOKUP_TO = "  let menu = document.getElementById('__dsh-quick-actions-menu');\n  if (menu) { menu.remove(); return; }\n  const btn = (anchorButton !== null && anchorButton !== void 0) ? anchorButton : (function () {\n    const cands = [].slice.call(document.querySelectorAll('button[aria-label]'));\n    for (let i = 0; i < cands.length; i++) {\n      const r2 = cands[i].getBoundingClientRect();\n      const lab = cands[i].getAttribute('aria-label') || '';\n      if ((lab.indexOf('指令') !== -1 || lab === 'Commands') && r2.width > 0 && r2.height > 0) return cands[i];\n    }\n    return null;\n  })();\n  if (btn === null || btn === void 0) { if (typeof window !== 'undefined') window.__dshQuickActionsError = 'no-anchor'; return; }\n  const rect = btn.getBoundingClientRect();"
-  // v3 模块作用域捕获拦截器:document 捕获阶段先于 React 拦截 + 按钮点击,
-  // 绕开「React onClick 重写是否真正生效」的不确定性(v2 实证未触发:menu:false,err 未设)。
-  // preventDefault+stopPropagation 阻止 React onClick 二次触发,渲染器单次调用;
-  // 监听器包 try/catch:任何渲染器异常都落 window.__dshQuickActionsError('listener:...')。
-  const LISTENER_MARK = 'window.__dshQuickActionsBound'
-  const LISTENER_SOURCE = [
-    "if (typeof window !== 'undefined' && !window.__dshQuickActionsBound) {",
-    "  window.__dshQuickActionsBound = true;",
-    "  document.addEventListener('click', function (ev) {",
-    "    try {",
-    "      const t = ev && ev.target;",
-    "      if (!t || !t.closest) return;",
-    "      const b = t.closest('button[aria-label]');",
-    "      if (!b) return;",
-    "      const l = b.getAttribute('aria-label') || '';",
-    "      if (l.indexOf('指令') === -1 && l !== 'Commands') return;",
-    "      if (ev.cancelable) ev.preventDefault();",
-    "      ev.stopPropagation();",
-    "      __dshQuickActionsRender(b);",
-    "    } catch (err) {",
-    "      if (typeof window !== 'undefined') window.__dshQuickActionsError = 'listener:' + (err && err.message ? err.message : String(err));",
-    "    }",
-    "  }, true);",
-    "  try {",
-    "    if (!document.getElementById('dsh-hide-turn-outline')) {",
-    "      var st = document.createElement('style');",
-    "      st.id = 'dsh-hide-turn-outline';",
-    "      st.textContent = 'nav[aria-label=\"轮次导航\"],nav[style*=\"--turn-natural-height\"]{display:none!important}';",
-    "      (document.head || document.documentElement).appendChild(st);",
-    "    }",
-    "  } catch (err2) { /* ignore */ }",
-    "  try {",
-    "    if (!document.getElementById('dsh-tools-order-pin')) {",
-    "      var st2 = document.createElement('style');",
-    "      st2.id = 'dsh-tools-order-pin';",
-    "      st2.textContent = '[data-composer-card] [class*=\"_tools\"] > [class*=\"_modes\"]{order:2 !important}';",
-    "      (document.head || document.documentElement).appendChild(st2);",
-    "    }",
-    "  } catch (err3) { /* ignore */ }",
-    "}",
-    ""
-  ].join('\n')
-
-  const patchFile = (p, label) => {
-    // [U] 版本门控:只对 dsh-client-ui-conversation 0.1.2-alpha.5 上游 bundle 生效
-    const pkgPath = path.join(path.dirname(p), '..', 'package.json')
-    let pkgVer = '?'
-    if (fs.existsSync(pkgPath)) {
-      try { pkgVer = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version } catch (e) { /* ignore */ }
-    }
-    if (pkgVer !== '0.1.2-alpha.5') return { file: label, version: pkgVer, ok: true, skipped: true }
-    const { rep, failures } = makeCtx(label)
-    const current = fs.readFileSync(p, 'utf8')
-    const INPUTBAR_ANCHOR = "const InputBar = (0, react.memo)(function InputBar({"
-    if (current.includes(LISTENER_MARK)) {
-      const needsV7 = !current.includes(V7_MARK)
-      const needsV8 = !current.includes(V8_MARK)
-      const needsV9 = !current.includes(V9_MARK)
-      if (current.includes(V6_MARK) && !needsV7 && !needsV8 && !needsV9) return { file: label, version: pkgVer, ok: true, already: true }
-      let c2 = current
-      if (!current.includes(V5_MARK)) {
-        if (current.includes(V4_MARK)) {
-          // v4 → v5:移除 § 技能行 + SVG 回形针 + 圆角滑过位移交互
-          c2 = rep(c2, V4_SECTION_OLD, "trigger: '/' }", 1, 'v5-remove-section')
-          c2 = rep(c2, V4_ATTACH_OLD, V5_ATTACH_NEW, 1, 'v5-attach-icon')
-          c2 = rep(c2, V4_ROWCSS_OLD, V5_ROWCSS_NEW, 1, 'v5-row-css')
-          c2 = rep(c2, V4_HOVER_NEW, V5_HOVER_NEW, 1, 'v5-hover')
-          c2 = rep(c2, V4_LEAVE_OLD, V5_LEAVE_NEW, 1, 'v5-leave')
-        } else {
-          // v3 → v4 主题自适应升级:定点替换三处写死深色的样式行为动态调色板
-          c2 = rep(c2, V3_CSSTEXT_OLD, PALETTE_LINES + V4_CSSTEXT_NEW, 1, 'v4-palette')
-          c2 = rep(c2, V3_INNERHTML_OLD, V4_INNERHTML_NEW, 1, 'v4-icon-color')
-          c2 = rep(c2, V3_HOVER_OLD, V4_HOVER_NEW, 1, 'v4-hover')
-        }
-      }
-      // v6(含 v5/v4/v3 直升):轮次导航隐藏样式注入
-      if (!current.includes(V6_MARK)) c2 = rep(c2, V5_LISTENER_TAIL_OLD, V6_LISTENER_TAIL_NEW, 1, 'v6-turn-outline-hide')
-      // v7(含 v6/v5/v4/v3 直升):附件行走自建选择器 + paste 通道;@ / 行走 paste 通道
-      if (needsV7) {
-        c2 = rep(c2, V2_SIG, HELPERS_SOURCE + V2_SIG, 1, 'v7-helpers')
-        c2 = rep(c2, V7_CLICK_OLD, V7_CLICK_NEW, 1, 'v7-click')
-      }
-      // v8(直升):工具行排序钉收编(不依赖 dsh-file-drop 插件在册)
-      if (needsV8) c2 = rep(c2, V8_TAIL_OLD, V8_TAIL_NEW, 1, 'v8-order-pin')
-      // v9(直升):触发字符词边界前置 —— 仅升级已注入 v7 旧 helper 的包;pristine v7
-      // 注入的 HELPERS_SOURCE 已自带 v9(含 V9_MARK),此时 rep 必落空,按 needsV7 短路。
-      if (needsV9 && !needsV7) c2 = rep(c2, V9_TYPE_OLD, V9_TYPE_NEW, 1, 'v9-trigger-boundary')
-      if (failures.length) return { file: label, version: pkgVer, ok: false, failures: [...failures] }
-      fs.writeFileSync(p, c2, 'utf8')
-      return { file: label, version: pkgVer, ok: true, already: false }
-    }
-    let c = current
-    if (current.includes(V2_SIG)) {
-      // 已有 v2 渲染器:v3 只需补捕获监听器(在 InputBar 声明前插入),再直升 v7
-      c = rep(c, INPUTBAR_ANCHOR, LISTENER_SOURCE + INPUTBAR_ANCHOR, 1, 'v3-listener')
-      c = rep(c, V2_SIG, HELPERS_SOURCE + V2_SIG, 1, 'v7-helpers')
-      c = rep(c, V7_CLICK_OLD, V7_CLICK_NEW, 1, 'v7-click')
-      if (failures.length) return { file: label, version: pkgVer, ok: false, failures: [...failures] }
-      fs.writeFileSync(p, c, 'utf8')
-      return { file: label, version: pkgVer, ok: true, already: false }
-    }
-    if (current.includes(V1_SIG)) {
-      // v1 → v2 升级 + v3 监听器 + v7 通道
-      c = rep(c, 'const __dshQuickActionsRender = function() {', V2_SIG, 1, 'v2-signature')
-      c = rep(c, V1_LOOKUP_FROM, V2_LOOKUP_TO, 1, 'v2-anchor-lookup')
-      c = rep(c, 'const onToggleCommandMenu = () => {', 'const onToggleCommandMenu = (ev) => {', 1, 'v2-click-event')
-      c = rep(c, "__dshQuickActionsRender();", "__dshQuickActionsRender(ev && ev.currentTarget);", 1, 'v2-click-pass')
-      c = rep(c, INPUTBAR_ANCHOR, LISTENER_SOURCE + INPUTBAR_ANCHOR, 1, 'v3-listener')
-      c = rep(c, V2_SIG, HELPERS_SOURCE + V2_SIG, 1, 'v7-helpers')
-      c = rep(c, V7_CLICK_OLD, V7_CLICK_NEW, 1, 'v7-click')
-      if (failures.length) return { file: label, version: pkgVer, ok: false, failures: [...failures] }
-      fs.writeFileSync(p, c, 'utf8')
-      return { file: label, version: pkgVer, ok: true, already: false }
-    }
-    // pristine:整体注入 v7 渲染器 + v3 捕获监听器 + 重写 click
-    c = rep(c, INPUTBAR_ANCHOR, HELPERS_SOURCE + rendererSourceV2 + LISTENER_SOURCE + INPUTBAR_ANCHOR, 1, 'inject-renderer-v3')
-    const ORIGINAL_CLICK = "const onToggleCommandMenu = () => {\n\t\t\t\tif (keyboard !== void 0) toggleCommandMenu?.(keyboard.caretSpan());\n\t\t\t};"
-    const REWRITTEN_CLICK = "const onToggleCommandMenu = (ev) => {\n\t\t\t\t// [dsh-desktop U 段 v3 alpha.5 修复] 渲染改由 document 捕获拦截器触发(React onClick 链路不可靠)\n\t\t\t\tif (typeof __dshQuickActionsRender === 'function' && ev && ev.currentTarget) __dshQuickActionsRender(ev.currentTarget);\n\t\t\t};"
-    c = rep(c, ORIGINAL_CLICK, REWRITTEN_CLICK, 1, 'rewrite-click-v3')
-    if (failures.length) return { file: label, version: pkgVer, ok: false, failures: [...failures] }
-    fs.writeFileSync(p, c, 'utf8')
-    return { file: label, version: pkgVer, ok: true, already: false }
-  }
-  // L: 本地 monorepo 构建产物(若存在;devlink-disabled 时不重打)
-  const localConv = ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-conversation\\lib\\client.js',
-    path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-conversation', 'lib', 'client.js')]
-    .find((f) => fs.existsSync(f))
-  if (localConv && !localConv.includes('devlink-disabled')) {
-    results.push({ ...patchFile(localConv, 'ui-conversation/lib/client.js@L[plus-quick]'), version: 'local' })
-  } else {
-    results.push({ file: 'ui-conversation/lib/client.js@L[plus-quick]', missing: true })
-  }
-  // O: npx 缓存(含 .pnpm 虚拟目录):递归找出所有 dsh-client-ui-conversation/lib/client.js
-  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
-  const seen = new Set()
-  const walkForConv = (dir, depth) => {
-    if (depth > 8 || seen.has(dir)) return
-    seen.add(dir)
-    let entries
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch (e) { return }
-    for (const e of entries) {
-      const full = path.join(dir, e.name)
-      if (e.isDirectory()) walkForConv(full, depth + 1)
-      else if (e.isFile() && e.name === 'client.js') {
-        // 仅关心 dsh-client-ui-conversation/lib/client.js 形态
-        if (full.replace(/\\/g, '/').endsWith('/@deepseek-ai/dsh-client-ui-conversation/lib/client.js')) {
-          const result = patchFile(full, 'ui-conversation/lib/client.js@O[plus-quick]')
-          const ver = result.version || '?'
-          result.version = (full.match(/[\\/]([^\\/]+)[\\/]node_modules[\\/]@deepseek-ai[\\/]dsh-client-ui-conversation/) || [, '?'])[1].slice(0, 8) + ' ' + ver
-          results.push(result)
-        }
-      }
-    }
-  }
-  if (fs.existsSync(npxRoot)) {
-    for (const h of fs.readdirSync(npxRoot)) walkForConv(path.join(npxRoot, h), 0)
-  }
-  if (!results.length) results.push({ file: 'ui-conversation/lib/client.js[plus-quick]', missing: true })
-  return results
-}
-
+// ---- [U] 已于 2026-09-25 拆除退役（原 ui-conversation 自定义快捷面板 v2–v9,502 行）----
+//   判据一:版本门钉死 `pkgVer !== '0.1.2-alpha.5'` 即跳过,而现存三树(0.1.5-rc.3 / 0.1.7-rc.1 /
+//   0.1.7-rc.2)全不匹配 ⇒ 家族不可达(重放日志 4 条「plus-quick 锚点不适配」即此)。
+//   判据二:自定义面板的受众已消失 —— 现役「+」菜单是上游原生菜单,行级语义(附件行摘除/排序钉)
+//   由壳插件承担(见 dsh-desktop/dsh-plugin/lib/client.js 批次135/186)。
+//   恢复:git show c2844f3:dsh-desktop/patches.cjs,或 tmp/patches.pre-cleanup-<ts>.cjs 取回整段。
 // ---- [F] 三视图 entry 收起态平滑化(2026-08-17,问题2) ----
 //       任务看板/SSH/记忆的侧栏 entry 行收起时 label display:none 硬切 + padding 瞬变,
 //       与原生侧栏项的渐变收起节奏不一致。替换为 max-width/opacity 收缩过渡(可插值),
@@ -2173,9 +1734,16 @@ function patchDshmarket() {
   ].join('\n')
 
   const apply = (c) => {
-    c = rep(c, "const addArgs = force ? ['add', RELEASE_AGE_OVERRIDE, target] : ['add', target];",
-      "const addArgs = ['add', RELEASE_AGE_OVERRIDE, target]; // [dsh-desktop] 恒带放行:默认立即更新,绕过 pnpm fresh-release 等待",
-      1, 'update-force-always')
+    // [批次189b 2026-10-06] 1.66.x 重构安装流(inPlaceUpdate/releaseAgeBypass,force 为原生入参,
+    // 默认等待系上游刻意发布策略,见其注释 #732/#65/#339):旧「恒带放行」锚失配且与新策略相抵
+    // ⇒ 内容门让位(新流在场即跳过);/dsh-market/preview 路由([H] 服务半)不受影响继续注入。
+    if (!c.includes('inPlaceUpdate')) {
+      c = rep(c, "const addArgs = force ? ['add', RELEASE_AGE_OVERRIDE, target] : ['add', target];",
+        "const addArgs = ['add', RELEASE_AGE_OVERRIDE, target]; // [dsh-desktop] 恒带放行:默认立即更新,绕过 pnpm fresh-release 等待",
+        1, 'update-force-always')
+    } else {
+      console.log('[dshmarket] update-force-always retired :: 上游 1.66.x 重构安装流+force 入口,恒带放行让位(批次189b)')
+    }
     // [H] preview register 注入在 install register 之前
     c = rep(c, "        host.webServer.register({\n            kind: 'exact',\n            path: '/dsh-market/install',",
       previewBlock + "\n        host.webServer.register({\n            kind: 'exact',\n            path: '/dsh-market/install',",
@@ -2365,7 +1933,10 @@ function patchSettingsInfoArch() {
       const { rex, failures } = makeCtx('mnemon')
       const ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, 'dsh-mnemon', 'package.json'), 'utf8')).version
       const apply = (c) => {
-        c = rex(c, /id: "mnemon",(\s*\n\s*)order: 20,/, 'id: "mnemon",$1order: 13,', 1, 'mnemon-order')
+        // [批次189] mnemon 0.5.24 起 order 20→30 且为双注册块:钉值放宽为任意值,命中块全部归一 13
+        const __mnemonOrderRe = /id: "mnemon",(\s*\n\s*)order: \d+,/g
+        if (!__mnemonOrderRe.test(c)) failures.push('[mnemon] mnemon-order: id:"mnemon" 的 order 行未识别')
+        else c = c.replace(__mnemonOrderRe, 'id: "mnemon",$1order: 13,')
         // [C1b 2026-09-03] mnemon 0.4.6 上游去掉 [data-dsh-frame] 前缀(仅 [data-sidebar-collapsed])
         // → 旧锚点全量失配 FAIL(09-03 插件自动更新当日暴露)。发现与替换均双形态兼容,
         // 替换文本按命中形态生成同款折叠选择器(0.4.5 带框架前缀/0.4.6 裸 collapsed)。
@@ -2474,9 +2045,19 @@ function patchSettingsInfoArch() {
       // [H] state:compat 预检报告(锚 confirming state 定义)
       c = rep(c, '\t\t\tconst [confirming, setConfirming] = (0, react.useState)(null);',
         '\t\t\tconst [confirming, setConfirming] = (0, react.useState)(null);\n\t\t\tconst [compat, setCompat] = (0, react.useState)(null);', 1, 'compat-state')
-      // [H] doInstall 开头清 compat(跨安装残留)
-      c = rep(c, '\t\t\tconst doInstall = (0, react.useCallback)((plugin) => {\n\t\t\t\tsetBuildsSkipped(null);',
-        '\t\t\tconst doInstall = (0, react.useCallback)((plugin) => {\n\t\t\t\tsetCompat(null);\n\t\t\t\tsetBuildsSkipped(null);', 1, 'compat-reset')
+      // [H] doInstall 开头清 compat(跨安装残留);[批次189b] 1.66.x doInstall 签名带 (plugin, force, version)
+      // ⇒ 双形态按在场择一(锚点字节取自 1.66.9 活体探针),两代均缺席时记 FAIL。
+      {
+        const __compatResetForms = [
+          ['\t\t\tconst doInstall = (0, react.useCallback)((plugin) => {\n\t\t\t\tsetBuildsSkipped(null);',
+           '\t\t\tconst doInstall = (0, react.useCallback)((plugin) => {\n\t\t\t\tsetCompat(null);\n\t\t\t\tsetBuildsSkipped(null);'],
+          ['\t\t\tconst doInstall = (0, react.useCallback)((plugin, force = false, version) => {\n\t\t\t\tsetBuildsSkipped(null);',
+           '\t\t\tconst doInstall = (0, react.useCallback)((plugin, force = false, version) => {\n\t\t\t\tsetCompat(null);\n\t\t\t\tsetBuildsSkipped(null);'],
+        ]
+        const __compatResetHit = __compatResetForms.find(([f]) => c.includes(f))
+        if (!__compatResetHit) failures.push('[dshmarket] compat-reset: doInstall 形态未识别(1.6x 两代均不在场)')
+        else c = rep(c, __compatResetHit[0], __compatResetHit[1], 1, 'compat-reset')
+      }
       // [H] 安装按钮:先开 Modal(不阻塞),异步拉预检报告填充警告块
       c = rep(c, '\t\t\t\t\t\t\t\t\tonClick: () => setConfirming(p),',
         '\t\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\t\tsetCompat(null);\n\t\t\t\t\t\t\t\t\t\tsetConfirming(p);\n\t\t\t\t\t\t\t\t\t\tfetch("/dsh-market/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: p.url }) }).then((r) => r.json()).then((b) => { if (b && b.ok) setCompat(b); }).catch(() => {});\n\t\t\t\t\t\t\t\t\t},', 2, 'compat-fetch')
@@ -3067,6 +2648,30 @@ function patchVisionRouterPortal() {
 //       section 由 dsh-plugin 注册);already 指纹加 sub:archive-manager,旧 v7 补丁态
 //       经 bak 恢复重打升级。
 //       重放器语义:rewriteFresh(哨兵 + 上游漂移刷新);锚点不适配的旧缓存安全跳过不判失败。
+// [rc.1 2026-09-24] 寻址修正:0.1.7 起的 pnpm seed 树里 dsh-client-ui-settings-general 只出现在
+//   「.pnpm/node_modules 提升层」(软链,realpath 指虚拟仓实体)与「.pnpm/@deepseek-ai+dsh-client-ui-_<40hex>」
+//   虚拟仓段;顶层 node_modules 无此包 —— 各设置页家族原 roots 只扫顶层,rc.1 上整族静默缺席
+//   (设置页退回上游布局:表情包/追问/备份与迁移/归档会话管理/Vision Router 五个入口复现)。
+//   统一走本助手,五个家族共用一份寻址。
+function settingsGeneralRoots() {
+  const roots = []
+  const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxCache)) {
+    for (const h of fs.readdirSync(npxCache)) {
+      const nm = path.join(npxCache, h, 'node_modules')
+      roots.push(path.join(nm, '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+      roots.push(path.join(nm, '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+      const pnpmDir = path.join(nm, '.pnpm')
+      if (!fs.existsSync(pnpmDir)) continue
+      for (const d of fs.readdirSync(pnpmDir)) {
+        if (!d.startsWith('@deepseek-ai+dsh-client-ui-')) continue
+        roots.push(path.join(pnpmDir, d, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+      }
+    }
+  }
+  roots.push(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+  return roots
+}
 function patchSettingsNest() {
   const results = []
 
@@ -3115,10 +2720,13 @@ function patchSettingsNest() {
   }
 
   // K2a/b/c 通用设置核心包
+  // 子页键表(三种字典形态共用同一份,避免三处漂移)
+  const SUB_ZH = '\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观、提示音、文件放入等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。"'
+  const SUB_EN = '\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance, sounds, file drop and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good."'
   const ZH_OLD = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置"\n\t\t};'
-  const ZH_NEW = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观、提示音、文件放入等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。"\n\t\t};'
+  const ZH_NEW = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n' + SUB_ZH + '\n\t\t};'
   const EN_OLD = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General"\n\t\t};'
-  const EN_NEW = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance, sounds, file drop and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good."\n\t\t};'
+  const EN_NEW = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n' + SUB_EN + '\n\t\t};'
   // [K2c v7 2026-09-03] 0.1.2-alpha.5 字典形态:zh/en 字典在 "general.nav" 之后新增
   // connection.* 六键,旧锚点("general.nav" 紧贴字典收尾 })失配 → 整文件被判
   // 「锚点不适配,安全跳过」(skipped:true 静默放行) → HIDE_TOP 从未生效 →
@@ -3126,9 +2734,15 @@ function patchSettingsNest() {
   // 处置:新增 alpha 字典锚点变体,以 "connection.error" 行为右边界,sub 键插入其间。
   // 旧版(≤0.1.1,general.nav 收尾)仍走 legacy 变体,双形态共存。
   const ZH_OLD2 = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"connection.error": "连接异常",'
-  const ZH_NEW2 = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n\t\t\t"general.page.desc": "常规偏好与系统级入口。",\n\t\t\t"sub.basics": "基础设置",\n\t\t\t"sub.basics.desc": "语言、外观、提示音、文件放入等常规偏好。",\n\t\t\t"sub.experts": "专家",\n\t\t\t"sub.experts.desc": "查看并开关 The Agency 的领域专家。",\n\t\t\t"sub.backup": "备份与迁移",\n\t\t\t"sub.backup.desc": "备份、恢复、导入导出与远程同步 DSH 配置。",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "识图路由、视觉链路与自动识图模型组。",\n\t\t\t"sub.archive": "归档会话管理",\n\t\t\t"sub.archive.desc": "查看已归档会话,恢复到侧栏或彻底删除。",\n\t\t\t"connection.error": "连接异常",'
+  const ZH_NEW2 = '\t\t\t"openDocument": "打开配置文件",\n\t\t\t"openDocument.error": "无法打开配置文件",\n\t\t\t"general.nav": "通用设置",\n' + SUB_ZH + ',\n\t\t\t"connection.error": "连接异常",'
   const EN_OLD2 = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"connection.error": "Disconnected",'
-  const EN_NEW2 = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n\t\t\t"general.page.desc": "General preferences and system entries.",\n\t\t\t"sub.basics": "Basics",\n\t\t\t"sub.basics.desc": "Language, appearance, sounds, file drop and other general preferences.",\n\t\t\t"sub.experts": "Experts",\n\t\t\t"sub.experts.desc": "Toggle The Agency domain experts.",\n\t\t\t"sub.backup": "Backup & Migration",\n\t\t\t"sub.backup.desc": "Back up, restore, import and sync the DSH configuration.",\n\t\t\t"sub.vision": "Vision Router",\n\t\t\t"sub.vision.desc": "Vision routing, chains and auto-vision model groups.",\n\t\t\t"sub.archive": "Archived Sessions",\n\t\t\t"sub.archive.desc": "Browse archived sessions, restore them to the sidebar, or delete them for good.",\n\t\t\t"connection.error": "Disconnected",'
+  const EN_NEW2 = '\t\t\t"openDocument": "Open configuration file",\n\t\t\t"openDocument.error": "Could not open configuration file",\n\t\t\t"general.nav": "General",\n' + SUB_EN + ',\n\t\t\t"connection.error": "Disconnected",'
+  // [rc.1 2026-09-24] 0.1.7 字典形态:general.nav 之后紧跟 general.currentVersion/developerTools.*
+  //   (rc.3 的 connection.* 被这些新键推到后面),右边界改取 currentVersion 行;sub 键插其间。
+  const ZH_OLD3 = '\t\t\t"general.nav": "通用设置",\n\t\t\t"general.currentVersion": "当前版本：{version}",'
+  const ZH_NEW3 = '\t\t\t"general.nav": "通用设置",\n' + SUB_ZH + ',\n\t\t\t"general.currentVersion": "当前版本：{version}",'
+  const EN_OLD3 = '\t\t\t"general.nav": "General",\n\t\t\t"general.currentVersion": "Current version: {version}",'
+  const EN_NEW3 = '\t\t\t"general.nav": "General",\n' + SUB_EN + ',\n\t\t\t"general.currentVersion": "Current version: {version}",'
   const GS_OLD = 'function GeneralSection({ renderSlot }) {\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: renderSlot("settings.general.item", {})\n\t\t\t});\n\t\t}'
   const GS_NEW = 'function GeneralSection({ renderSlot, select, t, show }) {\n\t\t\t// [K2c v6 2026-09-01] 通用设置双形态:show==="basics" 渲染原通用设置内容(基础设置子页);否则渲染二级入口卡\n\t\t\tif (show === "basics") {\n\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\t\tchildren: renderSlot("settings.general.item", {})\n\t\t\t\t});\n\t\t\t}\n\t\t\tconst entries = select === void 0 || t === void 0 ? [] : [\n\t\t\t\t["sub:basics", t("sub.basics"), t("sub.basics.desc")],\n\t\t\t\t["sub:agency-agents", t("sub.experts"), t("sub.experts.desc")],\n\t\t\t\t["sub:config-manager", t("sub.backup"), t("sub.backup.desc")],\n\t\t\t\t["sub:vision-router", t("sub.vision"), t("sub.vision.desc")],\n\t\t\t\t["sub:archive-manager", t("sub.archive"), t("sub.archive.desc")]\n\t\t\t];\n\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenHead",\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadTitle",\n\t\t\t\t\t\tchildren: t("general.nav")\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\tclassName: "sGenHeadDesc",\n\t\t\t\t\t\tchildren: t("general.page.desc")\n\t\t\t\t\t})]\n\t\t\t\t}), (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: "sGenSubGrid",\n\t\t\t\t\tchildren: entries.map(([id, label, desc]) => (0, react_jsx_runtime.jsx)("button", {\n\t\t\t\t\t\ttype: "button",\n\t\t\t\t\t\tclassName: "sGenSubCard",\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tselect(id);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardTitle",\n\t\t\t\t\t\t\tchildren: label\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardDesc",\n\t\t\t\t\t\t\tchildren: desc\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n\t\t\t\t\t\t\tclassName: "sGenSubCardGo",\n\t\t\t\t\t\t\tchildren: "›"\n\t\t\t\t\t\t})]\n\t\t\t\t\t}, id))\n\t\t\t\t})]\n\t\t\t});\n\t\t}'
   // [K2d 2026-08-28] 用户需求:导航里四个二级子页行整体去除——通用页入口卡为唯一入口。
@@ -3156,15 +2770,8 @@ function patchSettingsNest() {
   const SEL_OLD = 'renderSlot("settings.section", { close: onClose }, { only: active })'
   const SEL_NEW = 'renderSlot("settings.section", { close: onClose, select: onSelect, show: active === "sub:basics" ? "basics" : void 0 }, { only: active === "sub:basics" ? "general" : active.indexOf("sub:") === 0 ? active.slice(4) : active })'
 
-  const roots = []
-  const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
-  if (fs.existsSync(npxCache)) {
-    for (const h of fs.readdirSync(npxCache)) {
-      roots.push(path.join(npxCache, h, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
-    }
-  }
-  // devlink 层(本地仓 junction):local 轨 / 仓库构建产物走这里
-  roots.push(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+  // 顶层 + .pnpm 提升层 + 虚拟仓段 + devlink(local 轨 / 仓库构建产物)统一寻址
+  const roots = settingsGeneralRoots()
 
   for (const p of roots) {
     if (!fs.existsSync(p)) continue
@@ -3183,7 +2790,8 @@ function patchSettingsNest() {
     // 两者都失配才落入旧修订/跳过分支。
     const dictLegacy = head.includes(ZH_OLD) && head.includes(GS_OLD)
     const dictAlpha = head.includes(ZH_OLD2) && head.includes(GS_OLD)
-    if (!dictLegacy && !dictAlpha) {
+    const dictRc1 = head.includes(ZH_OLD3) && head.includes(GS_OLD)
+    if (!dictLegacy && !dictAlpha && !dictRc1) {
       if (head.includes('sGenSubGrid') && head.includes('sub:basics') && head.includes('sub:archive-manager')) {
         results.push({ file: label, ok: true, already: true, version: ver })
         continue
@@ -3211,8 +2819,10 @@ function patchSettingsNest() {
       // 闭包值恒 false,被 alpha 锚点拒打(zh/en-sub-keys matched 0,FAIL 不写盘)。
       // 同时令 rewriteFresh 上游漂移通道对新漂移内容同样现判形态,自愈更完整。
       const legacyNow = c.includes(ZH_OLD) && c.includes(GS_OLD)
-      c = rep(c, legacyNow ? ZH_OLD : ZH_OLD2, legacyNow ? ZH_NEW : ZH_NEW2, 1, 'zh-sub-keys')
-      c = rep(c, legacyNow ? EN_OLD : EN_OLD2, legacyNow ? EN_NEW : EN_NEW2, 1, 'en-sub-keys')
+      // [rc.1] 形态现判三分:legacy(≤0.1.1) / alpha(0.1.2+ connection.* 相邻) / rc1(0.1.7+ currentVersion 相邻)
+      const rc1Now = !legacyNow && c.includes(ZH_OLD3)
+      c = rep(c, legacyNow ? ZH_OLD : rc1Now ? ZH_OLD3 : ZH_OLD2, legacyNow ? ZH_NEW : rc1Now ? ZH_NEW3 : ZH_NEW2, 1, 'zh-sub-keys')
+      c = rep(c, legacyNow ? EN_OLD : rc1Now ? EN_OLD3 : EN_OLD2, legacyNow ? EN_NEW : rc1Now ? EN_NEW3 : EN_NEW2, 1, 'en-sub-keys')
       c = rep(c, GS_OLD, GS_NEW, 1, 'general-section')
       c = rep(c, ROOTVAR_ANCHOR, CSSNEST_INJECT + ROOTVAR_ANCHOR, 1, 'nest-css')
       c = rep(c, GENREG_OLD, GENREG_NEW, 1, 'general-inject-t')
@@ -3245,14 +2855,7 @@ function patchSettingsNest() {
 function patchGeneralOtherV9() {
   const results = []
   const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
-  const roots = []
-  if (fs.existsSync(npxCache)) {
-    for (const h of fs.readdirSync(npxCache)) {
-      roots.push(path.join(npxCache, h, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
-      roots.push(path.join(npxCache, h, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
-    }
-  }
-  roots.push(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+  const roots = settingsGeneralRoots()
   for (const p of roots) {
     if (!fs.existsSync(p)) continue
     const underNpx = p.startsWith(npxCache)
@@ -3342,6 +2945,162 @@ function patchGeneralOtherV9() {
     results.push({ ...rewriteFresh(p, '.bak-other-v9', apply, failures, null), version: ver })
   }
   return results
+}
+
+// ---- [K13] 设置页导航精简 + 表情包迁入「其它」二级入口(2026-09-23,用户截图需求) ----
+//   需求: ①「追问」顶层入口去除(dsh-sidebar-qa 注册的 settings.section,id=sidebar-qa,
+//         order 30);②「表情包」(dsh-meme 注册的 settings.section,id=memes,order 25)
+//         退出顶层导航,改挂「其它」子页作二级入口。
+//   形态: 在 K12 v9 输出态上增量重打。前置门 = v9 指纹(sub.other + sub:other)在场;
+//         幂等由 K13 指纹(sub.memes + sub:memes)短路 —— 必需而非冗余:同一物理文件经
+//         「.pnpm/node_modules 提升层」与「devlink 层」两条路径各命中一次,无指纹则第二
+//         条路径上锚点全失配。replayAll 排 patchGeneralOtherV9 之后,链序
+//         patchSettingsNest(v8) → GeneralOtherV9 → 本族,上游重写后按序自愈重打。
+//   要点: HIDE_TOP 收 sidebar-qa/memes ⇒ 两者退出左侧导航;CHILD_IDS 收 memes ⇒ 仍生成
+//         隐藏子行 sub:memes(rows 结构是导航高亮 aria-current 与 select 跳转链路的依赖,
+//         与既有 5 个二级子页同款);GeneralSection 的 other 分支拆出独立实现:表情包入口卡
+//         (复用 sGenSubCard 设计语言,单列全宽)+ settings.general.other.item 行。
+//   回退: 摘除 replayAll 注册行,活体从 .bak-k13-nav 基底重放 v8/v9 即回到现状,零中间态。
+const K13_HIDE_TOP_OLD = 'const HIDE_TOP = ["agency-agents", "config-manager", "vision-router", "archive-manager"];'
+const K13_HIDE_TOP_NEW = 'const HIDE_TOP = ["agency-agents", "config-manager", "vision-router", "archive-manager", "sidebar-qa", "memes"];'
+const K13_CHILD_IDS_OLD = 'const CHILD_IDS = ["basics", "agency-agents", "config-manager", "vision-router", "archive-manager", "other"];'
+const K13_CHILD_IDS_NEW = 'const CHILD_IDS = ["basics", "agency-agents", "config-manager", "vision-router", "archive-manager", "other", "memes"];'
+const K13_GS_OLD = '\t\t\tif (show === "basics" || show === "other") { // [K12 v9] 其它子页同走 general 渲染分支\n\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n\t\t\t\t\tclassName: GeneralSection_module_css_default.section,\n\t\t\t\t\tchildren: renderSlot(show === "other" ? "settings.general.other.item" : "settings.general.item", {})\n\t\t\t\t});\n\t\t\t}'
+const K13_GS_NEW = '\t\t\tif (show === "basics") {\n'
+  + '\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n'
+  + '\t\t\t\t\tclassName: GeneralSection_module_css_default.section,\n'
+  + '\t\t\t\t\tchildren: renderSlot("settings.general.item", {})\n'
+  + '\t\t\t\t});\n'
+  + '\t\t\t}\n'
+  + '\t\t\tif (show === "other") {\n'
+  + '\t\t\t\t// [K13] 其它子页:表情包二级入口卡(单列全宽)+ settings.general.other.item 行\n'
+  + '\t\t\t\tconst otherCards = select === void 0 || t === void 0 ? [] : [["sub:memes", t("sub.memes"), t("sub.memes.desc")]];\n'
+  + '\t\t\t\treturn (0, react_jsx_runtime.jsx)("div", {\n'
+  + '\t\t\t\t\tclassName: GeneralSection_module_css_default.section,\n'
+  + '\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("div", {\n'
+  + '\t\t\t\t\t\tclassName: "sGenSubGrid sGenSubGridOne",\n'
+  + '\t\t\t\t\t\tchildren: otherCards.map(([id, label, desc]) => (0, react_jsx_runtime.jsx)("button", {\n'
+  + '\t\t\t\t\t\t\ttype: "button",\n'
+  + '\t\t\t\t\t\t\tclassName: "sGenSubCard",\n'
+  + '\t\t\t\t\t\t\tonClick: () => {\n'
+  + '\t\t\t\t\t\t\t\tselect(id);\n'
+  + '\t\t\t\t\t\t\t},\n'
+  + '\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {\n'
+  + '\t\t\t\t\t\t\t\tclassName: "sGenSubCardTitle",\n'
+  + '\t\t\t\t\t\t\t\tchildren: label\n'
+  + '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n'
+  + '\t\t\t\t\t\t\t\tclassName: "sGenSubCardDesc",\n'
+  + '\t\t\t\t\t\t\t\tchildren: desc\n'
+  + '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("span", {\n'
+  + '\t\t\t\t\t\t\t\tclassName: "sGenSubCardGo",\n'
+  + '\t\t\t\t\t\t\t\tchildren: "›"\n'
+  + '\t\t\t\t\t\t\t})]\n'
+  + '\t\t\t\t\t\t}, id))\n'
+  + '\t\t\t\t\t}), renderSlot("settings.general.other.item", {})]\n'
+  + '\t\t\t\t});\n'
+  + '\t\t\t}'
+const K13_ZH_OLD = '"sub.other.desc": "提示音、文件放入等其它偏好。",'
+const K13_ZH_NEW = '"sub.other.desc": "提示音、文件放入等其它偏好。",\n\t\t\t"sub.memes": "表情包",\n\t\t\t"sub.memes.desc": "表情包图库、扫描目录与陪伴提示词。",'
+const K13_EN_OLD = '"sub.other.desc": "Notification sound, file drop and other preferences.",'
+const K13_EN_NEW = '"sub.other.desc": "Notification sound, file drop and other preferences.",\n\t\t\t"sub.memes": "Memes",\n\t\t\t"sub.memes.desc": "Meme library, scan folders and companion prompts.",'
+const K13_CSS_OLD = '.sGenSubCard:hover .sGenSubCardGo{transform:translateX(3px);color:#d97757}@media (prefers-reduced-motion:reduce){'
+const K13_CSS_NEW = '.sGenSubCard:hover .sGenSubCardGo{transform:translateX(3px);color:#d97757}.sGenSubGridOne{grid-template-columns:1fr;margin:12px 0 6px}@media (prefers-reduced-motion:reduce){'
+
+// 参数 rootsOverride 仅供干跑(指向沙箱副本);缺省走生产 roots 扫描。
+function patchSettingsNavK13(rootsOverride) {
+  const results = []
+  const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
+  const roots = rootsOverride === undefined ? settingsGeneralRoots() : rootsOverride
+  for (const p of roots) {
+    if (!fs.existsSync(p)) continue
+    const layout = p.includes(path.sep + '.pnpm' + path.sep + 'node_modules' + path.sep) ? 'hoist'
+      : p.includes(path.sep + '.pnpm' + path.sep) ? 'virtual'
+      : p.includes(path.sep + 'profiles' + path.sep) ? 'devlink' : 'flat'
+    const underNpx = p.startsWith(npxCache)
+    const rel = underNpx ? p.slice(npxCache.length + 1) : ''
+    const seedTag = rel.length > 0 && rel.indexOf(path.sep) > 0 ? rel.slice(0, rel.indexOf(path.sep)) : 'profiles'
+    const label = 'general-k13-nav/' + seedTag + '/' + layout + '/client.js'
+    const head = fs.readFileSync(p, 'utf8')
+    const headN = head.replace(/\r\n/g, '\n')
+    const pkgDir = path.dirname(path.dirname(p))
+    const ver = (() => { try { return JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')).version } catch { return '?' } })()
+    if (headN.includes('sub.memes') && headN.includes('sub:memes')) {
+      results.push({ file: label, ok: true, already: true, version: ver })
+      continue
+    }
+    // 锚点适配门:本族只打「K12 v9 输出态且六个锚点逐字在场」的副本。旧 seed 变体
+    // (rc.6/rc.7/rc.8 等)的 GeneralSection 与字典字节与 rc.3 不同 → 不计失败,直接跳过
+    // (与 patchSettingsNest「锚点不适配,安全跳过」同款纪律);真正的失配只可能出现在
+    // 「自称 v9 却非本链产物」的畸形态,由 apply 兜底 FAIL 保盘。
+    const anchorsPresent = [K13_HIDE_TOP_OLD, K13_CHILD_IDS_OLD, K13_GS_OLD, K13_ZH_OLD, K13_EN_OLD, K13_CSS_OLD].every((a) => headN.includes(a))
+    if (!anchorsPresent) {
+      results.push({ file: label, ok: true, skipped: true, version: ver, reason: '锚点不适配(K12 v9 变体/非本链产物)' })
+      continue
+    }
+    const { rep, failures } = makeCtx(label)
+    const apply = (c) => {
+      // 1) 顶层导航隐藏:追问整条剔除 + 表情包转由「其它」子页承接
+      c = rep(c, K13_HIDE_TOP_OLD, K13_HIDE_TOP_NEW, 1, 'k13-hide-top')
+      // 2) 隐藏子行:memes 仍需在 rows 中占位(导航高亮与 select 跳转链路依赖)
+      c = rep(c, K13_CHILD_IDS_OLD, K13_CHILD_IDS_NEW, 1, 'k13-child-ids')
+      // 3) GeneralSection:basics/other 拆双分支,other 追加表情包入口卡
+      c = rep(c, K13_GS_OLD, K13_GS_NEW, 1, 'k13-other-branch')
+      // 4) 字典:zh/en 同步补 sub.memes 双键(键集保持 zh/en 对齐)
+      c = rep(c, K13_ZH_OLD, K13_ZH_NEW, 1, 'k13-zh-memes-keys')
+      c = rep(c, K13_EN_OLD, K13_EN_NEW, 1, 'k13-en-memes-keys')
+      // 5) CSS:单列入口卡容器(复用 sGenSubCard;置于 @media 前 ⇒ 源码序晚于 sGenSubGrid,同权重即覆盖)
+      c = rep(c, K13_CSS_OLD, K13_CSS_NEW, 1, 'k13-other-css')
+      return c
+    }
+    results.push({ ...rewriteFresh(p, '.bak-k13-nav', apply, failures, null), version: ver })
+  }
+  return results
+}
+
+// ---- [K14] 表情包弹层改「面板内绝对定位」(2026-09-23,用户实拍报告) ----
+//   症状(用户 2026-09-23 实拍,桌面壳 1400x900 @DPR1.5): 从「通用设置 → 其它 → 表情包」
+//   进入后,表情包各弹窗的遮罩只盖住内容列、左侧导航不压暗,弹窗位置/尺寸与预期不符;
+//   同一 bundle 在本机 ego 浏览器(Chromium ~140)正常、在桌面壳(Electron 33 =
+//   Chromium 130)异常 —— 即「同一 CSS、两个引擎两种结果」。
+//   定位: 遮罩是 `.meme-modal-mask{position:fixed;inset:0}`,而 fixed 的包含块会被任何带
+//   transform / filter / backdrop-filter / contain(paint) / content-visibility 的祖先
+//   截获;两个引擎对设置面板祖先链的判定不同 ⇒ 遮罩落到不同的盒子上。
+//   实测证据(用户截图像素扫描): 遮罩横向 483..1898 恰等于内容列盒(面板 165..1934 减去
+//   .options 左右各 24px 内边距),弹窗中心 795 = 内容列中心,而视口中心是 700 ⇒ 遮罩确实
+//   未按视口定位。本文件既有 [K] portal 段记录过同源故障(dsh-vision-complete 图片灯箱被
+//   祖先 contain(paint) 困在单条消息盒内),此处采用同类思路但更省事:
+//   修法: 遮罩改 position:absolute;inset:0 —— absolute 只认「最近的已定位祖先」,
+//         而 .VOzbGW_panel 在核心 CSS 里恒为 position:relative(_panel{...position:relative;
+//         overflow:hidden}),故两个引擎结果必然一致;遮罩正好覆盖设置面板并随面板圆角裁切
+//         (标准模态观感),彻底不依赖引擎的 fixed 语义。另给 .meme-modal 加 max-height
+//         约束,防高弹窗在面板内被裁。
+//   面: dsh-meme(市场包,实体目录非 link)。锚点: CSS 字符串数组两行,各唯一。
+//   回退: 摘除 replayAll 注册行,从 .bak-k14-modal 基底重放即回现状,零中间态。
+const K14_MARK = '/*dsh-local-patch:k14-modal*/'
+const K14_MASK_OLD = "'.meme-modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}',"
+const K14_MASK_NEW = "'.meme-modal-mask{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;overflow:auto}',"
+const K14_MODAL_OLD = "'.meme-modal{background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:12px;padding:16px;width:340px;max-width:100%;box-shadow:0 10px 36px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:10px}',"
+const K14_MODAL_NEW = "'.meme-modal{background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:12px;padding:16px;width:340px;max-width:100%;box-shadow:0 10px 36px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:10px;max-height:calc(100% - 8px)}',"
+
+function patchMemeModalLayer(target) {
+  const p = target ?? path.join(PLUGINS, 'dsh-meme', 'client.js')
+  if (!fs.existsSync(p)) return [{ file: 'dsh-meme/client.js', missing: true }]
+  const ver = (() => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(p), 'package.json'), 'utf8')).version } catch { return '?' } })()
+  const head = fs.readFileSync(p, 'utf8')
+  if (head.includes(K14_MASK_NEW)) {
+    // 已是「面板内绝对定位」形态(本族产物,或上游自行改版):幂等短路
+    return [{ file: 'dsh-meme/client.js', ok: true, already: true, version: ver }]
+  }
+  if (!head.includes(K14_MASK_OLD)) {
+    return [{ file: 'dsh-meme/client.js', ok: true, skipped: true, reason: '遮罩锚点不在场(上游改版?),留痕待人工研判', version: ver }]
+  }
+  const { rep, failures } = makeCtx('dsh-meme/client.js')
+  const apply = (c) => {
+    c = rep(c, K14_MASK_OLD, K14_MASK_NEW, 1, 'k14-mask-absolute')
+    c = rep(c, K14_MODAL_OLD, K14_MODAL_NEW, 1, 'k14-modal-maxheight')
+    return c
+  }
+  return [{ ...rewriteFresh(p, '.bak-k14-modal', apply, failures, K14_MARK), version: ver }]
 }
 
 // ---- [L] dsh-mobile-glass SW 导航策略 network-first(2026-08-27,问题111) ----
@@ -3535,7 +3294,7 @@ function patchPluginSettingsItemId() {
     // 旧形态锚点不在场即整组跳过(不打标记不写盘,保持源码 pristine)。
     const srcCur = fs.readFileSync(srcTsx, 'utf8')
     if (!srcCur.includes('snapshot => snapshot.chat?.nodes.values() ?? snapshot.nodes')) {
-      results.push({ file: 'dsh-turn-rewind/src/client/index.tsx', version: verSr, ok: true, skipped: true })
+      results.push({ file: 'dsh-turn-rewind/src/client/index.tsx', version: verSr, ok: true, superseded: true, reason: '上游 src 已自带 useChat 双通道修复' })
     } else {
     const { rep: reps, failures: fsr } = makeCtx('dsh-turn-rewind/src/client/index.tsx')
     const applySrc = (c) => {
@@ -3613,10 +3372,13 @@ function patchBetterSidebarClockGate() {
       '\n\t\t\t\t\tsetNow(Date.now());\n',
       '\n\t\t\t\t\tif (!document.hidden) setNow(Date.now()); // [dsh-desktop P3/T5] 隐藏期跳过采样\n',
       1, 'now-tick-hidden-gate')
-    c = rep(c,
-      '\n\t\t\t\tconst timer = window.setInterval(() => {\n\t\t\t\t\tload();\n\t\t\t\t}, JOB_POLL_MS);\n',
-      '\n\t\t\t\tconst timer = window.setInterval(() => {\n\t\t\t\t\tif (!document.hidden) load(); // [dsh-desktop P3/T5] 隐藏期跳过轮询\n\t\t\t\t}, JOB_POLL_MS);\n',
-      1, 'job-poll-hidden-gate')
+    // [批次189] 0.24.x 重写后无 JOB_POLL_MS(改 slot.visible retain/release 按可见性启停) → 能力上游已达成,让位跳过
+    if (c.includes('JOB_POLL_MS')) {
+      c = rep(c,
+        '\n\t\t\t\tconst timer = window.setInterval(() => {\n\t\t\t\t\tload();\n\t\t\t\t}, JOB_POLL_MS);\n',
+        '\n\t\t\t\tconst timer = window.setInterval(() => {\n\t\t\t\t\tif (!document.hidden) load(); // [dsh-desktop P3/T5] 隐藏期跳过轮询\n\t\t\t\t}, JOB_POLL_MS);\n',
+        1, 'job-poll-hidden-gate')
+    }
     c = rep(c,
       '\n\t\t\t\tconst timer = window.setInterval(run, intervalMs);\n',
       '\n\t\t\t\tconst timer = window.setInterval(function () { if (!document.hidden) run(); }, intervalMs); // [dsh-desktop P3/T5] 隐藏期跳过轮询\n',
@@ -3636,6 +3398,160 @@ function patchBetterSidebarClockGate() {
     return c
   }
   return [{ ...rewrite(p, '.bak-p3clock', apply, failures), version: ver }]
+}
+
+// ---- [R110] dsh-better-sidebar 原生 tab 注册「半失败」自愈(0.21.1 适配,2026-09-25) ----
+// 症状(用户实报:DSH 0.1.7-rc.2 + 插件 0.21.1):页面右下错误红条 + console 反复
+//   [dsh-better-sidebar] native register files error: sidebarRight: tab type id
+//   "dsh-better-sidebar:files" is already registered
+// 根因(与上游 PR #766 同题同解,产物字节逐位核对一致):
+//   ① 插件 sync() 同时订阅描述符注册表与 sidebar store,而 SidebarStore.notify() 是**内联**执行
+//      listener —— 每次偏好写入/会话切换/状态变更都会**同步**再调一次 sync(一帧多次);
+//   ② 宿主 registry(dsh-client-ui-sidebar-right)的重复守卫是同步 `ids.has(id)`,而 `ids.add(id)`
+//      在注册的 effect 内部 —— register 若在宿主已取走 id 之后抛错,调用方拿不到任何句柄
+//      (live.set 从未执行),该 id 被宿主永久占用;
+//   ③ 此后每次 sync 再对同一 id 调 register → 守卫抛 already registered;而 registerFilesKind /
+//      registerDescriptor 原本在此处整段中断 ⇒ body/title 槽位(sidebar.right.pane.tab[.title],
+//      key=dsh-better-sidebar:<kind>)从未注册 = 该页面会话里内置「文件」页的插件 explorer
+//      面板体不渲染,且每次 store 变更再刷一条红条(错误被插件 fail() 兜住,不崩不白屏)。
+// 修法: 新增 registerOrReuse(call) —— 只吸收消息含 "is already registered" 的拒绝(视为「宿主已
+//   持有该行」复用,返回空 disposer)并**继续**注册槽位;其余异常原样抛出(保留上报可见性)。
+//   两处 tabs.register 调用点各包一层(wrapper 形态:不动调用内联对象的缩进,锚点最稳、diff 最小)。
+// 形态(手册 §2.10): 自实现 MARK 家族。同文件第一家族 = [P3/T5] patchBetterSidebarClockGate
+//   (走 rewrite,.bak-p3clock 基底)——本族不走 rewrite、不折进它的 apply,且 replayAll 排在它**之后**
+//   (它从基底整份重建时会抹掉本族注入,靠注册顺序补回;本族幂等,重放安全)。失配 → 不写盘(全趟原子)。
+// 载体: lib/client.js + lib/client-registry.js(同源双副本,锚点字节一致;问题109 教训)+
+//   src/client/native/index.ts(源码副本同步,便于复建对照;锚点用 repOpt,漂移不连坐 lib 面)。
+// 生效: client 面 —— 产物 mtime/size/ctime 变化 → 宿主重算 ?rev(client-hmr 会热换该 entry);
+//   保险做法 = 刷新页面(改产物后宿主旧 rev 可能仍被浏览器缓存,30801/restart 亦解)。
+// 回退: 摘除 replayAll 注册行 + 把 .bak-r110 还原回对应产物;上游发版后探针命中本族自动退役。
+// 验证: diag/r110-verify.cjs(S1 临时副本 apply+语法+语义幂等) / diag/r110-apply.cjs(S2 活体落笔)。
+const BSR_HELD_ID_MARK = '/*dsh-local-patch:bsr-held-id*/'
+/** 上游已自带同款吸收(PR #766 发版)的探针:命中即退役本族。 */
+const BSR_HELD_ID_UPSTREAM = ['isAlreadyRegisteredError', 'registerOrReuse']
+const BSR_HELD_ID_HELPER = {
+  js: [
+    '\t\t/**',
+    '\t\t* Whether the host registry refused a registration because the id is taken.',
+    '\t\t*',
+    '\t\t* [R110] 宿主守卫是同步 ids.has(id)、而 ids.add(id) 在注册的 effect 内部 —— register 在宿主',
+    '\t\t* 取走 id 之后抛错时,调用方拿不到句柄,该 id 被永久占用;插件 sync() 又被 sidebar store 内联',
+    '\t\t* 重入,必然在下一帧把这种半失败复现成 already registered。命中即视为「宿主已持有该行」复用,',
+    '\t\t* 并继续注册 body/title 槽位(上游 PR #766 同语义;宿主未导出错误类,按消息判据是唯一把手)。',
+    '\t\t* @param call - the registration to perform.',
+    '\t\t* @returns the host disposer, or a no-op when the row is already held.',
+    '\t\t*/',
+    '\t\tfunction registerOrReuse(call) {',
+    '\t\t\ttry {',
+    '\t\t\t\treturn call();',
+    '\t\t\t} catch (error) {',
+    '\t\t\t\tconst message = error instanceof Error ? error.message : String(error);',
+    '\t\t\t\tif (!message.includes("is already registered")) throw error;',
+    '\t\t\t\treturn () => {};',
+    '\t\t\t}',
+    '\t\t}',
+  ].join('\n'),
+  ts: [
+    '/**',
+    ' * Whether the host registry refused a registration because the id is taken.',
+    ' *',
+    ' * [R110] 宿主守卫是同步 ids.has(id)、而 ids.add(id) 在注册的 effect 内部 —— register 在宿主',
+    ' * 取走 id 之后抛错时,调用方拿不到句柄,该 id 被永久占用;插件 sync() 又被 sidebar store 内联',
+    ' * 重入,必然在下一帧把这种半失败复现成 already registered。命中即视为「宿主已持有该行」复用,',
+    ' * 并继续注册 body/title 槽位(上游 PR #766 同语义;宿主未导出错误类,按消息判据是唯一把手)。',
+    ' * @param call - the registration to perform.',
+    ' * @returns the host disposer, or a no-op when the row is already held.',
+    ' */',
+    'function registerOrReuse(call: () => () => void): () => void {',
+    '  try {',
+    '    return call()',
+    '  } catch (error) {',
+    '    const message = error instanceof Error ? error.message : String(error)',
+    '    if (!message.includes(\'is already registered\')) throw error',
+    '    return () => {}',
+    '  }',
+    '}',
+  ].join('\n'),
+}
+const BSR_HELD_ID_ANCHOR = {
+  js: {
+    helper: '\t\t/** The plugin\'s implementation id for a descriptor (unique across kinds). */\n\t\tfunction nativeId(descriptorId) {',
+    descHead: '\t\t\t\t\tconst disposeType = tabs.register({\n\t\t\t\t\t\tid,\n\t\t\t\t\t\tkind: descriptor.id,',
+    descHeadTo: '\t\t\t\t\tconst disposeType = registerOrReuse(() => tabs.register({\n\t\t\t\t\t\tid,\n\t\t\t\t\t\tkind: descriptor.id,',
+    descTail: '\t\t\t\t\t\t\t...guideIconOf(icon)\n\t\t\t\t\t\t}] }\n\t\t\t\t\t});',
+    descTailTo: '\t\t\t\t\t\t\t...guideIconOf(icon)\n\t\t\t\t\t\t}] }\n\t\t\t\t\t}));',
+    filesHead: '\t\t\t\t\tconst disposeType = tabs.register({\n\t\t\t\t\t\tid,\n\t\t\t\t\t\tkind: FILES_KIND,',
+    filesHeadTo: '\t\t\t\t\tconst disposeType = registerOrReuse(() => tabs.register({\n\t\t\t\t\t\tid,\n\t\t\t\t\t\tkind: FILES_KIND,',
+    filesTail: '\t\t\t\t\t\t\t...guideIconOf(editor?.icon)\n\t\t\t\t\t\t}]\n\t\t\t\t\t});',
+    filesTailTo: '\t\t\t\t\t\t\t...guideIconOf(editor?.icon)\n\t\t\t\t\t\t}]\n\t\t\t\t\t}));',
+  },
+  ts: {
+    helper: '/** The plugin\'s implementation id for a descriptor (unique across kinds). */\nfunction nativeId(descriptorId: string): string {',
+    descHead: '      const disposeType = tabs.register({\n        id,\n        kind: descriptor.id,',
+    descHeadTo: '      const disposeType = registerOrReuse(() => tabs.register({\n        id,\n        kind: descriptor.id,',
+    descTail: '              ...guideIconOf(icon),\n            }],\n          }),\n      })',
+    descTailTo: '              ...guideIconOf(icon),\n            }],\n          }),\n      }))',
+    filesHead: '      const disposeType = tabs.register({\n        id,\n        kind: FILES_KIND,',
+    filesHeadTo: '      const disposeType = registerOrReuse(() => tabs.register({\n        id,\n        kind: FILES_KIND,',
+    filesTail: '          ...guideIconOf(editor?.icon),\n        }],\n      })',
+    filesTailTo: '          ...guideIconOf(editor?.icon),\n        }],\n      }))',
+  },
+}
+function patchBetterSidebarHeldId(root) {
+  const dir = root || path.join(PLUGINS, 'dsh-better-sidebar')
+  const results = []
+  if (!fs.existsSync(dir)) return [{ file: 'dsh-better-sidebar(held-id)', missing: true }]
+  let ver = 'unknown'
+  try { ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version } catch (e) { /* ignore */ }
+  const targets = [
+    { f: 'lib/client.js', mode: 'js', strict: true },
+    { f: 'lib/client-registry.js', mode: 'js', strict: true },
+    { f: 'src/client/native/index.ts', mode: 'ts', strict: false },
+  ]
+  for (const t of targets) {
+    const p = path.join(dir, t.f)
+    const FILE = 'dsh-better-sidebar/' + t.f + '(held-id)'
+    if (!fs.existsSync(p)) { results.push({ file: FILE, missing: true }); continue }
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(BSR_HELD_ID_MARK)) { results.push({ file: FILE, version: ver, ok: true, already: true }); continue }
+    if (BSR_HELD_ID_UPSTREAM.some((s) => current.includes(s))) {
+      results.push({ file: FILE, version: ver, ok: true, retired: true, reason: '上游已自带重复 id 吸收(PR #766 已发版),守护退役' })
+      continue
+    }
+    const A = BSR_HELD_ID_ANCHOR[t.mode]
+    const { rep, repOpt, failures, optional } = makeCtx('bsr/' + t.f + '(held-id)')
+    const apply = (c) => {
+      let out = c
+      if (t.strict) {
+        out = rep(out, A.helper, BSR_HELD_ID_HELPER[t.mode] + '\n' + A.helper, 1, 'helper-def')
+        out = rep(out, A.descHead, A.descHeadTo, 1, 'desc-head')
+        out = rep(out, A.descTail, A.descTailTo, 1, 'desc-tail')
+        out = rep(out, A.filesHead, A.filesHeadTo, 1, 'files-head')
+        out = rep(out, A.filesTail, A.filesTailTo, 1, 'files-tail')
+      } else {
+        // 源码副本非运行时面:锚点不全(上游重构过该文件)即整体跳过,绝不落半补丁
+        const before = optional.length
+        out = repOpt(out, A.helper, BSR_HELD_ID_HELPER.ts + '\n' + A.helper, 'helper-def')
+        out = repOpt(out, A.descHead, A.descHeadTo, 'desc-head')
+        out = repOpt(out, A.descTail, A.descTailTo, 'desc-tail')
+        out = repOpt(out, A.filesHead, A.filesHeadTo, 'files-head')
+        out = repOpt(out, A.filesTail, A.filesTailTo, 'files-tail')
+        if (optional.length !== before) return null
+      }
+      return out
+    }
+    const patched = apply(current)
+    if (patched === null) {
+      results.push({ file: FILE, version: ver, ok: true, skipped: true, reason: '源码副本锚点不全(非运行时面),整体跳过;lib 双副本不受影响' })
+      continue
+    }
+    if (failures.length) { results.push({ file: FILE, version: ver, ok: false, failures: [...failures], kept: true }); continue }
+    if (!fs.existsSync(p + '.bak-r110')) fs.writeFileSync(p + '.bak-r110', current, 'utf8')
+    fs.writeFileSync(p, patched + '\n' + BSR_HELD_ID_MARK + '\n', 'utf8')
+    results.push({ file: FILE, version: ver, ok: true, already: false })
+  }
+  if (!results.length) results.push({ file: 'dsh-better-sidebar(held-id)', missing: true })
+  return results
 }
 
 // ---- [P] 新会话无工作区兜底(R68,2026-08-30) ----
@@ -3688,11 +3604,17 @@ function patchNewSessionFallback() {
 //       (WorkspaceBrowser 直用 WorkspacePickFlow 不传该 prop → 侧栏菜单自动不带,
 //       互不干扰),handleSelect 加分支 onClose+startBlankSession。七处锚点两轨各一套
 //       (官方 0.1.1-rc.2 无联合工作区特性,addEntries/签名与本地 rc.5 基座不同形)。
-const NOWS_ICON = '(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderClose16, { size: 16 })'
-function nowsApplyEdits(rep, isLocal, failures) {
-  const ENTRY = '{\n\t\t\t\tid: ADD_NO_WORKSPACE,\n\t\t\t\tlabel: "不选择工作区",\n\t\t\t\ticon: ' + NOWS_ICON + ',\n\t\t\t\tdisabled: flowBusy\n\t\t\t}'
+// 图标名随轨而异:0.1.5 轨是尺寸后缀族(…16),0.1.7 起 primitives 只留 <Name>Regular ——
+// 锚点(FROM)与注入体都必须用在场那一族,否则要么失配、要么插进不存在的组件(React #130)。
+const NOWS_ICONS_LEGACY = { folder: 'IconFolderClose16', plus: 'IconPlusOutline16' }
+const NOWS_ICONS_REGULAR = { folder: 'IconFolderCloseRegular', plus: 'IconPlusOutlineRegular' }
+function nowsPickIcons(text) {
+  return text.includes('IconFolderCloseRegular') ? NOWS_ICONS_REGULAR : NOWS_ICONS_LEGACY
+}
+function nowsApplyEdits(rep, isLocal, failures, icons) {
+  const ENTRY = '{\n\t\t\t\tid: ADD_NO_WORKSPACE,\n\t\t\t\tlabel: "不选择工作区",\n\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.' + icons.folder + ', { size: 16 }),\n\t\t\t\tdisabled: flowBusy\n\t\t\t}'
   const START_BLANK = 'startBlankSession: () => {\n\t\t\t\t\tPromise.resolve(ctx.sessions.create({})).then((created) => {\n\t\t\t\t\t\tconst sessionId = typeof created === "string" ? created : created && created.sessionId;\n\t\t\t\t\t\tif (sessionId) ctx.sessions.open(sessionId);\n\t\t\t\t\t}).catch(() => {});\n\t\t\t\t},'
-  const addWork = '\t\t\t\tid: ADD_WORKSPACE,\n\t\t\t\tlabel: t("menu.addWorkspace"),\n\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, { size: 16 }),\n\t\t\t\tdisabled: flowBusy'
+  const addWork = '\t\t\t\tid: ADD_WORKSPACE,\n\t\t\t\tlabel: t("menu.addWorkspace"),\n\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.' + icons.plus + ', { size: 16 }),\n\t\t\t\tdisabled: flowBusy'
   const edits = [
     // q-const 条目 id 常量(两轨同形)
     ['\t\tconst ADD_WORKSPACE = "::add-workspace";',
@@ -3753,13 +3675,35 @@ function nowsApplyEdits(rep, isLocal, failures) {
 }
 function patchWorkspaceNoPickEntry() {
   const results = []
+  // [MSEL17 同批 2026-09-25] 逐文件施打:家族自有判据 = `::add-no-workspace` 在场。
+  //   此前用 rewrite 的默认哨兵(全文件级 PATCH_MARK),被别家写过 MARK 的副本会误判「已是补丁态」
+  //   —— 0.1.7-rc.1/rc.2 就这样静默缺席了整个 [Q](用户报「未分组无法使用」)。
+  const patchOne = (f, label, isLocal) => {
+    let current
+    try { current = fs.readFileSync(f, 'utf8') } catch (e) { results.push({ file: label, ok: false, failures: [label + ': ' + e.message] }); return }
+    let ver = 'profile'
+    try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(f)), 'package.json'), 'utf8')).version } catch {}
+    if (current.includes('::add-no-workspace')) { results.push({ file: label, ok: true, already: true, version: ver }); return }
+    // 陈旧 .bak-nows 守卫:活体含后到家族([S] `::blank` / [U] `session-delete`)的标记而基底不含,
+    // 说明基底是它们落笔之前建的 → 拿它当整链基底会把那些补丁整份覆盖(手册「陈旧 .bak 陷阱」)。
+    const bak = f + '.bak-nows'
+    try {
+      if (fs.existsSync(bak)) {
+        const b = fs.readFileSync(bak, 'utf8')
+        const stale = (current.includes('::blank') && !b.includes('::blank'))
+          || (current.includes('session-delete') && !b.includes('session-delete'))
+        if (stale) fs.renameSync(bak, bak + '.stale-' + Date.now())
+      }
+    } catch { /* 守卫失败不阻断施打,只是失去可逆基底 */ }
+    const { rep, failures } = makeCtx(label)
+    results.push({ ...rewrite(f, '.bak-nows', nowsApplyEdits(rep, isLocal, failures, nowsPickIcons(current)), failures, null), file: label, version: ver })
+  }
   // L: 本地 monorepo 构建产物(与 [P] 同款寻址:硬编码工作区路径 + 主目录回退)
   const localFile = ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-workspace\\lib\\client.js',
     path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-workspace', 'lib', 'client.js')]
     .find((f) => fs.existsSync(f))
   if (localFile) {
-    const { rep, failures } = makeCtx('ui-workspace/lib/client.js@L')
-    results.push({ ...rewrite(localFile, '.bak-nows', nowsApplyEdits(rep, true, failures), failures), version: 'local' })
+    patchOne(localFile, 'ui-workspace/lib/client.js@L', true)
   } else {
     results.push({ file: 'ui-workspace/lib/client.js@L', missing: true })
   }
@@ -3774,9 +3718,12 @@ function patchWorkspaceNoPickEntry() {
         path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js'),
       ]) {
         if (!fs.existsSync(f) || seen.has(f)) continue
+        let real = f
+        try { real = fs.realpathSync(f) } catch { /* 去重退回原路径 */ }
+        if (seen.has(real)) continue
         seen.add(f)
-        const { rep, failures } = makeCtx('ui-workspace/lib/client.js@O')
-        results.push({ ...rewrite(f, '.bak-nows', nowsApplyEdits(rep, false, failures), failures), version: 'npx-' + h.slice(0, 6) })
+        seen.add(real)
+        patchOne(f, 'ui-workspace/lib/client.js@' + h.slice(0, 6), false)
       }
     }
   }
@@ -3805,8 +3752,16 @@ function patchWorkspaceNoPickEntry() {
 function patchUngroupedGroupBlank() {
   const A1_FROM = '\n\t\t\t\tstartSession: (workspaceId) => {\n\t\t\t\t\tctx.workspaces.startSession(workspaceId);\n\t\t\t\t},\n'
   const A2_FROM = '\n\t\t\t\tstartSession: (workspaceId) => {\n\t\t\t\t\tuiWorkspace.startSession(workspaceId);\n\t\t\t\t},\n'
+  // [0.1.7-rc.1 2026-09-24] 新形态: browserInjected 前缀形 —— 上游把 browserInjected 收在
+  //   apply(ctx) scope 里(uiWorkspace / sessions 均为局部量),故哨兵分支直接走局部量,不赌
+  //   ctx.sessions.open 这类服务代理在客户端 fiber 上仍可解析。必须排在 A2 之前(A2 是本形的子串)。
+  const A3_FROM = '\t\t\tconst browserInjected = () => ({' + A2_FROM
   const B_FROM = '\n\t\t\t\t\t\t\t\t\t\tonCreate: () => {\n\t\t\t\t\t\t\t\t\t\t\tif (group.workspaceId !== void 0) {\n\t\t\t\t\t\t\t\t\t\t\t\tsetGroupExpanded(group.key, true);\n\t\t\t\t\t\t\t\t\t\t\t\tstartSession(group.workspaceId);\n\t\t\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\t\t},'
   const B_TO = '\n\t\t\t\t\t\t\t\t\t\tonCreate: () => {\n\t\t\t\t\t\t\t\t\t\t\t// [dsh-desktop] R78: 未分组桶补 else(上游只实现真工作区分支,点击静默空转)\n\t\t\t\t\t\t\t\t\t\t\tif (group.workspaceId !== void 0) {\n\t\t\t\t\t\t\t\t\t\t\t\tsetGroupExpanded(group.key, true);\n\t\t\t\t\t\t\t\t\t\t\t\tstartSession(group.workspaceId);\n\t\t\t\t\t\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\t\t\t\t\t\tsetGroupExpanded(group.key, true);\n\t\t\t\t\t\t\t\t\t\t\t\tstartSession("::blank");\n\t\t\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\t\t},'
+  // [0.1.7-rc.1] 同锚点的 7 缩进形态: 上游把 ProjectRowItem 的 props 从 10 缩进压到 7
+  //   (组件搬到 WorkspaceBrowser 内层,onCreate 后接 drag:/actions:,不再有 10 缩进的兄弟)
+  const B_RC1_FROM = '\n\t\t\t\t\t\t\tonCreate: () => {\n\t\t\t\t\t\t\t\tif (group.workspaceId !== void 0) {\n\t\t\t\t\t\t\t\t\tsetGroupExpanded(group.key, true);\n\t\t\t\t\t\t\t\t\tstartSession(group.workspaceId);\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t},'
+  const B_RC1_TO = '\n\t\t\t\t\t\t\tonCreate: () => {\n\t\t\t\t\t\t\t\t// [dsh-desktop] R78: 未分组桶补 else(上游只实现真工作区分支,点击静默空转)\n\t\t\t\t\t\t\t\tif (group.workspaceId !== void 0) {\n\t\t\t\t\t\t\t\t\tsetGroupExpanded(group.key, true);\n\t\t\t\t\t\t\t\t\tstartSession(group.workspaceId);\n\t\t\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\t\t\tsetGroupExpanded(group.key, true);\n\t\t\t\t\t\t\t\t\tstartSession("::blank");\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t},'
   const results = []
   // A 锚点双形:官方 rc.2 = ctx.workspaces.startSession;alpha.5 seed(.pnpm 实体) = uiWorkspace.startSession
   // 终态幂等:先查 S_MARK(::blank 哨兵),命中即已是补丁态,绕过锚点(避免 .bak 基底污染时误报 FAIL;
@@ -3814,10 +3769,17 @@ function patchUngroupedGroupBlank() {
   const S_MARK = 'startSession("::blank")'
   const makeApply = (rep, failures) => (c) => {
     const aTo = (call) => '\n\t\t\t\tstartSession: (workspaceId) => {\n\t\t\t\t\t// [dsh-desktop] R78: "::blank" 哨兵=无工作区会话(与 R70 startBlankSession 同一 wire 通路)\n\t\t\t\t\tif (workspaceId === "::blank") {\n\t\t\t\t\t\tPromise.resolve(ctx.sessions.create({})).then((created) => {\n\t\t\t\t\t\t\tconst sessionId = typeof created === "string" ? created : created && created.sessionId;\n\t\t\t\t\t\t\tif (sessionId) ctx.sessions.open(sessionId);\n\t\t\t\t\t\t}).catch(() => {});\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\t' + call + ';\n\t\t\t\t},\n'
-    if (c.includes(A1_FROM)) c = rep(c, A1_FROM, aTo('ctx.workspaces.startSession(workspaceId)'), 1, 'blank-sentinel-branch')
+    // [0.1.7-rc.1] 局部量形: sessions.create({}) 返 sessionId 字符串,uiWorkspace.openSession 即
+    //   replaceMain(reveal);与上游 connectWorkspace 同一条落主视图路径,不依赖 ctx 服务代理。
+    const aToLocal = '\n\t\t\t\tstartSession: (workspaceId) => {\n\t\t\t\t\t// [dsh-desktop] R78: "::blank" 哨兵=无工作区会话(rc.1 形:走 apply scope 的 uiWorkspace/sessions 局部量)\n\t\t\t\t\tif (workspaceId === "::blank") {\n\t\t\t\t\t\tPromise.resolve(sessions.create({})).then((sessionId) => {\n\t\t\t\t\t\t\tif (typeof sessionId === "string" && sessionId) uiWorkspace.openSession(sessionId);\n\t\t\t\t\t\t}).catch(() => {});\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tuiWorkspace.startSession(workspaceId);\n\t\t\t\t},\n'
+    const B0 = c.includes(B_FROM), B1 = c.includes(B_RC1_FROM)
+    if (c.includes(A3_FROM)) c = rep(c, A3_FROM, '\t\t\tconst browserInjected = () => ({' + aToLocal, 1, 'blank-sentinel-branch')
+    else if (c.includes(A1_FROM)) c = rep(c, A1_FROM, aTo('ctx.workspaces.startSession(workspaceId)'), 1, 'blank-sentinel-branch')
     else if (c.includes(A2_FROM)) c = rep(c, A2_FROM, aTo('uiWorkspace.startSession(workspaceId)'), 1, 'blank-sentinel-branch')
-    else failures.push('[ui-workspace/lib/client.js] blank-sentinel-branch: 两种锚点均未命中')
-    c = rep(c, B_FROM, B_TO, 1, 'ungrouped-else-branch')
+    else failures.push('[ui-workspace/lib/client.js] blank-sentinel-branch: 三种锚点均未命中')
+    if (B0) c = rep(c, B_FROM, B_TO, 1, 'ungrouped-else-branch')
+    else if (B1) c = rep(c, B_RC1_FROM, B_RC1_TO, 1, 'ungrouped-else-branch')
+    else failures.push('[ui-workspace/lib/client.js] ungrouped-else-branch: 两种缩进形态均未命中')
     return c
   }
   const localFile = ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-workspace\\lib\\client.js',
@@ -3875,11 +3837,42 @@ function patchUngroupedGroupBlank() {
 //       本家族在其上重放,顺序自愈);.bak-sdel 基底=[Q]+[S] 补丁态,语义=本家族单独可逆。
 //       锚点分轨双形: L 产物图标行带 /* @__PURE__ */ 前缀,O 各版本(112997/113462/
 //       114701/127823 四种字节形态)均无(逐份提取比对过);onSelect 锚点全轨字节一致。
+//       2026-09-24(0.1.7-rc.1): 上游把会话菜单项改成槽位列表(sidebar.workspaces.session.menu.item,
+//       order 100/200/300/400),内联数组与 onSelect 分发整体消失 → 增第三形 U_SLOT_*:
+//       同架构注册 order 450 的 MenuItemButton(danger:true) 行,owner 直供 sessionId/displayTitle,
+//       注入面复用 archiveInjected(归档回落)。幂等仍由 U_MARK(id: "session-delete") 承担。
 function patchSessionDeleteEntry() {
   const U_MARK = 'id: "session-delete"'
   const SELECT_FROM = '\n\t\t\t\t\t\t\t\t\tif (id === "archive") onArchive(node.id);'
   const SELECT_TO = '\n\t\t\t\t\t\t\t\t\tif (id === "archive") onArchive(node.id);\n\t\t\t\t\t\t\t\t\t// [dsh-desktop] R79: 删除会话=确认弹窗→归档→壳端点物理清除;桥缺席回落纯归档\n\t\t\t\t\t\t\t\t\tif (id === "session-delete") { const f = window.__dshSessionDelete; if (typeof f === "function") f(node.id, title); else onArchive(node.id); }'
+  // [0.1.7-rc.1 2026-09-24] 槽位架构形: 会话菜单项由内联数组改为 ctx.slots.register(list) 流,
+  //   锚点取 archive 项注册(order 400)那个块尾,在其后补一条同架构注册(order 450)。旧形两锚点
+  //   (内联 items 数组 / SELECT 分发)在 rc.1 已整体消失,故本形优先判定。
+  const U_SLOT_FROM = '\n\t\t\t\t\tinject: archiveInjected\n\t\t\t\t}, ArchiveSessionMenuItem);\n\t\t\t});'
+  const U_SLOT_REG = '\n\t\t\t\tyield ctx.slots.register({\n' +
+    '\t\t\t\t\tname: "sidebar.workspaces.session.menu.item",\n' +
+    '\t\t\t\t\tid: "session-delete",\n' +
+    '\t\t\t\t\torder: 450,\n' +
+    '\t\t\t\t\tlocale: NS,\n' +
+    '\t\t\t\t\tinject: archiveInjected\n' +
+    '\t\t\t\t}, function SessionDeleteMenuItem({ sessionId, displayTitle, useMenuOpenState, archiveSession }) {\n' +
+    '\t\t\t\t\tconst [, setMenuOpen] = useMenuOpenState();\n' +
+    '\t\t\t\t\treturn (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MenuItemButton, {\n' +
+    '\t\t\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, { size: 14 }),\n' +
+    '\t\t\t\t\t\tdanger: true,\n' +
+    '\t\t\t\t\t\tonSelect: () => {\n' +
+    '\t\t\t\t\t\t\tsetMenuOpen(false);\n' +
+    '\t\t\t\t\t\t\t// [dsh-desktop] R79: 桥在位走桥(确认→归档→壳物理清除);桥缺席回落纯归档,永不产生死菜单项\n' +
+    '\t\t\t\t\t\t\tconst f = window.__dshSessionDelete;\n' +
+    '\t\t\t\t\t\t\tif (typeof f === "function") f(sessionId, displayTitle);\n' +
+    '\t\t\t\t\t\t\telse archiveSession(sessionId);\n' +
+    '\t\t\t\t\t\t},\n' +
+    '\t\t\t\t\t\tchildren: "删除会话"\n' +
+    '\t\t\t\t\t});\n' +
+    '\t\t\t\t});'
+  const U_SLOT_TO = '\n\t\t\t\t\tinject: archiveInjected\n\t\t\t\t}, ArchiveSessionMenuItem);\n' + U_SLOT_REG + '\n\t\t\t});'
   const makeApply = (rep, failures) => (c) => {
+    if (c.includes(U_SLOT_FROM)) return rep(c, U_SLOT_FROM, U_SLOT_TO, 1, 'u-slot-register')
     const item = (pure) => '\t\t\t\t{\n\t\t\t\t\tid: "archive",\n\t\t\t\t\tlabel: t("menu.archiveSession"),\n\t\t\t\t\ticon: ' + (pure ? '/* @__PURE__ */ ' : '') + '(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconArchiveOutline20, { size: 16 })\n\t\t\t\t}'
     const delItem = (pure) => ',\n\t\t\t\t{\n\t\t\t\t\t// [dsh-desktop] R79: 「删除会话」动作走 onSelect 分支→dshvt __dshSessionDelete 桥\n\t\t\t\t\tid: "session-delete",\n\t\t\t\t\tlabel: "删除会话",\n\t\t\t\t\ticon: ' + (pure ? '/* @__PURE__ */ ' : '') + '(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),\n\t\t\t\t\tdanger: true\n\t\t\t\t}'
     if (c.includes(item(true))) c = rep(c, item(true), item(true) + delItem(true), 1, 'u-menu-item')
@@ -3954,8 +3947,22 @@ function patchSessionTopicHoverCard() {
     '\t\t\treturn node.blank ? t("session.new") : node.title;',
     '\t\t}',
   ].join('\n')
+  const FROM20 = '\t\tfunction displayTitle(node, t) {\n\t\t\treturn node.blank ? t("session.new") : node.title || t("session.untitled");\n\t\t}'
+  const TO20 = [
+    '\t\tfunction displayTitle(node, t) {',
+    '\t\t\t// [dsh-desktop] R100: 悬停卡主题一致——行标题被壳端摘要(R40)DOM 替换后,HoverCard 仍渲染',
+    '\t\t\t// store 原题。优先读壳发布的 window.__dshSessionTopics(sid→清洗摘要),行/卡同一函数同题;',
+    '\t\t\t// 全局缺席(纯 Web/旧壳)回落原题。copyText 仍取原题(完整可复用)。',
+    '\t\t\tconst __topic = typeof window !== "undefined" ? window.__dshSessionTopics : void 0;',
+    '\t\t\tif (__topic && typeof __topic[node.id] === "string" && __topic[node.id]) return __topic[node.id];',
+    '\t\t\treturn node.blank ? t("session.new") : node.title || t("session.untitled");',
+    '\t\t}',
+  ].join('\n')
   const makeApply = (rep, failures) => (c) => {
-    c = rep(c, FROM, TO, 1, 'topic-displayTitle')
+    // [批次189] 0.2.0 行 displayTitle 带 session.untitled 回退(rc.1「未命名会话」):双形态按在场择一
+    const hit = c.includes(FROM) ? [FROM, TO] : c.includes(FROM20) ? [FROM20, TO20] : null
+    if (!hit) { failures.push('[ui-workspace] topic-displayTitle: displayTitle 形态未识别(0.1.x/0.2.0 形态均不在场)'); return c }
+    c = rep(c, hit[0], hit[1], 1, 'topic-displayTitle')
     return c
   }
   const results = []
@@ -4044,14 +4051,38 @@ function patchHeroNoWorkspaceInert() {
   const TO1_A5 = 'const listPhase = useSessions((s) => s.phase);\n\t\t\t/* [dsh-desktop] R84α5: 刷新恢复期不闪"新会话"页——列表未就绪(pending)且当前无会话时主区不误导 hero */\n\t\t\tconst restoring = sessionId === void 0 && listPhase === "pending";\n\t\t\tconst hero = !restoring && (sessionId === void 0 || shellPhase === "blank" && (openState === "open" || summaryBlank === true));'
   const FROM2 = 'return (0, react_jsx_runtime.jsxs)("div", {\n\t\t\t\tclassName: ConversationRoot_module_css_default.root,\n\t\t\t\t"data-phase": phase,\n\t\t\t\tchildren: [renderSlot("conversation.session.header", {}), (0, react_jsx_runtime.jsxs)("div", {\n\t\t\t\t\tclassName: ConversationRoot_module_css_default.scrollBody,\n\t\t\t\t\t"data-conversation-scroll": "",\n\t\t\t\t\tchildren: [renderSlot("conversation.session", {}), composerSeat]\n\t\t\t\t})]\n\t\t\t});'
   const TO2 = 'return (0, react_jsx_runtime.jsxs)("div", {\n\t\t\t\tclassName: ConversationRoot_module_css_default.root,\n\t\t\t\t"data-phase": restoring ? "restoring" : phase,\n\t\t\t\tchildren: [renderSlot("conversation.session.header", {}), (0, react_jsx_runtime.jsxs)("div", {\n\t\t\t\t\tclassName: ConversationRoot_module_css_default.scrollBody,\n\t\t\t\t\t"data-conversation-scroll": "",\n\t\t\t\t\tchildren: [restoring ? (0, react_jsx_runtime.jsx)("div", { "data-restoring-session": "", style: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: 140, fontSize: 13, color: "var(--dsw-alias-label-tertiary)" }, children: "正在恢复会话…" }) : renderSlot("conversation.session", {}), composerSeat]\n\t\t\t\t})]\n\t\t\t});'
+  // [R76 0.1.7 修复 2026-09-25] 0.1.7 把会话主区拆成 ConversationRoot + ConversationContent,
+  //   summaryBlank 只活在 Root 里 —— a5 形态把**裸引用**插进 ConversationContent ⇒
+  //   ReferenceError: summaryBlank is not defined → conversation.content 槽工厂整块崩 →
+  //   主区全黑、任何会话(含未分组)都进不去(用户报「未分组无法使用」)。
+  //   判据:文件含 ConversationContent 且 inert 行是裸引用形态 ⇒ 就地补一行同款 useSessions 取值
+  //   (该组件里 cwd 就是这么取的,且该行之前无提前 return,补 hook 安全)。
+  const INERT_BARE = 'const inert = sessionId === void 0 || hero && chipTitle === void 0 && !(summaryBlank === true);'
+  const INERT_LOCAL_DECL = 'const summaryBlank = useSessions((s) => sessionId === void 0 ? void 0 : s.byId[sessionId]?.blank);'
+  const INERT_LOCAL = '/* [dsh-desktop R76 0.1.7] 本作用域无 summaryBlank(0.1.7 把它留在 ConversationRoot),就地取一份(写法与该组件里的 cwd 同款) */\n\t\t\t' + INERT_LOCAL_DECL + '\n\t\t\t' + INERT_BARE
   const patchFile = (p, label) => {
     const { rep, failures } = makeCtx(label)
     const current = fs.readFileSync(p, 'utf8')
-    if (current.includes(MARK)) return { file: label, ok: true, already: true }
+    // 作用域判据必须**按位置**看:文件里唯一的 summaryBlank 声明在 ConversationRoot(15936 一带),
+    // 而 inert 行(16221 一带)在 ConversationContent —— 只查全文 includes 会被 Root 的声明骗过去。
+    const contentAt = current.indexOf('function ConversationContent(props)')
+    const inertAt = current.indexOf(INERT_BARE)
+    const contentSplit = contentAt >= 0
+    const needsScopeFix = contentSplit && inertAt > contentAt && !current.slice(contentAt, inertAt).includes('const summaryBlank =')
+    if (current.includes(MARK)) {
+      // 已补丁态;但 0.1.7 上 a5 形态的裸引用会崩 —— 走就地补声明的自愈路径(不改其它字节)
+      if (needsScopeFix) {
+        const c = rep(current, INERT_BARE, INERT_LOCAL, 1, 'r76-blank-scope-fix')
+        if (failures.length) return { file: label, ok: false, failures: [...failures] }
+        fs.writeFileSync(p, c, 'utf8')
+        return { file: label, ok: true, already: false, repaired: true }
+      }
+      return { file: label, ok: true, already: true }
+    }
     if (current.includes(FROM1_A5)) {
       // alpha.5 形态(shellPhase 单行链): R76 改 blank 豁免 + R84 插 restoring 前置(placeholder 上游已无误导,跳过)
       let c = current
-      c = rep(c, FROM_INERT_A5, TO_INERT_A5, 1, 'hero-inert-cwd-exempt')
+      c = rep(c, FROM_INERT_A5, contentSplit ? INERT_LOCAL : TO_INERT_A5, 1, 'hero-inert-cwd-exempt')
       c = rep(c, FROM1_A5, TO1_A5, 1, 'r84-restore-flag')
       if (failures.length) return { file: label, ok: false, failures: [...failures] }
       fs.writeFileSync(p, c, 'utf8')
@@ -4147,14 +4178,7 @@ function patchSkinSubpages() {
     }
   }
   // K9-G settings-general(全部副本):导航 skin 隐藏子行 + SEL 路由映射(独立 .bak-k9-skin)
-  const genRoots = []
-  const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
-  if (fs.existsSync(npxCache)) {
-    for (const h of fs.readdirSync(npxCache)) {
-      genRoots.push(path.join(npxCache, h, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
-    }
-  }
-  genRoots.push(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+  const genRoots = settingsGeneralRoots()
   for (const p of genRoots) {
     if (!fs.existsSync(p)) continue
     const ver = (() => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch { return '?' } })()
@@ -4242,14 +4266,7 @@ function patchSkinSubpagesK10() {
 const K11_MARK = '/*dsh-local-patch:k11-skin-subpage-ids*/'
 function patchSkinSubpagesK11() {
   const results = []
-  const genRoots = []
-  const npxCache = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'npm-cache', '_npx')
-  if (fs.existsSync(npxCache)) {
-    for (const h of fs.readdirSync(npxCache)) {
-      genRoots.push(path.join(npxCache, h, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
-    }
-  }
-  genRoots.push(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js'))
+  const genRoots = settingsGeneralRoots()
   for (const p of genRoots) {
     if (!fs.existsSync(p)) continue
     const ver = (() => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch { return '?' } })()
@@ -4295,6 +4312,15 @@ function patchSkinSubpagesK11() {
 //       cwd,紧随其后的 connect 复用扫描即刻命中。
 //       ② 复用谓词对「cwd 尚未到达」的摘要豁免 cwd 相等(仅 void 0/"" 豁免;成员关系
 //       workspace.sessionIds 与 archived 仍是硬条件,保持上游「cwd alone 不可信」的语义)。
+// [2026-09-25 重锚] 该逻辑在 0.1.7 已随客户端拆包整体搬走: 0.1.5 的载体 @deepseek-ai/dsh-client-runtime
+//       在 0.1.7 树不存在(客户端 = dsh-client-modules + 各 dsh-client-ui-*),同一段 reuseOrCreateBlank
+//       现居 dsh-client-ui-workspace/lib/client.js(实测 rc.1/rc.2 种子树逐字命中),且活体页加载清单里
+//       只有后者 ⇒ 老锚点在 0.1.7 轨静默失守(不报错也不生效,空会话继续累积:09-25 实测宿主内存 18 条
+//       无盘空会话、4 秒 7 条 / 3 分钟 10 条的爆发,取证见手册 §4.1d)。故本族改双形态:
+//       0.1.5 形态(原锚点: return summary.id 版 + create({ workspaceId }))
+//       0.1.7 形态(取反 continue 谓词 + create({ workspaceId: workspace.workspaceId }))
+//       按在场择一命中,两形态锚点均逐字取自活体字节。注意: 无工作区路径(未分组「+」与工作区选择器
+//       startBlankSession 的 sessions.create({}))本就不在 reuseOrCreateBlank 内,不属本族守护面。
 // 幂等: 自实现 MARK 判 already。本文件已被 [P](patchNewSessionFallback) 的 rewrite 家族占用
 //       `.bak-newsess` 基底 —— 同文件第二家族**不得再走 rewrite**,否则互判「上游已更新」污染
 //       基底(同 patchHeroNoWorkspaceInert 记载的 2026-09-01 实测教训)。replayAll 顺序放在
@@ -4304,16 +4330,24 @@ function patchBlankSessionDup() {
   const REUSE_FROM = '\t\t\t\t\tif (summary !== void 0 && summary.blank && summary.cwd === workspace.path && workspace.sessionIds.includes(summary.id) && !archived.includes(summary.id)) return summary.id;'
   const REUSE_TO = '\t\t\t\t\t/* [dsh-desktop] R85 blank-dedup: cwd 未达(刚 create、host 帧未到)时不再因 cwd 失配漏掉复用,否则同工作区连续 connect 各造一个 blank */\n\t\t\t\t\tif (summary !== void 0 && summary.blank && (summary.cwd === void 0 || summary.cwd === "" || summary.cwd === workspace.path) && workspace.sessionIds.includes(summary.id) && !archived.includes(summary.id)) return summary.id;'
   const CREATE_FROM = '\t\t\t\tconst attempt = this.sessions.create({ workspaceId }).finally(() => {'
+  // ---- 0.1.7 形态(dsh-client-ui-workspace;锚点逐字取自 rc.2 种子树字节)----
+  const REUSE_FROM_17 = '\t\t\t\t\tif (summary === void 0 || !summary.blank || summary.cwd !== workspace.path || !workspace.sessionIds.includes(id) || archived.includes(id)) continue;'
+  const REUSE_TO_17 = '\t\t\t\t\t/* [dsh-desktop] R85 blank-dedup(0.1.7): cwd 未达(刚 create、host 帧未到)时不再因 cwd 失配漏掉复用,否则同工作区连续 connect 各造一个 blank */\n\t\t\t\t\tif (summary === void 0 || !summary.blank || !(summary.cwd === void 0 || summary.cwd === "" || summary.cwd === workspace.path) || !workspace.sessionIds.includes(id) || archived.includes(id)) continue;'
+  const CREATE_FROM_17 = '\t\t\t\treturn this.sessions.create({ workspaceId: workspace.workspaceId });'
+  const CREATE_TO_17 = '\t\t\t\t/* [dsh-desktop] R85 blank-dedup(0.1.7): 本地摘要即刻持有 cwd —— create() 在 workspaceId 分支不上 wire(host 行为不变),\n\t\t\t\t   随后的 connect 复用同一 blank 而非再建一个 */\n\t\t\t\treturn this.sessions.create({ workspaceId: workspace.workspaceId, cwd: workspace.path });'
   const CREATE_TO = '\t\t\t\t/* [dsh-desktop] R85 blank-dedup: 本地摘要即刻持有 cwd —— create() 在 workspaceId 分支不上 wire(host 行为不变),\n\t\t\t\t   随后的 connect 复用同一 blank 而非再建一个 */\n\t\t\t\tconst attempt = this.sessions.create({ workspaceId, cwd: workspace.path }).finally(() => {'
   const patchFile = (p, label) => {
     const current = fs.readFileSync(p, 'utf8')
     if (current.includes(BLANK_DEDUP_MARK)) return { file: label, ok: true, already: true }
+    // 形态判据看「复用谓词」在场:0.1.7 取反 continue 版 / 0.1.5 原版;两者皆无 = 非活体副本
+    const is17 = current.includes(REUSE_FROM_17)
+    if (!is17 && !current.includes(REUSE_FROM)) return { file: label, ok: true, skipped: true, reason: '该副本无 reuseOrCreateBlank 两形态(非活体/版本不同)' }
     const { rep, failures } = makeCtx(label)
-    let c = rep(current, REUSE_FROM, REUSE_TO, 1, 'blank-reuse-cwd-optional')
-    c = rep(c, CREATE_FROM, CREATE_TO, 1, 'blank-create-carries-cwd')
+    let c = rep(current, is17 ? REUSE_FROM_17 : REUSE_FROM, is17 ? REUSE_TO_17 : REUSE_TO, 1, is17 ? 'blank-reuse-cwd-optional(0.1.7)' : 'blank-reuse-cwd-optional')
+    c = rep(c, is17 ? CREATE_FROM_17 : CREATE_FROM, is17 ? CREATE_TO_17 : CREATE_TO, 1, is17 ? 'blank-create-carries-cwd(0.1.7)' : 'blank-create-carries-cwd')
     if (failures.length) return { file: label, ok: false, failures: [...failures] }
     fs.writeFileSync(p, c, 'utf8')
-    return { file: label, ok: true, already: false }
+    return { file: label, ok: true, already: false, shape: is17 ? '0.1.7' : '0.1.5' }
   }
   const results = []
   const seen = new Set()
@@ -4321,25 +4355,33 @@ function patchBlankSessionDup() {
     if (typeof p !== 'string' || !p || seen.has(p)) return
     seen.add(p)
     if (!fs.existsSync(p)) return
-    results.push({ ...patchFile(p, label), version: 'runtime' })
+    let ver = 'local'
+    try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+    results.push({ ...patchFile(p, label), version: ver })
   }
-  // L: 本地 monorepo 构建产物(与 [P]/[Q]/[S] 同款寻址)
-  add('D:\\deepseek harness\\deepseek-harness\\packages\\client\\runtime\\lib\\client.js', 'client-runtime/lib/client.js@L')
-  add(path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'runtime', 'lib', 'client.js'), 'client-runtime/lib/client.js@L2')
-  // devlink 层: profiles/node_modules junction(活体实际解析路径;junction 写入=写 L 同一物理文件,
-  // 故第二次经 MARK 判 already,天然幂等)
-  add(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js'), 'client-runtime/lib/client.js@devlink')
-  // O: npx 缓存全部 hash 并存版本——双布局(平铺顶层 + .pnpm seed 实体)
+  // npx 缓存根(载体枚举见 addPkg;两布局:平铺顶层 + .pnpm 提升 + pnpm 虚拟仓)
   const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
-  if (fs.existsSync(npxRoot)) {
+  // 载体双族:0.1.5 = dsh-client-runtime(及 0.1.5-rc.3 的 ui-workspace 独立包);0.1.7 = dsh-client-ui-workspace
+  // 0.1.7 种子树里 hoist 与 pnpm 虚拟仓诸视图同 inode(nlink=2),写一处即全绿(第二次重放报 already)
+  const addPkg = (pkg, dir) => {
+    add('D:\\deepseek harness\\deepseek-harness\\packages\\client\\' + dir + '\\lib\\client.js', pkg + '@L')
+    add(path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', dir, 'lib', 'client.js'), pkg + '@L2')
+    add(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', pkg, 'lib', 'client.js'), pkg + '@devlink')
+    if (!fs.existsSync(npxRoot)) return
     for (const h of fs.readdirSync(npxRoot)) {
-      for (const f of [
-        path.join(npxRoot, h, 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js'),
-        path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js'),
-      ]) add(f, 'client-runtime/lib/client.js@O@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', '@deepseek-ai', pkg, 'lib', 'client.js'), pkg + '@O@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', pkg, 'lib', 'client.js'), pkg + '@O-hoist@' + h.slice(0, 6))
+      const pnpmDir = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmDir)) continue
+      for (const d of fs.readdirSync(pnpmDir)) {
+        if (!/^@deepseek-ai\+dsh-client-/.test(d)) continue
+        add(path.join(pnpmDir, d, 'node_modules', '@deepseek-ai', pkg, 'lib', 'client.js'), pkg + '@O-pnpm@' + d.slice(-8))
+      }
     }
   }
-  if (!results.length) results.push({ file: 'client-runtime/lib/client.js', missing: true })
+  addPkg('dsh-client-runtime', 'runtime')
+  addPkg('dsh-client-ui-workspace', 'ui-workspace')
+  if (!results.length) results.push({ file: 'blank-dedup 两族载体', missing: true })
   return results
 }
 
@@ -4472,13 +4514,56 @@ function patchModelSelectionSessionGone() {
   return [{ ...rewrite(p, '.bak-msel', apply, failures), version: ver }]
 }
 
+// ---- [MSEL17 2026-09-25] 模型选择器家族寻址(0.1.7 起双轨) ----
+// 0.1.5 时代该包只活在 profile 层(junction → 当时活体),故 [MSEL2]/[MSEL3]/[MSEL4] 都写死单文件
+// 路径。0.1.7 起客户端核心 UI 由**运行树(种子)直供**,profile junction 退化成指向旧轨的残留 ——
+// 三族于是全打在不再使用的 rc.3 树上,活体(rc.2 种子)拿不到自定义面板(用户报「模型选择器退回
+// 两级菜单了」)。寻址 = profile junction + npx 全部种子的三层布局(平铺 / .pnpm/node_modules
+// 提升层 / .pnpm 虚拟仓),realpath 去重(同一份产物经软链出现多次只打一次)。
+function modelSelectionRoots(target) {
+  if (typeof target === 'string' && target !== '') return [{ label: 'target', p: target }]
+  const tail = ['@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js']
+  const out = []
+  const seen = new Set()
+  const push = (label, p) => {
+    if (!fs.existsSync(p)) return
+    let key = p
+    try { key = fs.realpathSync(p) } catch { /* 去重退回原路径 */ }
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push({ label, p })
+  }
+  push('profile', path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', ...tail))
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  let hashes = []
+  try { hashes = fs.readdirSync(npxRoot) } catch { hashes = [] }
+  for (const h of hashes) {
+    const root = path.join(npxRoot, h)
+    push('flat@' + h.slice(0, 6), path.join(root, 'node_modules', ...tail))
+    push('hoist@' + h.slice(0, 6), path.join(root, 'node_modules', '.pnpm', 'node_modules', ...tail))
+    const pnpmRoot = path.join(root, 'node_modules', '.pnpm')
+    let dirs = []
+    try { dirs = fs.readdirSync(pnpmRoot) } catch { dirs = [] }
+    for (const d of dirs) {
+      if (!d.startsWith('@deepseek-ai+dsh-client-ui-')) continue
+      push('pnpm@' + d.slice(-8), path.join(pnpmRoot, d, 'node_modules', ...tail))
+    }
+  }
+  return out
+}
+function modelSelectionVersion(p) {
+  try { return JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch { return 'profile' }
+}
+
 const MSEL2_MARK = '/*dsh-local-patch:msel2*/'
-const MSEL2_REGION = "\t\t/**\n\t\t* Selection preferences: the pinned rows and the recently used queue. The\n\t\t* value is versioned; a malformed or foreign value degrades to the empty\n\t\t* set instead of breaking the seat.\n\t\t*/\n\t\tconst SELECTION_PREFS_KEY = \"dsh-model-selection/v1\";\n\t\tconst RECENT_LIMIT = 5;\n\t\tfunction readSelectionPrefs() {\n\t\t\tconst list = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === \"string\") : [];\n\t\t\ttry {\n\t\t\t\tconst raw = window.localStorage.getItem(SELECTION_PREFS_KEY);\n\t\t\t\tif (raw === null) return {\n\t\t\t\t\tpinned: [],\n\t\t\t\t\trecent: []\n\t\t\t\t};\n\t\t\t\tconst parsed = JSON.parse(raw);\n\t\t\t\treturn {\n\t\t\t\t\tpinned: list(parsed?.pinned),\n\t\t\t\t\trecent: list(parsed?.recent)\n\t\t\t\t};\n\t\t\t} catch {\n\t\t\t\treturn {\n\t\t\t\t\tpinned: [],\n\t\t\t\t\trecent: []\n\t\t\t\t};\n\t\t\t}\n\t\t}\n\t\tfunction writeSelectionPrefs(prefs) {\n\t\t\ttry {\n\t\t\t\twindow.localStorage.setItem(SELECTION_PREFS_KEY, JSON.stringify(prefs));\n\t\t\t} catch {\n\t\t\t\t/* Storage unavailable: the set stays in memory for this session. */\n\t\t\t}\n\t\t}\n\t\t/** One row key: provider and model ids joined for preference lookups. */\n\t\tfunction selectionKey(provider, model) {\n\t\t\treturn provider + \"/\" + model;\n\t\t}\n\t\t/** The pin glyph, inline so the seat needs no extra primitive export. */\n\t\tfunction PinGlyph() {\n\t\t\treturn (0, react_jsx_runtime.jsx)(\"svg\", {\n\t\t\t\tviewBox: \"0 0 14 14\",\n\t\t\t\twidth: 12,\n\t\t\t\theight: 12,\n\t\t\t\t\"aria-hidden\": true,\n\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(\"path\", {\n\t\t\t\t\td: \"M7 1.6l1.7 3.5 3.8.5-2.8 2.7.7 3.8L7 10.3 3.6 12.1l.7-3.8L1.5 5.6l3.8-.5z\",\n\t\t\t\t\tfill: \"currentColor\"\n\t\t\t\t})\n\t\t\t});\n\t\t}\n\t\t/**\n\t\t* Render the composer model seat. [MSEL2]\n\t\t* One panel instead of two drilled levels: a query box, the current\n\t\t* model's effort switch, then pinned, recent, and provider-grouped rows\n\t\t* over the same shared directory the /model popup uses. A rejected\n\t\t* selection announces through the transient Toast anchored to the\n\t\t* composer card; the in-panel strip with Retry remains the catalog-load\n\t\t* surface.\n\t\t* @param props - owner share (locked) + injected face (shared directory\n\t\t* store/verbs) + the standard locale seat.\n\t\t* @returns the trigger and, while open, the searchable panel.\n\t\t*/\n\t\tfunction ModelSelect({ locked, available, directory, load, select, t }) {\n\t\t\tconst state = (0, react.useSyncExternalStore)((fn) => directory.subscribe(fn), () => directory.getSnapshot());\n\t\t\tconst [open, setOpen] = (0, react.useState)(false);\n\t\t\tconst [query, setQuery] = (0, react.useState)(\"\");\n\t\t\tconst [prefs, setPrefs] = (0, react.useState)(readSelectionPrefs);\n\t\t\tconst lastActionRef = (0, react.useRef)(\"load\");\n\t\t\tconst [toast, setToast] = (0, react.useState)(null);\n\t\t\tconst toastSeq = (0, react.useRef)(0);\n\t\t\tconst rootRef = (0, react.useRef)(null);\n\t\t\tconst triggerRef = (0, react.useRef)(null);\n\t\t\tconst menuRef = (0, react.useRef)(null);\n\t\t\tconst searchRef = (0, react.useRef)(null);\n\t\t\tconst [menuPos, setMenuPos] = (0, react.useState)(null);\n\t\t\tconst itemRefs = (0, react.useRef)([]);\n\t\t\tconst id = (0, react.useId)();\n\t\t\tconst choices = (0, react.useMemo)(() => state.groups.flatMap((group) => group.models.map((model) => ({\n\t\t\t\tgroup,\n\t\t\t\tmodel,\n\t\t\t\tselection: {\n\t\t\t\t\tprovider: group.id,\n\t\t\t\t\tmodel: model.id,\n\t\t\t\t\t...model.reasoning?.defaultEffort === void 0 ? {} : { reasoningEffort: model.reasoning.defaultEffort }\n\t\t\t\t}\n\t\t\t}))), [state.groups]);\n\t\t\tconst currentChoice = choices[state.current === null ? -1 : choices.findIndex((c) => c.selection.provider === state.current?.provider && c.selection.model === state.current.model)];\n\t\t\tconst reasoning = currentChoice?.model.reasoning;\n\t\t\tconst effectiveEffort = state.current?.reasoningEffort ?? reasoning?.defaultEffort;\n\t\t\tconst effortLabel = reasoning === void 0 ? void 0 : effectiveEffort === void 0 ? t(\"effort.providerDefault\") : reasoning.efforts.find((level) => level.id === effectiveEffort)?.name ?? effectiveEffort;\n\t\t\tconst effortChoices = (0, react.useMemo)(() => reasoning === void 0 ? [] : [...reasoning.defaultEffort === void 0 ? [{\n\t\t\t\tkey: \"provider-default\",\n\t\t\t\teffort: void 0,\n\t\t\t\tlabel: t(\"effort.providerDefault\")\n\t\t\t}] : [], ...reasoning.efforts.map((effort) => ({\n\t\t\t\tkey: \"effort:\" + effort.id,\n\t\t\t\teffort: effort.id,\n\t\t\t\tlabel: effort.name,\n\t\t\t\t...effort.description === void 0 ? {} : { description: effort.description }\n\t\t\t}))], [reasoning, t]);\n\t\t\tconst busy = state.status === \"selecting\";\n\t\t\tconst reload = () => {\n\t\t\t\tlastActionRef.current = \"load\";\n\t\t\t\tload();\n\t\t\t};\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (!open) return;\n\t\t\t\tconst closeOutside = (event) => {\n\t\t\t\t\tif (rootRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tif (menuRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tsetOpen(false);\n\t\t\t\t};\n\t\t\t\tdocument.addEventListener(\"mousedown\", closeOutside);\n\t\t\t\treturn () => {\n\t\t\t\t\tdocument.removeEventListener(\"mousedown\", closeOutside);\n\t\t\t\t};\n\t\t\t}, [open]);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (open) searchRef.current?.focus();\n\t\t\t}, [open]);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\twriteSelectionPrefs(prefs);\n\t\t\t}, [prefs]);\n\t\t\tconst currentProvider = state.current?.provider;\n\t\t\tconst currentModel = state.current?.model;\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (currentProvider === void 0 || currentModel === void 0) return;\n\t\t\t\tconst key = selectionKey(currentProvider, currentModel);\n\t\t\t\tsetPrefs((prev) => prev.recent[0] === key ? prev : {\n\t\t\t\t\t...prev,\n\t\t\t\t\trecent: [key, ...prev.recent.filter((entry) => entry !== key)].slice(0, RECENT_LIMIT)\n\t\t\t\t});\n\t\t\t}, [currentProvider, currentModel]);\n\t\t\t(0, react.useLayoutEffect)(() => {\n\t\t\t\tif (!open) {\n\t\t\t\t\tsetMenuPos(null);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst place = () => {\n\t\t\t\t\t/* v8 ignore next 2 -- the trigger ref is attached whenever the panel is open. */\n\t\t\t\t\tconst rect = triggerRef.current?.getBoundingClientRect();\n\t\t\t\t\tif (rect === void 0) return;\n\t\t\t\t\tconst MARGIN = 12;\n\t\t\t\t\tconst lw = menuRef.current?.offsetWidth ?? 0;\n\t\t\t\t\tconst lh = menuRef.current?.offsetHeight ?? 0;\n\t\t\t\t\tlet x = rect.right - lw;\n\t\t\t\t\tlet y = rect.top - 8 - lh;\n\t\t\t\t\tif (lw > 0) x = Math.min(Math.max(x, MARGIN), window.innerWidth - lw - MARGIN);\n\t\t\t\t\tif (lh > 0) y = Math.min(Math.max(y, MARGIN), window.innerHeight - lh - MARGIN);\n\t\t\t\t\tsetMenuPos({\n\t\t\t\t\t\tleft: x,\n\t\t\t\t\t\ttop: y\n\t\t\t\t\t});\n\t\t\t\t};\n\t\t\t\tplace();\n\t\t\t\twindow.addEventListener(\"scroll\", place, true);\n\t\t\t\twindow.addEventListener(\"resize\", place);\n\t\t\t\treturn () => {\n\t\t\t\t\twindow.removeEventListener(\"scroll\", place, true);\n\t\t\t\t\twindow.removeEventListener(\"resize\", place);\n\t\t\t\t};\n\t\t\t}, [\n\t\t\t\topen,\n\t\t\t\tstate\n\t\t\t]);\n\t\t\tif (!available) return null;\n\t\t\tconst show = () => {\n\t\t\t\tsetQuery(\"\");\n\t\t\t\tsetOpen(true);\n\t\t\t\treload();\n\t\t\t};\n\t\t\tconst close = (restoreFocus = false) => {\n\t\t\t\tsetOpen(false);\n\t\t\t\tsetQuery(\"\");\n\t\t\t\tif (restoreFocus) queueMicrotask(() => {\n\t\t\t\t\ttriggerRef.current?.focus();\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst moveFocus = (offset) => {\n\t\t\t\tconst items = itemRefs.current.filter((item) => item !== null);\n\t\t\t\tif (items.length === 0) return;\n\t\t\t\tconst active = items.findIndex((item) => item === document.activeElement);\n\t\t\t\tconst next = active === -1 ? offset > 0 ? 0 : items.length - 1 : (active + offset + items.length) % items.length;\n\t\t\t\titems[next]?.focus();\n\t\t\t};\n\t\t\tconst onRootKeyDown = (event) => {\n\t\t\t\tif (event.key === \"Escape\" && open) {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tif (query !== \"\") setQuery(\"\");\n\t\t\t\t\telse close(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (!open) return;\n\t\t\t\tif (event.key === \"ArrowDown\" || event.key === \"ArrowUp\") {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tmoveFocus(event.key === \"ArrowDown\" ? 1 : -1);\n\t\t\t\t}\n\t\t\t};\n\t\t\tconst onBlur = (event) => {\n\t\t\t\tif (event.relatedTarget instanceof Node && (rootRef.current?.contains(event.relatedTarget) === true || menuRef.current?.contains(event.relatedTarget) === true)) return;\n\t\t\t\tclose();\n\t\t\t};\n\t\t\tconst settleSelection = (accepted, keepOpen) => {\n\t\t\t\tif (accepted) {\n\t\t\t\t\tif (!keepOpen && rootRef.current !== null) close(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst message = directory.getSnapshot().error;\n\t\t\t\tif (message !== null) {\n\t\t\t\t\ttoastSeq.current += 1;\n\t\t\t\t\tsetToast({\n\t\t\t\t\t\tseq: toastSeq.current,\n\t\t\t\t\t\ttext: /session\\/not-found/.test(message) ? t(\"error.sessionGone\") : t(\"error.action\", { message })\n\t\t\t\t\t});\n\t\t\t\t}\n\t\t\t};\n\t\t\tconst choose = (selection) => {\n\t\t\t\tif (state.current?.provider === selection.provider && state.current.model === selection.model) {\n\t\t\t\t\tclose(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tlastActionRef.current = \"select\";\n\t\t\t\tselect(selection).then((accepted) => {\n\t\t\t\t\tsettleSelection(accepted, false);\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst chooseEffort = (effort) => {\n\t\t\t\tif (state.current === null) return;\n\t\t\t\tif (effectiveEffort === effort) return;\n\t\t\t\tconst selection = {\n\t\t\t\t\tprovider: state.current.provider,\n\t\t\t\t\tmodel: state.current.model,\n\t\t\t\t\t...effort === void 0 ? {} : { reasoningEffort: effort }\n\t\t\t\t};\n\t\t\t\tlastActionRef.current = \"select\";\n\t\t\t\tselect(selection).then((accepted) => {\n\t\t\t\t\tsettleSelection(accepted, true);\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst togglePin = (key) => {\n\t\t\t\tsetPrefs((prev) => ({\n\t\t\t\t\t...prev,\n\t\t\t\t\tpinned: prev.pinned.includes(key) ? prev.pinned.filter((entry) => entry !== key) : [key, ...prev.pinned]\n\t\t\t\t}));\n\t\t\t};\n\t\t\tconst waiting = state.current === null && state.status === \"loading\";\n\t\t\tconst modelLabel = waiting ? t(\"trigger.loading\") : currentChoice?.model.name ?? (state.current === null ? t(\"trigger.fallback\") : state.current.provider + \"/\" + state.current.model);\n\t\t\tconst triggerLabel = effortLabel === void 0 ? modelLabel : modelLabel + \" · \" + effortLabel;\n\t\t\tconst triggerAria = waiting ? t(\"trigger.loading\") : state.current === null ? t(\"trigger.selectAria\") : effortLabel === void 0 ? t(\"trigger.aria\", { model: modelLabel }) : t(\"trigger.ariaEffort\", {\n\t\t\t\tmodel: modelLabel,\n\t\t\t\teffort: effortLabel\n\t\t\t});\n\t\t\titemRefs.current = [];\n\t\t\tlet itemIndex = 0;\n\t\t\tconst itemRef = () => {\n\t\t\t\tconst at = itemIndex++;\n\t\t\t\treturn (node) => {\n\t\t\t\t\titemRefs.current[at] = node;\n\t\t\t\t};\n\t\t\t};\n\t\t\tconst q = query.trim().toLowerCase();\n\t\t\tconst matches = q === \"\" ? [] : choices.filter((entry) => entry.model.name.toLowerCase().includes(q) || entry.model.id.toLowerCase().includes(q) || entry.group.name.toLowerCase().includes(q));\n\t\t\tconst byKey = new Map(choices.map((entry) => [selectionKey(entry.group.id, entry.model.id), entry]));\n\t\t\tconst pinnedSet = new Set(prefs.pinned);\n\t\t\tconst resolve = (keys) => keys.map((key) => byKey.get(key)).filter((entry) => entry !== void 0);\n\t\t\tconst pinnedEntries = resolve(prefs.pinned);\n\t\t\tconst recentEntries = resolve(prefs.recent.filter((key) => !pinnedSet.has(key)));\n\t\t\tconst renderRow = (entry, hint) => {\n\t\t\t\tconst key = selectionKey(entry.group.id, entry.model.id);\n\t\t\t\tconst selected = state.current?.provider === entry.group.id && state.current.model === entry.model.id;\n\t\t\t\tconst pinned = pinnedSet.has(key);\n\t\t\t\tconst pinLabel = pinned ? t(\"pin.remove\", { model: entry.model.name }) : t(\"pin.add\", { model: entry.model.name });\n\t\t\t\treturn (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.row, selected && ModelSelect_module_css_default.selected),\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\trole: \"menuitemradio\",\n\t\t\t\t\t\t\"aria-checked\": selected,\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.rowMain,\n\t\t\t\t\t\ttitle: entry.model.name,\n\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tchoose({\n\t\t\t\t\t\t\t\tprovider: entry.group.id,\n\t\t\t\t\t\t\t\tmodel: entry.model.id\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)(\"span\", {\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.optionCopy,\n\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.modelName,\n\t\t\t\t\t\t\t\tchildren: entry.model.name\n\t\t\t\t\t\t\t}), hint === void 0 ? null : (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.hitHint,\n\t\t\t\t\t\t\t\tchildren: hint\n\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.check,\n\t\t\t\t\t\t\tchildren: selected ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline16, {}) : null\n\t\t\t\t\t\t})]\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\trole: \"menuitemcheckbox\",\n\t\t\t\t\t\t\"aria-checked\": pinned,\n\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.pin, pinned && ModelSelect_module_css_default.pinOn),\n\t\t\t\t\t\ttabIndex: -1,\n\t\t\t\t\t\t\"aria-label\": pinLabel,\n\t\t\t\t\t\ttitle: pinLabel,\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\ttogglePin(key);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(PinGlyph, {})\n\t\t\t\t\t})]\n\t\t\t\t}, key);\n\t\t\t};\n\t\t\tconst renderSection = (label, entries, key, showGroupName) => (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\trole: \"group\",\n\t\t\t\t\"aria-label\": label,\n\t\t\t\tclassName: ModelSelect_module_css_default.section,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\tclassName: ModelSelect_module_css_default.sectionTitle,\n\t\t\t\t\tchildren: label\n\t\t\t\t}), entries.map((entry) => renderRow(entry, showGroupName ? entry.group.name : void 0))]\n\t\t\t}, \"section:\" + key);\n\t\t\tconst body = q !== \"\" ? [renderSection(t(\"section.results\"), matches, \"matches\", true)] : [...pinnedEntries.length === 0 ? [] : [renderSection(t(\"section.pinned\"), pinnedEntries, \"pinned\", false)], ...recentEntries.length === 0 ? [] : [renderSection(t(\"section.recent\"), recentEntries, \"recent\", false)], ...state.groups.map((group) => renderSection(group.name, group.models.map((model) => byKey.get(selectionKey(group.id, model.id))).filter((entry) => entry !== void 0), group.id, false))];\n\t\t\tconst effortSwitch = reasoning === void 0 ? null : (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\tclassName: ModelSelect_module_css_default.effortRow,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\tclassName: ModelSelect_module_css_default.effortLabel,\n\t\t\t\t\tchildren: t(\"menu.effort\")\n\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\tclassName: ModelSelect_module_css_default.seg,\n\t\t\t\t\trole: \"radiogroup\",\n\t\t\t\t\t\"aria-label\": t(\"menu.effort\"),\n\t\t\t\t\tchildren: effortChoices.map((level) => {\n\t\t\t\t\t\tconst active = effectiveEffort === level.effort;\n\t\t\t\t\t\treturn (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\trole: \"radio\",\n\t\t\t\t\t\t\t\"aria-checked\": active,\n\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.segBtn, active && ModelSelect_module_css_default.segBtnOn),\n\t\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\t\ttitle: level.description === void 0 ? level.label : level.label + \" · \" + level.description,\n\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\tchooseEffort(level.effort);\n\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\tchildren: level.label\n\t\t\t\t\t\t}, level.key);\n\t\t\t\t\t})\n\t\t\t\t})]\n\t\t\t});\n\t\t\treturn (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\tref: rootRef,\n\t\t\t\tclassName: ModelSelect_module_css_default.root,\n\t\t\t\tonKeyDown: onRootKeyDown,\n\t\t\t\tonBlur,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\tref: triggerRef,\n\t\t\t\t\ttype: \"button\",\n\t\t\t\t\tclassName: ModelSelect_module_css_default.trigger,\n\t\t\t\t\t\"aria-label\": triggerAria,\n\t\t\t\t\t\"aria-haspopup\": \"dialog\",\n\t\t\t\t\t\"aria-expanded\": open,\n\t\t\t\t\t\"aria-controls\": open ? id + \"-menu\" : void 0,\n\t\t\t\t\ttitle: triggerLabel,\n\t\t\t\t\tdisabled: locked,\n\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\tif (open) close();\n\t\t\t\t\t\telse show();\n\t\t\t\t\t},\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDataOutline16, {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerIcon,\n\t\t\t\t\t\tsize: 16\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerLabel,\n\t\t\t\t\t\tchildren: modelLabel\n\t\t\t\t\t}), effortLabel !== void 0 && (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerEffort,\n\t\t\t\t\t\tchildren: effortLabel\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, { className: clsx(ModelSelect_module_css_default.chevron, open && ModelSelect_module_css_default.chevronOpen) })]\n\t\t\t\t}), open && (0, react_dom.createPortal)((0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\tref: menuRef,\n\t\t\t\t\tid: id + \"-menu\",\n\t\t\t\t\tclassName: ModelSelect_module_css_default.menu,\n\t\t\t\t\tstyle: menuPos ?? MEASURE_STYLE,\n\t\t\t\t\trole: \"dialog\",\n\t\t\t\t\t\"aria-label\": t(\"menu.aria\"),\n\t\t\t\t\t\"aria-busy\": state.status === \"loading\" || busy,\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.searchRow,\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutline16, { className: ModelSelect_module_css_default.searchIcon }), (0, react_jsx_runtime.jsx)(\"input\", {\n\t\t\t\t\t\t\tref: searchRef,\n\t\t\t\t\t\t\ttype: \"text\",\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.search,\n\t\t\t\t\t\t\tplaceholder: t(\"search.placeholder\"),\n\t\t\t\t\t\t\t\"aria-label\": t(\"search.placeholder\"),\n\t\t\t\t\t\t\tvalue: query,\n\t\t\t\t\t\t\tonChange: (event) => {\n\t\t\t\t\t\t\t\tsetQuery(event.target.value);\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}), query === \"\" ? null : (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.searchClear,\n\t\t\t\t\t\t\ttabIndex: -1,\n\t\t\t\t\t\t\t\"aria-label\": t(\"search.clear\"),\n\t\t\t\t\t\t\ttitle: t(\"search.clear\"),\n\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\tsetQuery(\"\");\n\t\t\t\t\t\t\t\tsearchRef.current?.focus();\n\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, { size: 12 })\n\t\t\t\t\t\t})]\n\t\t\t\t\t}), effortSwitch, state.status === \"loading\" && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.status,\n\t\t\t\t\t\tchildren: t(\"status.loading\")\n\t\t\t\t\t}), state.error !== null && lastActionRef.current === \"load\" && (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.error,\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"error.action\", { message: state.error }) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t})]\n\t\t\t\t\t}), state.failures.map((failure) => (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.warning,\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"warning.groupLoad\", {\n\t\t\t\t\t\t\tname: failure.name,\n\t\t\t\t\t\t\tmessage: failure.message\n\t\t\t\t\t\t}) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t})]\n\t\t\t\t\t}, failure.id)), (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.groups, \"scrollable\"),\n\t\t\t\t\t\trole: \"menu\",\n\t\t\t\t\t\t\"aria-label\": t(\"menu.model\"),\n\t\t\t\t\t\tchildren: body\n\t\t\t\t\t}), state.status === \"ready\" && choices.length === 0 && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\tchildren: t(\"empty.models\")\n\t\t\t\t\t}), q !== \"\" && matches.length === 0 && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\tchildren: t(\"empty.search\")\n\t\t\t\t\t})]\n\t\t\t\t}), document.body), toast !== null && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Toast, {\n\t\t\t\t\ttext: toast.text,\n\t\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutline16, {}),\n\t\t\t\t\tanchor: rootRef.current?.closest(\"[data-composer-card]\") ?? null,\n\t\t\t\t\tonDone: () => {\n\t\t\t\t\t\tsetToast(null);\n\t\t\t\t\t}\n\t\t\t\t}, toast.seq)]\n\t\t\t});\n\t\t}\n\t\t//#endregion"
+const MSEL2_REGION = "\t\t/* [MSEL2 0.1.7 图标族兼容] 0.1.7 删尺寸后缀族(…16/…14)改用 <Name>Regular —— 双轨取用,旧轨回落后缀名 */\n\t\tconst msel2Prims = _deepseek_ai_dsh_client_ui_primitives;\n\t\tconst msel2Icon = (next, legacy) => msel2Prims[next] ?? msel2Prims[legacy];\n\t\tconst Msel2IconCheck = msel2Icon(\"IconCheckOutlineRegular\", \"IconCheckOutline16\");\n\t\tconst Msel2IconData = msel2Icon(\"IconDataOutlineRegular\", \"IconDataOutline16\");\n\t\tconst Msel2IconChevronDown = msel2Icon(\"IconChevronDownOutlineRegular\", \"IconChevronDownOutline14\");\n\t\tconst Msel2IconSearch = msel2Icon(\"IconSearchOutlineRegular\", \"IconSearchOutline16\");\n\t\tconst Msel2IconClose = msel2Icon(\"IconCloseOutlineRegular\", \"IconCloseOutline16\");\n\t\tconst Msel2IconWarning = msel2Icon(\"IconWarningOutlineRegular\", \"IconWarningOutline16\");\n\t\t/**\n\t\t* Selection preferences: the pinned rows and the recently used queue. The\n\t\t* value is versioned; a malformed or foreign value degrades to the empty\n\t\t* set instead of breaking the seat.\n\t\t*/\n\t\tconst SELECTION_PREFS_KEY = \"dsh-model-selection/v1\";\n\t\tconst RECENT_LIMIT = 5;\n\t\tfunction readSelectionPrefs() {\n\t\t\tconst list = (value) => Array.isArray(value) ? value.filter((entry) => typeof entry === \"string\") : [];\n\t\t\ttry {\n\t\t\t\tconst raw = window.localStorage.getItem(SELECTION_PREFS_KEY);\n\t\t\t\tif (raw === null) return {\n\t\t\t\t\tpinned: [],\n\t\t\t\t\trecent: []\n\t\t\t\t};\n\t\t\t\tconst parsed = JSON.parse(raw);\n\t\t\t\treturn {\n\t\t\t\t\tpinned: list(parsed?.pinned),\n\t\t\t\t\trecent: list(parsed?.recent)\n\t\t\t\t};\n\t\t\t} catch {\n\t\t\t\treturn {\n\t\t\t\t\tpinned: [],\n\t\t\t\t\trecent: []\n\t\t\t\t};\n\t\t\t}\n\t\t}\n\t\tfunction writeSelectionPrefs(prefs) {\n\t\t\ttry {\n\t\t\t\twindow.localStorage.setItem(SELECTION_PREFS_KEY, JSON.stringify(prefs));\n\t\t\t} catch {\n\t\t\t\t/* Storage unavailable: the set stays in memory for this session. */\n\t\t\t}\n\t\t}\n\t\t/** One row key: provider and model ids joined for preference lookups. */\n\t\tfunction selectionKey(provider, model) {\n\t\t\treturn provider + \"/\" + model;\n\t\t}\n\t\t/** The pin glyph, inline so the seat needs no extra primitive export. */\n\t\tfunction PinGlyph() {\n\t\t\treturn (0, react_jsx_runtime.jsx)(\"svg\", {\n\t\t\t\tviewBox: \"0 0 14 14\",\n\t\t\t\twidth: 12,\n\t\t\t\theight: 12,\n\t\t\t\t\"aria-hidden\": true,\n\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(\"path\", {\n\t\t\t\t\td: \"M7 1.6l1.7 3.5 3.8.5-2.8 2.7.7 3.8L7 10.3 3.6 12.1l.7-3.8L1.5 5.6l3.8-.5z\",\n\t\t\t\t\tfill: \"currentColor\"\n\t\t\t\t})\n\t\t\t});\n\t\t}\n\t\t/**\n\t\t* Render the composer model seat. [MSEL2]\n\t\t* One panel instead of two drilled levels: a query box, the current\n\t\t* model's effort switch, then pinned, recent, and provider-grouped rows\n\t\t* over the same shared directory the /model popup uses. A rejected\n\t\t* selection announces through the transient Toast anchored to the\n\t\t* composer card; the in-panel strip with Retry remains the catalog-load\n\t\t* surface.\n\t\t* @param props - owner share (locked) + injected face (shared directory\n\t\t* store/verbs) + the standard locale seat.\n\t\t* @returns the trigger and, while open, the searchable panel.\n\t\t*/\n\t\tfunction ModelSelect({ locked, available, directory, load, select: msel2SelectRaw, t }) {\n\t\t\tconst state = (0, react.useSyncExternalStore)((fn) => directory.subscribe(fn), () => directory.getSnapshot());\n\t\t\tconst [open, setOpen] = (0, react.useState)(false);\n\t\t\tconst [query, setQuery] = (0, react.useState)(\"\");\n\t\t\t/* [MSEL2 0.1.7] select 结果契约双兼容:旧轨 = 布尔;0.1.7 = undefined(未提交) | { ok, error } */\n\t\t\tconst msel2SelectErrorRef = (0, react.useRef)(null);\n\t\t\tconst select = (selection) => Promise.resolve(msel2SelectRaw(selection)).then((result) => {\n\t\t\t\tif (result !== null && typeof result === \"object\") {\n\t\t\t\t\tif (result.ok === true) {\n\t\t\t\t\t\tmsel2SelectErrorRef.current = null;\n\t\t\t\t\t\treturn true;\n\t\t\t\t\t}\n\t\t\t\t\tconst code = result.error?.code;\n\t\t\t\t\tconst detail = result.error?.message;\n\t\t\t\t\tmsel2SelectErrorRef.current = code === \"session/writer-held\" ? t(\"error.sessionInUse\") : t(\"error.action\", { message: (code === void 0 ? \"\" : code + \": \") + (detail ?? \"\") });\n\t\t\t\t\treturn false;\n\t\t\t\t}\n\t\t\t\tif (result === true) {\n\t\t\t\t\tmsel2SelectErrorRef.current = null;\n\t\t\t\t\treturn true;\n\t\t\t\t}\n\t\t\t\treturn false;\n\t\t\t});\n\t\t\tconst [prefs, setPrefs] = (0, react.useState)(readSelectionPrefs);\n\t\t\tconst lastActionRef = (0, react.useRef)(\"load\");\n\t\t\tconst [toast, setToast] = (0, react.useState)(null);\n\t\t\tconst toastSeq = (0, react.useRef)(0);\n\t\t\tconst rootRef = (0, react.useRef)(null);\n\t\t\tconst triggerRef = (0, react.useRef)(null);\n\t\t\tconst menuRef = (0, react.useRef)(null);\n\t\t\tconst searchRef = (0, react.useRef)(null);\n\t\t\tconst [menuPos, setMenuPos] = (0, react.useState)(null);\n\t\t\tconst itemRefs = (0, react.useRef)([]);\n\t\t\tconst id = (0, react.useId)();\n\t\t\t/* [MSEL2 0.1.7] 上游把「DeepSeek 账号/官方」组排最前 —— 自定义面板延续同一分组顺序 */\n\t\t\tconst msel2GroupRank = (group) => group.id === \"deepseek-account\" ? 0 : group.id === \"deepseek-official\" ? 1 : 2;\n\t\t\tconst groups = (0, react.useMemo)(() => state.groups.toSorted((left, right) => msel2GroupRank(left) - msel2GroupRank(right)), [state.groups]);\n\t\t\tconst choices = (0, react.useMemo)(() => groups.flatMap((group) => group.models.map((model) => ({\n\t\t\t\tgroup,\n\t\t\t\tmodel,\n\t\t\t\tselection: {\n\t\t\t\t\tprovider: group.id,\n\t\t\t\t\tmodel: model.id,\n\t\t\t\t\t...model.reasoning?.defaultEffort === void 0 ? {} : { reasoningEffort: model.reasoning.defaultEffort }\n\t\t\t\t}\n\t\t\t}))), [groups]);\n\t\t\tconst currentChoice = choices[state.current === null ? -1 : choices.findIndex((c) => c.selection.provider === state.current?.provider && c.selection.model === state.current.model)];\n\t\t\tconst reasoning = currentChoice?.model.reasoning;\n\t\t\tconst effectiveEffort = state.current?.reasoningEffort ?? reasoning?.defaultEffort;\n\t\t\tconst effortLabel = reasoning === void 0 ? state.retainedEffort ?? void 0 : effectiveEffort === void 0 ? t(\"effort.providerDefault\") : reasoning.efforts.find((level) => level.id === effectiveEffort)?.name ?? effectiveEffort;\n\t\t\tconst effortChoices = (0, react.useMemo)(() => reasoning === void 0 ? [] : [...reasoning.defaultEffort === void 0 ? [{\n\t\t\t\tkey: \"provider-default\",\n\t\t\t\teffort: void 0,\n\t\t\t\tlabel: t(\"effort.providerDefault\")\n\t\t\t}] : [], ...reasoning.efforts.map((effort) => ({\n\t\t\t\tkey: `effort:${effort.id}`,\n\t\t\t\teffort: effort.id,\n\t\t\t\tlabel: effort.name,\n\t\t\t\t...effort.description === void 0 ? {} : { description: effort.description }\n\t\t\t}))], [reasoning, t]);\n\t\t\t/* [MSEL2 0.1.7] 忙碌态:0.1.7 用 state.pending,旧轨用 status(取或,跨轨同形) */\n\t\t\tconst busy = state.status === \"selecting\" || (state.pending ?? null) !== null;\n\t\t\tconst reload = () => {\n\t\t\t\tlastActionRef.current = \"load\";\n\t\t\t\tload();\n\t\t\t};\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (!open) return;\n\t\t\t\tconst closeOutside = (event) => {\n\t\t\t\t\tif (rootRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tif (menuRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tsetOpen(false);\n\t\t\t\t};\n\t\t\t\tdocument.addEventListener(\"mousedown\", closeOutside);\n\t\t\t\treturn () => {\n\t\t\t\t\tdocument.removeEventListener(\"mousedown\", closeOutside);\n\t\t\t\t};\n\t\t\t}, [open]);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (!open) return;\n\t\t\t\t/* [MSEL2 0.1.7] 首帧菜单仍带 MEASURE_STYLE(visibility:hidden),隐藏元素 focus() 是空操作\n\t\t\t\t   (挂钩实证 afterFocused:false);等定位态落地后的下一任务再聚焦,旧轨同款问题一并修 */\n\t\t\t\tsearchRef.current?.focus();\n\t\t\t\tconst focusTimer = setTimeout(() => {\n\t\t\t\t\tsearchRef.current?.focus();\n\t\t\t\t}, 0);\n\t\t\t\treturn () => clearTimeout(focusTimer);\n\t\t\t}, [open]);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\twriteSelectionPrefs(prefs);\n\t\t\t}, [prefs]);\n\t\t\tconst currentProvider = state.current?.provider;\n\t\t\tconst currentModel = state.current?.model;\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (currentProvider === void 0 || currentModel === void 0) return;\n\t\t\t\tconst key = selectionKey(currentProvider, currentModel);\n\t\t\t\tsetPrefs((prev) => prev.recent[0] === key ? prev : {\n\t\t\t\t\t...prev,\n\t\t\t\t\trecent: [key, ...prev.recent.filter((entry) => entry !== key)].slice(0, RECENT_LIMIT)\n\t\t\t\t});\n\t\t\t}, [currentProvider, currentModel]);\n\t\t\t(0, react.useLayoutEffect)(() => {\n\t\t\t\tif (!open) {\n\t\t\t\t\tsetMenuPos(null);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst place = () => {\n\t\t\t\t\t/* v8 ignore next 2 -- the trigger ref is attached whenever the panel is open. */\n\t\t\t\t\tconst rect = triggerRef.current?.getBoundingClientRect();\n\t\t\t\t\tif (rect === void 0) return;\n\t\t\t\t\tconst MARGIN = 12;\n\t\t\t\t\tconst lw = menuRef.current?.offsetWidth ?? 0;\n\t\t\t\t\tconst lh = menuRef.current?.offsetHeight ?? 0;\n\t\t\t\t\tlet x = rect.right - lw;\n\t\t\t\t\tlet y = rect.top - 8 - lh;\n\t\t\t\t\tif (lw > 0) x = Math.min(Math.max(x, MARGIN), window.innerWidth - lw - MARGIN);\n\t\t\t\t\tif (lh > 0) y = Math.min(Math.max(y, MARGIN), window.innerHeight - lh - MARGIN);\n\t\t\t\t\tsetMenuPos({\n\t\t\t\t\t\tleft: x,\n\t\t\t\t\t\ttop: y\n\t\t\t\t\t});\n\t\t\t\t};\n\t\t\t\tplace();\n\t\t\t\twindow.addEventListener(\"scroll\", place, true);\n\t\t\t\twindow.addEventListener(\"resize\", place);\n\t\t\t\treturn () => {\n\t\t\t\t\twindow.removeEventListener(\"scroll\", place, true);\n\t\t\t\t\twindow.removeEventListener(\"resize\", place);\n\t\t\t\t};\n\t\t\t}, [\n\t\t\t\topen,\n\t\t\t\tstate\n\t\t\t]);\n\t\t\tif (!available) return null;\n\t\t\tconst show = () => {\n\t\t\t\tsetQuery(\"\");\n\t\t\t\tsetOpen(true);\n\t\t\t\treload();\n\t\t\t};\n\t\t\tconst close = (restoreFocus = false) => {\n\t\t\t\tsetOpen(false);\n\t\t\t\tsetQuery(\"\");\n\t\t\t\tif (restoreFocus) queueMicrotask(() => {\n\t\t\t\t\ttriggerRef.current?.focus();\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst moveFocus = (offset) => {\n\t\t\t\tconst items = itemRefs.current.filter((item) => item !== null);\n\t\t\t\tif (items.length === 0) return;\n\t\t\t\tconst active = items.findIndex((item) => item === document.activeElement);\n\t\t\t\tconst next = active === -1 ? offset > 0 ? 0 : items.length - 1 : (active + offset + items.length) % items.length;\n\t\t\t\titems[next]?.focus();\n\t\t\t};\n\t\t\tconst onRootKeyDown = (event) => {\n\t\t\t\tif (event.key === \"Escape\" && open) {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tif (query !== \"\") setQuery(\"\");\n\t\t\t\t\telse close(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (!open) return;\n\t\t\t\tif (event.key === \"ArrowDown\" || event.key === \"ArrowUp\") {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tmoveFocus(event.key === \"ArrowDown\" ? 1 : -1);\n\t\t\t\t}\n\t\t\t};\n\t\t\tconst onBlur = (event) => {\n\t\t\t\tif (event.relatedTarget instanceof Node && (rootRef.current?.contains(event.relatedTarget) === true || menuRef.current?.contains(event.relatedTarget) === true)) return;\n\t\t\t\tclose();\n\t\t\t};\n\t\t\tconst settleSelection = (accepted, keepOpen) => {\n\t\t\t\tif (accepted) {\n\t\t\t\t\tif (!keepOpen && rootRef.current !== null) close(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst stashed = msel2SelectErrorRef.current;\n\t\t\t\tmsel2SelectErrorRef.current = null;\n\t\t\t\tconst message = stashed !== null ? stashed : directory.getSnapshot().error;\n\t\t\t\tif (message !== null && message !== void 0) {\n\t\t\t\t\ttoastSeq.current += 1;\n\t\t\t\t\tsetToast({\n\t\t\t\t\t\tseq: toastSeq.current,\n\t\t\t\t\t\ttext: stashed !== null ? stashed : /session\\/not-found/.test(message) ? t(\"error.sessionGone\") : t(\"error.action\", { message })\n\t\t\t\t\t});\n\t\t\t\t}\n\t\t\t};\n\t\t\tconst choose = (selection) => {\n\t\t\t\tif (state.current?.provider === selection.provider && state.current.model === selection.model) {\n\t\t\t\t\tclose(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tlastActionRef.current = \"select\";\n\t\t\t\tselect(selection).then((accepted) => {\n\t\t\t\t\tsettleSelection(accepted, false);\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst chooseEffort = (effort) => {\n\t\t\t\tif (state.current === null) return;\n\t\t\t\tif (effectiveEffort === effort) return;\n\t\t\t\tconst selection = {\n\t\t\t\t\tprovider: state.current.provider,\n\t\t\t\t\tmodel: state.current.model,\n\t\t\t\t\t...effort === void 0 ? {} : { reasoningEffort: effort }\n\t\t\t\t};\n\t\t\t\tlastActionRef.current = \"select\";\n\t\t\t\tselect(selection).then((accepted) => {\n\t\t\t\t\tsettleSelection(accepted, true);\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst togglePin = (key) => {\n\t\t\t\tsetPrefs((prev) => ({\n\t\t\t\t\t...prev,\n\t\t\t\t\tpinned: prev.pinned.includes(key) ? prev.pinned.filter((entry) => entry !== key) : [key, ...prev.pinned]\n\t\t\t\t}));\n\t\t\t};\n\t\t\tconst waiting = state.current === null && state.status === \"loading\";\n\t\t\tconst modelLabel = waiting ? t(\"trigger.loading\") : currentChoice?.model.name ?? (state.current === null ? t(\"trigger.fallback\") : state.current.provider + \"/\" + state.current.model);\n\t\t\tconst triggerLabel = effortLabel === void 0 ? modelLabel : modelLabel + \" · \" + effortLabel;\n\t\t\tconst triggerAria = waiting ? t(\"trigger.loading\") : state.current === null ? t(\"trigger.selectAria\") : effortLabel === void 0 ? t(\"trigger.aria\", { model: modelLabel }) : t(\"trigger.ariaEffort\", {\n\t\t\t\tmodel: modelLabel,\n\t\t\t\teffort: effortLabel\n\t\t\t});\n\t\t\titemRefs.current = [];\n\t\t\tlet itemIndex = 0;\n\t\t\tconst itemRef = () => {\n\t\t\t\tconst at = itemIndex++;\n\t\t\t\treturn (node) => {\n\t\t\t\t\titemRefs.current[at] = node;\n\t\t\t\t};\n\t\t\t};\n\t\t\tconst q = query.trim().toLowerCase();\n\t\t\tconst matches = q === \"\" ? [] : choices.filter((entry) => entry.model.name.toLowerCase().includes(q) || entry.model.id.toLowerCase().includes(q) || entry.group.name.toLowerCase().includes(q));\n\t\t\tconst byKey = new Map(choices.map((entry) => [selectionKey(entry.group.id, entry.model.id), entry]));\n\t\t\tconst pinnedSet = new Set(prefs.pinned);\n\t\t\tconst resolve = (keys) => keys.map((key) => byKey.get(key)).filter((entry) => entry !== void 0);\n\t\t\tconst pinnedEntries = resolve(prefs.pinned);\n\t\t\tconst recentEntries = resolve(prefs.recent.filter((key) => !pinnedSet.has(key)));\n\t\t\tconst renderRow = (entry, hint) => {\n\t\t\t\tconst key = selectionKey(entry.group.id, entry.model.id);\n\t\t\t\tconst selected = state.current?.provider === entry.group.id && state.current.model === entry.model.id;\n\t\t\t\tconst pinned = pinnedSet.has(key);\n\t\t\t\tconst pinLabel = pinned ? t(\"pin.remove\", { model: entry.model.name }) : t(\"pin.add\", { model: entry.model.name });\n\t\t\t\treturn (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.row, selected && ModelSelect_module_css_default.selected),\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\trole: \"menuitemradio\",\n\t\t\t\t\t\t\"aria-checked\": selected,\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.rowMain,\n\t\t\t\t\t\ttitle: entry.model.name,\n\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tchoose({\n\t\t\t\t\t\t\t\tprovider: entry.group.id,\n\t\t\t\t\t\t\t\tmodel: entry.model.id\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)(\"span\", {\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.optionCopy,\n\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.modelName,\n\t\t\t\t\t\t\t\tchildren: entry.model.name\n\t\t\t\t\t\t\t}), hint === void 0 ? null : (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.hitHint,\n\t\t\t\t\t\t\t\tchildren: hint\n\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.check,\n\t\t\t\t\t\t\tchildren: selected ? (0, react_jsx_runtime.jsx)(Msel2IconCheck, {}) : null\n\t\t\t\t\t\t})]\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\trole: \"menuitemcheckbox\",\n\t\t\t\t\t\t\"aria-checked\": pinned,\n\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.pin, pinned && ModelSelect_module_css_default.pinOn),\n\t\t\t\t\t\ttabIndex: -1,\n\t\t\t\t\t\t\"aria-label\": pinLabel,\n\t\t\t\t\t\ttitle: pinLabel,\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\ttogglePin(key);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(PinGlyph, {})\n\t\t\t\t\t})]\n\t\t\t\t}, key);\n\t\t\t};\n\t\t\tconst renderSection = (label, entries, key, showGroupName) => (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\trole: \"group\",\n\t\t\t\t\"aria-label\": label,\n\t\t\t\tclassName: ModelSelect_module_css_default.section,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\tclassName: ModelSelect_module_css_default.sectionTitle,\n\t\t\t\t\tchildren: label\n\t\t\t\t}), entries.map((entry) => renderRow(entry, showGroupName ? entry.group.name : void 0))]\n\t\t\t}, \"section:\" + key);\n\t\t\tconst body = q !== \"\" ? [renderSection(t(\"section.results\"), matches, \"matches\", true)] : [...pinnedEntries.length === 0 ? [] : [renderSection(t(\"section.pinned\"), pinnedEntries, \"pinned\", false)], ...recentEntries.length === 0 ? [] : [renderSection(t(\"section.recent\"), recentEntries, \"recent\", false)], ...groups.map((group) => renderSection(group.name, group.models.map((model) => byKey.get(selectionKey(group.id, model.id))).filter((entry) => entry !== void 0), group.id, false))];\n\t\t\tconst effortSwitch = reasoning === void 0 ? null : (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\tclassName: ModelSelect_module_css_default.effortRow,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\tclassName: ModelSelect_module_css_default.effortLabel,\n\t\t\t\t\tchildren: t(\"menu.effort\")\n\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\tclassName: ModelSelect_module_css_default.seg,\n\t\t\t\t\trole: \"radiogroup\",\n\t\t\t\t\t\"aria-label\": t(\"menu.effort\"),\n\t\t\t\t\tchildren: effortChoices.map((level) => {\n\t\t\t\t\t\tconst active = effectiveEffort === level.effort;\n\t\t\t\t\t\treturn (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\trole: \"radio\",\n\t\t\t\t\t\t\t\"aria-checked\": active,\n\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.segBtn, active && ModelSelect_module_css_default.segBtnOn),\n\t\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\t\ttitle: level.description === void 0 ? level.label : level.label + \" · \" + level.description,\n\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\tchooseEffort(level.effort);\n\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\tchildren: level.label\n\t\t\t\t\t\t}, level.key);\n\t\t\t\t\t})\n\t\t\t\t})]\n\t\t\t});\n\t\t\treturn (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\tref: rootRef,\n\t\t\t\tclassName: ModelSelect_module_css_default.root,\n\t\t\t\tonKeyDown: onRootKeyDown,\n\t\t\t\tonBlur,\n\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\tref: triggerRef,\n\t\t\t\t\ttype: \"button\",\n\t\t\t\t\tclassName: ModelSelect_module_css_default.trigger,\n\t\t\t\t\t\"aria-label\": triggerAria,\n\t\t\t\t\t\"aria-haspopup\": \"dialog\",\n\t\t\t\t\t\"aria-expanded\": open,\n\t\t\t\t\t\"aria-controls\": open ? id + \"-menu\" : void 0,\n\t\t\t\t\ttitle: triggerLabel,\n\t\t\t\t\tdisabled: locked,\n\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\tif (open) close();\n\t\t\t\t\t\telse show();\n\t\t\t\t\t},\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(Msel2IconData, {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerIcon,\n\t\t\t\t\t\tsize: 16\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerLabel,\n\t\t\t\t\t\tchildren: modelLabel\n\t\t\t\t\t}), effortLabel !== void 0 && (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerEffort,\n\t\t\t\t\t\tchildren: effortLabel\n\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(Msel2IconChevronDown, { className: clsx(ModelSelect_module_css_default.chevron, open && ModelSelect_module_css_default.chevronOpen) })]\n\t\t\t\t}), open && (0, react_dom.createPortal)((0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\tref: menuRef,\n\t\t\t\t\tid: id + \"-menu\",\n\t\t\t\t\tclassName: ModelSelect_module_css_default.menu,\n\t\t\t\t\tstyle: menuPos ?? MEASURE_STYLE,\n\t\t\t\t\trole: \"dialog\",\n\t\t\t\t\t\"aria-label\": t(\"menu.aria\"),\n\t\t\t\t\t\"aria-busy\": state.status === \"loading\" || busy,\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.searchRow,\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(Msel2IconSearch, { className: ModelSelect_module_css_default.searchIcon }), (0, react_jsx_runtime.jsx)(\"input\", {\n\t\t\t\t\t\t\tref: searchRef,\n\t\t\t\t\t\t\ttype: \"text\",\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.search,\n\t\t\t\t\t\t\tplaceholder: t(\"search.placeholder\"),\n\t\t\t\t\t\t\t\"aria-label\": t(\"search.placeholder\"),\n\t\t\t\t\t\t\tvalue: query,\n\t\t\t\t\t\t\tonChange: (event) => {\n\t\t\t\t\t\t\t\tsetQuery(event.target.value);\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}), query === \"\" ? null : (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.searchClear,\n\t\t\t\t\t\t\ttabIndex: -1,\n\t\t\t\t\t\t\t\"aria-label\": t(\"search.clear\"),\n\t\t\t\t\t\t\ttitle: t(\"search.clear\"),\n\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\tsetQuery(\"\");\n\t\t\t\t\t\t\t\tsearchRef.current?.focus();\n\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(Msel2IconClose, { size: 12 })\n\t\t\t\t\t\t})]\n\t\t\t\t\t}), effortSwitch, state.status === \"loading\" && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.status,\n\t\t\t\t\t\tchildren: t(\"status.loading\")\n\t\t\t\t\t}), state.error !== null && lastActionRef.current === \"load\" && (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.error,\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"error.action\", { message: state.error }) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t})]\n\t\t\t\t\t}), state.failures.map((failure) => (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.warning,\n\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"warning.groupLoad\", {\n\t\t\t\t\t\t\tname: failure.name,\n\t\t\t\t\t\t\tmessage: failure.message\n\t\t\t\t\t\t}) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t})]\n\t\t\t\t\t}, failure.id)), (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.groups, \"scrollable\"),\n\t\t\t\t\t\trole: \"menu\",\n\t\t\t\t\t\t\"aria-label\": t(\"menu.model\"),\n\t\t\t\t\t\tchildren: body\n\t\t\t\t\t}), state.status === \"ready\" && choices.length === 0 && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\tchildren: t(\"empty.models\")\n\t\t\t\t\t}), q !== \"\" && matches.length === 0 && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\tchildren: t(\"empty.search\")\n\t\t\t\t\t})]\n\t\t\t\t}), document.body), toast !== null && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Toast, {\n\t\t\t\t\ttext: toast.text,\n\t\t\t\t\ticon: (0, react_jsx_runtime.jsx)(Msel2IconWarning, {}),\n\t\t\t\t\tanchor: rootRef.current?.closest(\"[data-composer-card]\") ?? null,\n\t\t\t\t\tonDone: () => {\n\t\t\t\t\t\tsetToast(null);\n\t\t\t\t\t}\n\t\t\t\t}, toast.seq)]\n\t\t\t});\n\t\t}\n\t\t//#endregion"
 const MSEL2_OLD_REGION = "\t\tfunction ModelSelect({ locked, available, directory, load, select, t }) {\n\t\t\tconst state = (0, react.useSyncExternalStore)((fn) => directory.subscribe(fn), () => directory.getSnapshot());\n\t\t\tconst [open, setOpen] = (0, react.useState)(false);\n\t\t\tconst [pane, setPane] = (0, react.useState)(\"root\");\n\t\t\tconst lastActionRef = (0, react.useRef)(\"load\");\n\t\t\tconst [toast, setToast] = (0, react.useState)(null);\n\t\t\tconst toastSeq = (0, react.useRef)(0);\n\t\t\tconst rootRef = (0, react.useRef)(null);\n\t\t\tconst triggerRef = (0, react.useRef)(null);\n\t\t\tconst menuRef = (0, react.useRef)(null);\n\t\t\tconst [menuPos, setMenuPos] = (0, react.useState)(null);\n\t\t\tconst itemRefs = (0, react.useRef)([]);\n\t\t\tconst id = (0, react.useId)();\n\t\t\tconst choices = (0, react.useMemo)(() => state.groups.flatMap((group) => group.models.map((model) => ({\n\t\t\t\tgroup,\n\t\t\t\tmodel,\n\t\t\t\tselection: {\n\t\t\t\t\tprovider: group.id,\n\t\t\t\t\tmodel: model.id,\n\t\t\t\t\t...model.reasoning?.defaultEffort === void 0 ? {} : { reasoningEffort: model.reasoning.defaultEffort }\n\t\t\t\t}\n\t\t\t}))), [state.groups]);\n\t\t\tconst currentChoice = choices[state.current === null ? -1 : choices.findIndex((c) => c.selection.provider === state.current?.provider && c.selection.model === state.current.model)];\n\t\t\tconst reasoning = currentChoice?.model.reasoning;\n\t\t\tconst effectiveEffort = state.current?.reasoningEffort ?? reasoning?.defaultEffort;\n\t\t\tconst effortLabel = reasoning === void 0 ? void 0 : effectiveEffort === void 0 ? t(\"effort.providerDefault\") : reasoning.efforts.find((level) => level.id === effectiveEffort)?.name ?? effectiveEffort;\n\t\t\tconst effortChoices = (0, react.useMemo)(() => reasoning === void 0 ? [] : [...reasoning.defaultEffort === void 0 ? [{\n\t\t\t\tkey: \"provider-default\",\n\t\t\t\teffort: void 0,\n\t\t\t\tlabel: t(\"effort.providerDefault\")\n\t\t\t}] : [], ...reasoning.efforts.map((effort) => ({\n\t\t\t\tkey: `effort:${effort.id}`,\n\t\t\t\teffort: effort.id,\n\t\t\t\tlabel: effort.name\n\t\t\t}))], [reasoning, t]);\n\t\t\tconst busy = state.status === \"selecting\";\n\t\t\tconst reload = () => {\n\t\t\t\tlastActionRef.current = \"load\";\n\t\t\t\tload();\n\t\t\t};\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (!open) return;\n\t\t\t\tconst closeOutside = (event) => {\n\t\t\t\t\tif (rootRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tif (menuRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tsetOpen(false);\n\t\t\t\t};\n\t\t\t\tdocument.addEventListener(\"mousedown\", closeOutside);\n\t\t\t\treturn () => {\n\t\t\t\t\tdocument.removeEventListener(\"mousedown\", closeOutside);\n\t\t\t\t};\n\t\t\t}, [open]);\n\t\t\t(0, react.useLayoutEffect)(() => {\n\t\t\t\tif (!open) {\n\t\t\t\t\tsetMenuPos(null);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst place = () => {\n\t\t\t\t\t/* v8 ignore next 2 -- the trigger ref is attached whenever the menu is open. */\n\t\t\t\t\tconst rect = triggerRef.current?.getBoundingClientRect();\n\t\t\t\t\tif (rect === void 0) return;\n\t\t\t\t\tconst MARGIN = 12;\n\t\t\t\t\tconst lw = menuRef.current?.offsetWidth ?? 0;\n\t\t\t\t\tconst lh = menuRef.current?.offsetHeight ?? 0;\n\t\t\t\t\tlet x = rect.right - lw;\n\t\t\t\t\tlet y = rect.top - 8 - lh;\n\t\t\t\t\tif (lw > 0) x = Math.min(Math.max(x, MARGIN), window.innerWidth - lw - MARGIN);\n\t\t\t\t\tif (lh > 0) y = Math.min(Math.max(y, MARGIN), window.innerHeight - lh - MARGIN);\n\t\t\t\t\tsetMenuPos({\n\t\t\t\t\t\tleft: x,\n\t\t\t\t\t\ttop: y\n\t\t\t\t\t});\n\t\t\t\t};\n\t\t\t\tplace();\n\t\t\t\twindow.addEventListener(\"scroll\", place, true);\n\t\t\t\twindow.addEventListener(\"resize\", place);\n\t\t\t\treturn () => {\n\t\t\t\t\twindow.removeEventListener(\"scroll\", place, true);\n\t\t\t\t\twindow.removeEventListener(\"resize\", place);\n\t\t\t\t};\n\t\t\t}, [\n\t\t\t\topen,\n\t\t\t\tpane,\n\t\t\t\tstate\n\t\t\t]);\n\t\t\tif (!available) return null;\n\t\t\tconst show = () => {\n\t\t\t\tsetPane(\"root\");\n\t\t\t\tsetOpen(true);\n\t\t\t\treload();\n\t\t\t};\n\t\t\tconst close = (restoreFocus = false) => {\n\t\t\t\tsetOpen(false);\n\t\t\t\tsetPane(\"root\");\n\t\t\t\tif (restoreFocus) queueMicrotask(() => {\n\t\t\t\t\ttriggerRef.current?.focus();\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst moveFocus = (offset) => {\n\t\t\t\tconst items = itemRefs.current.filter((item) => item !== null);\n\t\t\t\tif (items.length === 0) return;\n\t\t\t\tconst active = items.findIndex((item) => item === document.activeElement);\n\t\t\t\titems[(Math.max(active, 0) + offset + items.length) % items.length]?.focus();\n\t\t\t};\n\t\t\tconst onRootKeyDown = (event) => {\n\t\t\t\tif (event.key === \"Escape\" && open) {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tif (pane !== \"root\") setPane(\"root\");\n\t\t\t\t\telse close(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (!open) return;\n\t\t\t\tif (event.key === \"ArrowDown\" || event.key === \"ArrowUp\") {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tmoveFocus(event.key === \"ArrowDown\" ? 1 : -1);\n\t\t\t\t}\n\t\t\t};\n\t\t\tconst onBlur = (event) => {\n\t\t\t\tif (event.relatedTarget instanceof Node && (rootRef.current?.contains(event.relatedTarget) === true || menuRef.current?.contains(event.relatedTarget) === true)) return;\n\t\t\t\tclose();\n\t\t\t};\n\t\t\tconst settleSelection = (accepted) => {\n\t\t\t\tif (accepted) {\n\t\t\t\t\tif (rootRef.current !== null) close(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst message = directory.getSnapshot().error;\n\t\t\t\tif (message !== null) {\n\t\t\t\t\ttoastSeq.current += 1;\n\t\t\t\t\tsetToast({\n\t\t\t\t\t\tseq: toastSeq.current,\n\t\t\t\t\t\ttext: /session\\/not-found/.test(message) ? t(\"error.sessionGone\") : t(\"error.action\", { message })\n\t\t\t\t\t});\n\t\t\t\t}\n\t\t\t};\n\t\t\tconst choose = (selection) => {\n\t\t\t\tif (state.current?.provider === selection.provider && state.current.model === selection.model) {\n\t\t\t\t\tclose(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tlastActionRef.current = \"select\";\n\t\t\t\tselect(selection).then(settleSelection);\n\t\t\t};\n\t\t\tconst chooseEffort = (effort) => {\n\t\t\t\tif (state.current === null) return;\n\t\t\t\tif (effectiveEffort === effort) {\n\t\t\t\t\tclose(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst selection = {\n\t\t\t\t\tprovider: state.current.provider,\n\t\t\t\t\tmodel: state.current.model,\n\t\t\t\t\t...effort === void 0 ? {} : { reasoningEffort: effort }\n\t\t\t\t};\n\t\t\t\tlastActionRef.current = \"select\";\n\t\t\t\tselect(selection).then(settleSelection);\n\t\t\t};\n\t\t\tconst waiting = state.current === null && state.status === \"loading\";\n\t\t\tconst modelLabel = waiting ? t(\"trigger.loading\") : currentChoice?.model.name ?? (state.current === null ? t(\"trigger.fallback\") : `${state.current.provider}/${state.current.model}`);\n\t\t\tconst triggerLabel = effortLabel === void 0 ? modelLabel : `${modelLabel} · ${effortLabel}`;\n\t\t\tconst triggerAria = waiting ? t(\"trigger.loading\") : state.current === null ? t(\"trigger.selectAria\") : effortLabel === void 0 ? t(\"trigger.aria\", { model: modelLabel }) : t(\"trigger.ariaEffort\", {\n\t\t\t\tmodel: modelLabel,\n\t\t\t\teffort: effortLabel\n\t\t\t});\n\t\t\titemRefs.current = [];\n\t\t\tlet itemIndex = 0;\n\t\t\tconst itemRef = () => {\n\t\t\t\tconst at = itemIndex++;\n\t\t\t\treturn (node) => {\n\t\t\t\t\titemRefs.current[at] = node;\n\t\t\t\t};\n\t\t\t};\n\t\t\treturn (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\tref: rootRef,\n\t\t\t\tclassName: ModelSelect_module_css_default.root,\n\t\t\t\tonKeyDown: onRootKeyDown,\n\t\t\t\tonBlur,\n\t\t\t\tchildren: [\n\t\t\t\t\t(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\tref: triggerRef,\n\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.trigger,\n\t\t\t\t\t\t\"aria-label\": triggerAria,\n\t\t\t\t\t\t\"aria-haspopup\": \"menu\",\n\t\t\t\t\t\t\"aria-expanded\": open,\n\t\t\t\t\t\t\"aria-controls\": open ? `${id}-menu` : void 0,\n\t\t\t\t\t\ttitle: triggerLabel,\n\t\t\t\t\t\tdisabled: locked,\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tif (open) close();\n\t\t\t\t\t\t\telse show();\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDataOutline16, {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerIcon,\n\t\t\t\t\t\t\t\tsize: 16\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerLabel,\n\t\t\t\t\t\t\t\tchildren: modelLabel\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\teffortLabel !== void 0 && (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerEffort,\n\t\t\t\t\t\t\t\tchildren: effortLabel\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, { className: clsx(ModelSelect_module_css_default.chevron, open && ModelSelect_module_css_default.chevronOpen) })\n\t\t\t\t\t\t]\n\t\t\t\t\t}),\n\t\t\t\t\topen && (0, react_dom.createPortal)((0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\tref: menuRef,\n\t\t\t\t\t\tid: `${id}-menu`,\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.menu,\n\t\t\t\t\t\tstyle: menuPos ?? MEASURE_STYLE,\n\t\t\t\t\t\trole: \"menu\",\n\t\t\t\t\t\t\"aria-label\": t(\"menu.aria\"),\n\t\t\t\t\t\t\"aria-busy\": state.status === \"loading\" || busy,\n\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\tpane === \"root\" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\trole: \"menuitem\",\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cell,\n\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\tsetPane(\"model\");\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellLabel,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"menu.model\")\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellValue,\n\t\t\t\t\t\t\t\t\t\tchildren: modelLabel\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronRightOutline14, { className: ModelSelect_module_css_default.cellChevron })\n\t\t\t\t\t\t\t\t]\n\t\t\t\t\t\t\t}), reasoning !== void 0 && (0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\trole: \"menuitem\",\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cell,\n\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\tsetPane(\"effort\");\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellLabel,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"menu.effort\")\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellValue,\n\t\t\t\t\t\t\t\t\t\tchildren: effortLabel\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronRightOutline14, { className: ModelSelect_module_css_default.cellChevron })\n\t\t\t\t\t\t\t\t]\n\t\t\t\t\t\t\t})] }),\n\t\t\t\t\t\t\tpane === \"model\" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [\n\t\t\t\t\t\t\t\tstate.status === \"loading\" && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.status,\n\t\t\t\t\t\t\t\t\tchildren: t(\"status.loading\")\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.error !== null && lastActionRef.current === \"load\" && (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.error,\n\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"error.action\", { message: state.error }) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.failures.map((failure) => (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.warning,\n\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"warning.groupLoad\", {\n\t\t\t\t\t\t\t\t\t\tname: failure.name,\n\t\t\t\t\t\t\t\t\t\tmessage: failure.message\n\t\t\t\t\t\t\t\t\t}) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t}, failure.id)),\n\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.groups, \"scrollable\"),\n\t\t\t\t\t\t\t\t\tchildren: state.groups.map((group) => {\n\t\t\t\t\t\t\t\t\t\tconst headingId = `${id}-${group.id}`;\n\t\t\t\t\t\t\t\t\t\treturn (0, react_jsx_runtime.jsxs)(\"section\", {\n\t\t\t\t\t\t\t\t\t\t\trole: \"group\",\n\t\t\t\t\t\t\t\t\t\t\t\"aria-labelledby\": headingId,\n\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.group,\n\t\t\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.groupTitle,\n\t\t\t\t\t\t\t\t\t\t\t\tid: headingId,\n\t\t\t\t\t\t\t\t\t\t\t\tchildren: group.name\n\t\t\t\t\t\t\t\t\t\t\t}), group.models.map((model) => {\n\t\t\t\t\t\t\t\t\t\t\t\tconst selected = state.current?.provider === group.id && state.current.model === model.id;\n\t\t\t\t\t\t\t\t\t\t\t\treturn (0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\t\t\t\trole: \"menuitemradio\",\n\t\t\t\t\t\t\t\t\t\t\t\t\t\"aria-checked\": selected,\n\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.option, selected && ModelSelect_module_css_default.selected),\n\t\t\t\t\t\t\t\t\t\t\t\t\ttitle: model.name,\n\t\t\t\t\t\t\t\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tchoose({\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tprovider: group.id,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tmodel: model.id\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.optionCopy,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.modelName,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: model.name\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.check,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: selected ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline16, {}) : null\n\t\t\t\t\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t\t\t\t\t}, model.id);\n\t\t\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t\t\t}, group.id);\n\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.status === \"ready\" && choices.length === 0 && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\t\t\t\tchildren: t(\"empty.models\")\n\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t] }),\n\t\t\t\t\t\t\tpane === \"effort\" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [state.error !== null && lastActionRef.current === \"load\" && (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.error,\n\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"error.action\", { message: state.error }) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\t\t\tchildren: t(\"action.reload\")\n\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t}), effortChoices.length === 0 ? (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\t\t\tchildren: t(\"empty.efforts\")\n\t\t\t\t\t\t\t}) : effortChoices.map((level) => (0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\trole: \"menuitemradio\",\n\t\t\t\t\t\t\t\t\"aria-checked\": effectiveEffort === level.effort,\n\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.option, effectiveEffort === level.effort && ModelSelect_module_css_default.selected),\n\t\t\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\tchooseEffort(level.effort);\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.optionCopy,\n\t\t\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.modelName,\n\t\t\t\t\t\t\t\t\t\tchildren: level.label\n\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.check,\n\t\t\t\t\t\t\t\t\tchildren: effectiveEffort === level.effort ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline16, {}) : null\n\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t}, level.key))] })\n\t\t\t\t\t\t]\n\t\t\t\t\t}), document.body),\n\t\t\t\t\ttoast !== null && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Toast, {\n\t\t\t\t\t\ttext: toast.text,\n\t\t\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutline16, {}),\n\t\t\t\t\t\tanchor: rootRef.current?.closest(\"[data-composer-card]\") ?? null,\n\t\t\t\t\t\tonDone: () => {\n\t\t\t\t\t\t\tsetToast(null);\n\t\t\t\t\t\t}\n\t\t\t\t\t}, toast.seq)\n\t\t\t\t]\n\t\t\t});\n\t\t}\n\t\t//#endregion"
+const MSEL2_OLD_REGION_V17 = "\t\tfunction ModelSelect({ locked, available, directory, load, select, t }) {\n\t\t\tconst state = (0, react.useSyncExternalStore)((fn) => directory.subscribe(fn), () => directory.getSnapshot());\n\t\t\tconst [open, setOpen] = (0, react.useState)(false);\n\t\t\tconst [pane, setPane] = (0, react.useState)(\"root\");\n\t\t\tconst lastActionRef = (0, react.useRef)(\"load\");\n\t\t\tconst [toast, setToast] = (0, react.useState)(null);\n\t\t\tconst toastSeq = (0, react.useRef)(0);\n\t\t\tconst rootRef = (0, react.useRef)(null);\n\t\t\tconst triggerRef = (0, react.useRef)(null);\n\t\t\tconst menuRef = (0, react.useRef)(null);\n\t\t\tconst [menuPos, setMenuPos] = (0, react.useState)(null);\n\t\t\tconst itemRefs = (0, react.useRef)([]);\n\t\t\tconst id = (0, react.useId)();\n\t\t\tconst groups = (0, react.useMemo)(() => state.groups.toSorted((left, right) => (left.id === \"deepseek-account\" ? 0 : left.id === \"deepseek-official\" ? 1 : 2) - (right.id === \"deepseek-account\" ? 0 : right.id === \"deepseek-official\" ? 1 : 2)), [state.groups]);\n\t\t\tconst choices = (0, react.useMemo)(() => groups.flatMap((group) => group.models.map((model) => ({\n\t\t\t\tgroup,\n\t\t\t\tmodel,\n\t\t\t\tselection: {\n\t\t\t\t\tprovider: group.id,\n\t\t\t\t\tmodel: model.id,\n\t\t\t\t\t...model.reasoning?.defaultEffort === void 0 ? {} : { reasoningEffort: model.reasoning.defaultEffort }\n\t\t\t\t}\n\t\t\t}))), [groups]);\n\t\t\tconst currentChoice = choices[state.current === null ? -1 : choices.findIndex((c) => c.selection.provider === state.current?.provider && c.selection.model === state.current.model)];\n\t\t\tconst reasoning = currentChoice?.model.reasoning;\n\t\t\tconst effectiveEffort = state.current?.reasoningEffort ?? reasoning?.defaultEffort;\n\t\t\tconst effortLabel = reasoning === void 0 ? state.retainedEffort : effectiveEffort === void 0 ? t(\"effort.providerDefault\") : reasoning.efforts.find((level) => level.id === effectiveEffort)?.name ?? effectiveEffort;\n\t\t\tconst effortChoices = (0, react.useMemo)(() => reasoning === void 0 ? [] : [...reasoning.defaultEffort === void 0 ? [{\n\t\t\t\tkey: \"provider-default\",\n\t\t\t\teffort: void 0,\n\t\t\t\tlabel: t(\"effort.providerDefault\")\n\t\t\t}] : [], ...reasoning.efforts.map((effort) => ({\n\t\t\t\tkey: `effort:${effort.id}`,\n\t\t\t\teffort: effort.id,\n\t\t\t\tlabel: effort.name\n\t\t\t}))], [reasoning, t]);\n\t\t\tconst { pending } = state;\n\t\t\tconst busy = pending !== null;\n\t\t\tconst reload = () => {\n\t\t\t\tlastActionRef.current = \"load\";\n\t\t\t\tload();\n\t\t\t};\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (!open) return;\n\t\t\t\tconst closeOutside = (event) => {\n\t\t\t\t\tif (rootRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tif (menuRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tsetOpen(false);\n\t\t\t\t};\n\t\t\t\tdocument.addEventListener(\"mousedown\", closeOutside);\n\t\t\t\treturn () => {\n\t\t\t\t\tdocument.removeEventListener(\"mousedown\", closeOutside);\n\t\t\t\t};\n\t\t\t}, [open]);\n\t\t\tconst paneFocus = (0, react.useRef)(null);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tconst intent = paneFocus.current;\n\t\t\t\tpaneFocus.current = null;\n\t\t\t\tif (!open || intent === null) return;\n\t\t\t\tif (intent === \"drill\") {\n\t\t\t\t\t(menuRef.current?.querySelector(\"[role=\\\"menuitemradio\\\"][aria-checked=\\\"true\\\"]:not([disabled])\") ?? itemRefs.current.find((item) => item !== null && !item.disabled) ?? triggerRef.current)?.focus();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst cell = itemRefs.current[intent === \"effort\" ? 1 : 0];\n\t\t\t\t(cell !== null && cell !== void 0 && !cell.disabled ? cell : triggerRef.current)?.focus();\n\t\t\t}, [open, pane]);\n\t\t\t(0, react.useLayoutEffect)(() => {\n\t\t\t\tif (!open) {\n\t\t\t\t\tsetMenuPos(null);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst place = () => {\n\t\t\t\t\t/* v8 ignore next 2 -- the trigger ref is attached whenever the menu is open. */\n\t\t\t\t\tconst rect = triggerRef.current?.getBoundingClientRect();\n\t\t\t\t\tif (rect === void 0) return;\n\t\t\t\t\tconst MARGIN = 12;\n\t\t\t\t\tconst lw = menuRef.current?.offsetWidth ?? 0;\n\t\t\t\t\tconst lh = menuRef.current?.offsetHeight ?? 0;\n\t\t\t\t\tlet x = rect.right - lw;\n\t\t\t\t\tlet y = rect.top - 8 - lh;\n\t\t\t\t\tif (lw > 0) x = Math.min(Math.max(x, MARGIN), window.innerWidth - lw - MARGIN);\n\t\t\t\t\tif (lh > 0) y = Math.min(Math.max(y, MARGIN), window.innerHeight - lh - MARGIN);\n\t\t\t\t\tsetMenuPos({\n\t\t\t\t\t\tleft: x,\n\t\t\t\t\t\ttop: y\n\t\t\t\t\t});\n\t\t\t\t};\n\t\t\t\tplace();\n\t\t\t\twindow.addEventListener(\"scroll\", place, true);\n\t\t\t\twindow.addEventListener(\"resize\", place);\n\t\t\t\treturn () => {\n\t\t\t\t\twindow.removeEventListener(\"scroll\", place, true);\n\t\t\t\t\twindow.removeEventListener(\"resize\", place);\n\t\t\t\t};\n\t\t\t}, [\n\t\t\t\topen,\n\t\t\t\tpane,\n\t\t\t\tstate\n\t\t\t]);\n\t\t\tif (!available) return null;\n\t\t\tconst show = () => {\n\t\t\t\ttriggerRef.current?.focus();\n\t\t\t\tif (state.current === null) paneFocus.current = \"drill\";\n\t\t\t\tsetPane(state.current === null ? \"model\" : \"root\");\n\t\t\t\tsetOpen(true);\n\t\t\t\treload();\n\t\t\t};\n\t\t\tconst close = (restoreFocus = false) => {\n\t\t\t\tsetOpen(false);\n\t\t\t\tsetPane(\"root\");\n\t\t\t\tif (restoreFocus) queueMicrotask(() => {\n\t\t\t\t\ttriggerRef.current?.focus();\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst drill = (next) => {\n\t\t\t\tpaneFocus.current = \"drill\";\n\t\t\t\tsetPane(next);\n\t\t\t};\n\t\t\t/** Leave a drilled pane for the root one, handing the keyboard back to its cell. */\n\t\t\tconst back = (from) => {\n\t\t\t\tpaneFocus.current = from;\n\t\t\t\tsetPane(\"root\");\n\t\t\t};\n\t\t\tconst moveFocus = (offset) => {\n\t\t\t\tconst items = itemRefs.current.filter((item) => item !== null);\n\t\t\t\tif (items.length === 0) return;\n\t\t\t\tconst active = items.findIndex((item) => item === document.activeElement);\n\t\t\t\titems[active === -1 ? offset > 0 ? 0 : items.length - 1 : (active + offset + items.length) % items.length]?.focus();\n\t\t\t};\n\t\t\tconst onRootKeyDown = (event) => {\n\t\t\t\tif (event.key === \"Escape\" && open) {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tif (pane !== \"root\" && state.current !== null) back(pane);\n\t\t\t\t\telse close(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (!open) return;\n\t\t\t\tif (event.key === \"Tab\") {\n\t\t\t\t\tif (event.shiftKey) {\n\t\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\t\tif (pane !== \"root\" && state.current !== null) back(pane);\n\t\t\t\t\t\telse close(true);\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tconst focused = document.activeElement;\n\t\t\t\t\tconst rows = itemRefs.current.filter((item) => item !== null);\n\t\t\t\t\tif (focused instanceof HTMLButtonElement && rows.includes(focused)) {\n\t\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\t\tfocused.click();\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tif (focused !== triggerRef.current) return;\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\t(menuRef.current?.querySelector(\"[role=\\\"menuitemradio\\\"][aria-checked=\\\"true\\\"]:not([disabled])\") ?? rows.find((item) => !item.disabled))?.focus();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (event.key === \"ArrowDown\" || event.key === \"ArrowUp\") {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tmoveFocus(event.key === \"ArrowDown\" ? 1 : -1);\n\t\t\t\t}\n\t\t\t};\n\t\t\tconst onBlur = (event) => {\n\t\t\t\tif (event.relatedTarget instanceof Node && (rootRef.current?.contains(event.relatedTarget) === true || menuRef.current?.contains(event.relatedTarget) === true)) return;\n\t\t\t\tclose();\n\t\t\t};\n\t\t\tconst settleSelection = (result) => {\n\t\t\t\tif (result === void 0) return;\n\t\t\t\tif (result.ok) {\n\t\t\t\t\tif (rootRef.current !== null) close(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst { error } = result;\n\t\t\t\ttoastSeq.current += 1;\n\t\t\t\tsetToast({\n\t\t\t\t\tseq: toastSeq.current,\n\t\t\t\t\ttext: error.code === \"session/writer-held\" ? t(\"error.sessionInUse\") : t(\"error.action\", { message: `${error.code}: ${error.message}` })\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst submit = (selection) => {\n\t\t\t\tlastActionRef.current = \"select\";\n\t\t\t\ttriggerRef.current?.focus();\n\t\t\t\tselect(selection).then(settleSelection);\n\t\t\t};\n\t\t\tconst choose = (selection) => {\n\t\t\t\tif (state.current?.provider === selection.provider && state.current.model === selection.model) {\n\t\t\t\t\tclose(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tsubmit(selection);\n\t\t\t};\n\t\t\tconst chooseEffort = (effort) => {\n\t\t\t\tif (state.current === null) return;\n\t\t\t\tif (effectiveEffort === effort) {\n\t\t\t\t\tclose(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tsubmit({\n\t\t\t\t\tprovider: state.current.provider,\n\t\t\t\t\tmodel: state.current.model,\n\t\t\t\t\t...effort === void 0 ? {} : { reasoningEffort: effort }\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst waiting = state.current === null && state.status === \"loading\";\n\t\t\tconst modelLabel = waiting ? t(\"trigger.loading\") : currentChoice?.model.name ?? (state.current === null ? t(\"trigger.fallback\") : `${state.current.provider}/${state.current.model}`);\n\t\t\tconst triggerLabel = effortLabel === void 0 ? modelLabel : `${modelLabel} · ${effortLabel}`;\n\t\t\tconst triggerAria = waiting ? t(\"trigger.loading\") : state.current === null ? t(\"trigger.selectAria\") : effortLabel === void 0 ? t(\"trigger.aria\", { model: modelLabel }) : t(\"trigger.ariaEffort\", {\n\t\t\t\tmodel: modelLabel,\n\t\t\t\teffort: effortLabel\n\t\t\t});\n\t\t\titemRefs.current = [];\n\t\t\tlet itemIndex = 0;\n\t\t\tconst itemRef = () => {\n\t\t\t\tconst at = itemIndex++;\n\t\t\t\treturn (node) => {\n\t\t\t\t\titemRefs.current[at] = node;\n\t\t\t\t};\n\t\t\t};\n\t\t\treturn (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\tref: rootRef,\n\t\t\t\tclassName: ModelSelect_module_css_default.root,\n\t\t\t\tonKeyDown: onRootKeyDown,\n\t\t\t\tonBlur,\n\t\t\t\tonMouseDown: (event) => {\n\t\t\t\t\tif (event.target instanceof Element && event.target.closest(\"button\") !== null) event.preventDefault();\n\t\t\t\t},\n\t\t\t\tchildren: [\n\t\t\t\t\t(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\tref: triggerRef,\n\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.trigger,\n\t\t\t\t\t\t\"aria-label\": triggerAria,\n\t\t\t\t\t\t\"aria-haspopup\": \"menu\",\n\t\t\t\t\t\t\"aria-expanded\": open,\n\t\t\t\t\t\t\"aria-controls\": open ? `${id}-menu` : void 0,\n\t\t\t\t\t\ttitle: triggerLabel,\n\t\t\t\t\t\t\"aria-busy\": busy,\n\t\t\t\t\t\tdisabled: locked,\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tif (open) close(true);\n\t\t\t\t\t\t\telse show();\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDataOutlineRegular, {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerIcon,\n\t\t\t\t\t\t\t\tsize: 16\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerLabel,\n\t\t\t\t\t\t\t\tchildren: modelLabel\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\teffortLabel !== void 0 && (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerEffort,\n\t\t\t\t\t\t\t\tchildren: effortLabel\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\tbusy ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: \"ongoing\" }) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { className: clsx(ModelSelect_module_css_default.chevron, open && ModelSelect_module_css_default.chevronOpen) })\n\t\t\t\t\t\t]\n\t\t\t\t\t}),\n\t\t\t\t\topen && (0, react_dom.createPortal)((0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.MenuSurface, {\n\t\t\t\t\t\tref: menuRef,\n\t\t\t\t\t\tid: `${id}-menu`,\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.menu,\n\t\t\t\t\t\tstyle: menuPos ?? MEASURE_STYLE,\n\t\t\t\t\t\trole: \"menu\",\n\t\t\t\t\t\t\"aria-label\": t(\"menu.aria\"),\n\t\t\t\t\t\t\"aria-busy\": state.status === \"loading\" || busy,\n\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\tpane === \"root\" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\trole: \"menuitem\",\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cell,\n\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\tdrill(\"model\");\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellLabel,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"menu.model\")\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellValue,\n\t\t\t\t\t\t\t\t\t\tchildren: modelLabel\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronRightOutlineRegular, { className: ModelSelect_module_css_default.cellChevron })\n\t\t\t\t\t\t\t\t]\n\t\t\t\t\t\t\t}), reasoning !== void 0 && (0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\trole: \"menuitem\",\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cell,\n\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\tdrill(\"effort\");\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellLabel,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"menu.effort\")\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellValue,\n\t\t\t\t\t\t\t\t\t\tchildren: effortLabel\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronRightOutlineRegular, { className: ModelSelect_module_css_default.cellChevron })\n\t\t\t\t\t\t\t\t]\n\t\t\t\t\t\t\t})] }),\n\t\t\t\t\t\t\tpane === \"model\" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [\n\t\t\t\t\t\t\t\tstate.status === \"loading\" && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.status,\n\t\t\t\t\t\t\t\t\tchildren: t(\"status.loading\")\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.error !== null && lastActionRef.current === \"load\" && (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.error,\n\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"error.action\", { message: state.error }) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.failures.map((failure) => (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.warning,\n\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"warning.groupLoad\", {\n\t\t\t\t\t\t\t\t\t\tname: failure.id === \"deepseek-account\" ? t(\"provider.account\") : failure.name,\n\t\t\t\t\t\t\t\t\t\tmessage: failure.message\n\t\t\t\t\t\t\t\t\t}) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t}, failure.id)),\n\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.groups, \"scrollable\"),\n\t\t\t\t\t\t\t\t\tchildren: groups.map((group) => {\n\t\t\t\t\t\t\t\t\t\tconst headingId = `${id}-${group.id}`;\n\t\t\t\t\t\t\t\t\t\treturn (0, react_jsx_runtime.jsxs)(\"section\", {\n\t\t\t\t\t\t\t\t\t\t\trole: \"group\",\n\t\t\t\t\t\t\t\t\t\t\t\"aria-labelledby\": headingId,\n\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.group,\n\t\t\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.groupTitle,\n\t\t\t\t\t\t\t\t\t\t\t\tid: headingId,\n\t\t\t\t\t\t\t\t\t\t\t\tchildren: group.id === \"deepseek-account\" ? t(\"provider.account\") : group.name\n\t\t\t\t\t\t\t\t\t\t\t}), group.models.map((model) => {\n\t\t\t\t\t\t\t\t\t\t\t\tconst selected = state.current?.provider === group.id && state.current.model === model.id;\n\t\t\t\t\t\t\t\t\t\t\t\treturn (0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\t\t\t\trole: \"menuitemradio\",\n\t\t\t\t\t\t\t\t\t\t\t\t\t\"aria-checked\": selected,\n\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.option, selected && ModelSelect_module_css_default.selected),\n\t\t\t\t\t\t\t\t\t\t\t\t\ttitle: model.name,\n\t\t\t\t\t\t\t\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tchoose({\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tprovider: group.id,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tmodel: model.id\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.optionCopy,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.modelName,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: model.name\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.check,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: pending?.provider === group.id && pending.model === model.id ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: \"ongoing\" }) : selected ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutlineRegular, {}) : null\n\t\t\t\t\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t\t\t\t\t}, model.id);\n\t\t\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t\t\t}, group.id);\n\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.status === \"ready\" && choices.length === 0 && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\t\t\t\tchildren: t(\"empty.models\")\n\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t] }),\n\t\t\t\t\t\t\tpane === \"effort\" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [state.error !== null && lastActionRef.current === \"load\" && (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.error,\n\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"error.action\", { message: state.error }) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\t\t\tchildren: t(\"action.reload\")\n\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t}), effortChoices.length === 0 ? (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\t\t\tchildren: t(\"empty.efforts\")\n\t\t\t\t\t\t\t}) : effortChoices.map((level) => (0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\trole: \"menuitemradio\",\n\t\t\t\t\t\t\t\t\"aria-checked\": effectiveEffort === level.effort,\n\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.option, effectiveEffort === level.effort && ModelSelect_module_css_default.selected),\n\t\t\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\tchooseEffort(level.effort);\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.optionCopy,\n\t\t\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.modelName,\n\t\t\t\t\t\t\t\t\t\tchildren: level.label\n\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.check,\n\t\t\t\t\t\t\t\t\tchildren: pending !== null && pending.provider === state.current?.provider && pending.model === state.current.model && pending.reasoningEffort === level.effort ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: \"ongoing\" }) : effectiveEffort === level.effort ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutlineRegular, {}) : null\n\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t}, level.key))] })\n\t\t\t\t\t\t]\n\t\t\t\t\t}), document.body),\n\t\t\t\t\ttoast !== null && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Toast, {\n\t\t\t\t\t\ttext: toast.text,\n\t\t\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutlineRegular, {}),\n\t\t\t\t\t\tanchor: rootRef.current?.closest(\"[data-composer-card]\") ?? null,\n\t\t\t\t\t\tonDone: () => {\n\t\t\t\t\t\t\tsetToast(null);\n\t\t\t\t\t\t}\n\t\t\t\t\t}, toast.seq)\n\t\t\t\t]\n\t\t\t});\n\t\t}\n\t\t//#endregion"
+const MSEL2_OLD_REGION_V20 = "\t\tfunction ModelSelect({ locked, available, directory, load, select, t }) {\n\t\t\tconst state = (0, react.useSyncExternalStore)((fn) => directory.subscribe(fn), () => directory.getSnapshot());\n\t\t\tconst [open, setOpen] = (0, react.useState)(false);\n\t\t\tconst [pane, setPane] = (0, react.useState)(\"root\");\n\t\t\tconst [query, setQuery] = (0, react.useState)(\"\");\n\t\t\tconst [highlightedIndex, setHighlightedIndex] = (0, react.useState)(null);\n\t\t\tconst [selectionFocus, setSelectionFocus] = (0, react.useState)(false);\n\t\t\tconst lastActionRef = (0, react.useRef)(\"load\");\n\t\t\tconst [toast, setToast] = (0, react.useState)(null);\n\t\t\tconst toastSeq = (0, react.useRef)(0);\n\t\t\tconst rootRef = (0, react.useRef)(null);\n\t\t\tconst triggerRef = (0, react.useRef)(null);\n\t\t\tconst searchRef = (0, react.useRef)(null);\n\t\t\tconst menuRef = (0, react.useRef)(null);\n\t\t\tconst groupsRef = (0, react.useRef)(null);\n\t\t\tconst [menuPos, setMenuPos] = (0, react.useState)(null);\n\t\t\tconst itemRefs = (0, react.useRef)([]);\n\t\t\tconst id = (0, react.useId)();\n\t\t\tconst groups = (0, react.useMemo)(() => orderModelProviders(state.groups), [state.groups]);\n\t\t\tconst choices = (0, react.useMemo)(() => groups.flatMap((group) => group.models.map((model) => ({\n\t\t\t\tgroup,\n\t\t\t\tmodel,\n\t\t\t\tselection: {\n\t\t\t\t\tprovider: group.id,\n\t\t\t\t\tmodel: model.id,\n\t\t\t\t\t...model.reasoning?.defaultEffort === void 0 ? {} : { reasoningEffort: model.reasoning.defaultEffort }\n\t\t\t\t}\n\t\t\t}))), [groups]);\n\t\t\tconst showSearch = choices.length > 4;\n\t\t\tconst filteredGroups = (0, react.useMemo)(() => groups.map((group) => ({\n\t\t\t\t...group,\n\t\t\t\tmodels: (0, _deepseek_ai_dsh_client_ui_primitives.rankByName)(group.models, showSearch ? query.trim() : \"\")\n\t\t\t})).filter((group) => group.models.length > 0), [\n\t\t\t\tgroups,\n\t\t\t\tquery,\n\t\t\t\tshowSearch\n\t\t\t]);\n\t\t\tconst visibleModels = (0, react.useMemo)(() => filteredGroups.flatMap((group) => group.models.map((model) => ({\n\t\t\t\tprovider: group.id,\n\t\t\t\tmodel: model.id\n\t\t\t}))), [filteredGroups]);\n\t\t\tconst currentVisibleIndex = visibleModels.findIndex((model) => model.provider === state.current?.provider && model.model === state.current.model);\n\t\t\tconst activeModelIndex = Math.min(highlightedIndex ?? Math.max(0, currentVisibleIndex), visibleModels.length - 1);\n\t\t\tconst currentChoice = choices[state.current === null ? -1 : choices.findIndex((c) => c.selection.provider === state.current?.provider && c.selection.model === state.current.model)];\n\t\t\tconst reasoning = currentChoice?.model.reasoning;\n\t\t\tconst effectiveEffort = state.current?.reasoningEffort ?? reasoning?.defaultEffort;\n\t\t\tconst effortLabel = reasoning === void 0 ? state.retainedEffort : effectiveEffort === void 0 ? t(\"effort.providerDefault\") : reasoning.efforts.find((level) => level.id === effectiveEffort)?.name ?? effectiveEffort;\n\t\t\tconst effortChoices = (0, react.useMemo)(() => reasoning === void 0 ? [] : [...reasoning.defaultEffort === void 0 ? [{\n\t\t\t\tkey: \"provider-default\",\n\t\t\t\teffort: void 0,\n\t\t\t\tlabel: t(\"effort.providerDefault\")\n\t\t\t}] : [], ...reasoning.efforts.map((effort) => ({\n\t\t\t\tkey: `effort:${effort.id}`,\n\t\t\t\teffort: effort.id,\n\t\t\t\tlabel: effort.name\n\t\t\t}))], [reasoning, t]);\n\t\t\tconst { pending } = state;\n\t\t\tconst busy = pending !== null;\n\t\t\tconst reload = () => {\n\t\t\t\tlastActionRef.current = \"load\";\n\t\t\t\tload();\n\t\t\t};\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tif (!open) return;\n\t\t\t\tconst closeOutside = (event) => {\n\t\t\t\t\tif (rootRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tif (menuRef.current?.contains(event.target) === true) return;\n\t\t\t\t\tsetOpen(false);\n\t\t\t\t};\n\t\t\t\tdocument.addEventListener(\"mousedown\", closeOutside);\n\t\t\t\treturn () => {\n\t\t\t\t\tdocument.removeEventListener(\"mousedown\", closeOutside);\n\t\t\t\t};\n\t\t\t}, [open]);\n\t\t\t(0, react.useLayoutEffect)(() => {\n\t\t\t\tif (!showSearch) {\n\t\t\t\t\tsetQuery(\"\");\n\t\t\t\t\tsetHighlightedIndex(null);\n\t\t\t\t}\n\t\t\t}, [showSearch]);\n\t\t\tconst paneFocus = (0, react.useRef)(null);\n\t\t\tconst previousShowSearch = (0, react.useRef)(showSearch);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tconst changedSearchMode = previousShowSearch.current !== showSearch;\n\t\t\t\tpreviousShowSearch.current = showSearch;\n\t\t\t\tconst intent = paneFocus.current ?? (changedSearchMode && pane === \"model\" ? \"drill\" : null);\n\t\t\t\tpaneFocus.current = null;\n\t\t\t\tif (!open || intent === null) return;\n\t\t\t\tif (intent === \"drill\") {\n\t\t\t\t\tif (pane === \"model\" && showSearch) {\n\t\t\t\t\t\tsearchRef.current?.focus();\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\t(menuRef.current?.querySelector(\"[role=\\\"menuitemradio\\\"][aria-checked=\\\"true\\\"]:not([disabled])\") ?? itemRefs.current.find((item) => item !== null && !item.disabled) ?? triggerRef.current)?.focus();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst cell = itemRefs.current[intent === \"effort\" ? 1 : 0];\n\t\t\t\t(cell !== null && cell !== void 0 && !cell.disabled ? cell : triggerRef.current)?.focus();\n\t\t\t}, [\n\t\t\t\topen,\n\t\t\t\tpane,\n\t\t\t\tshowSearch\n\t\t\t]);\n\t\t\t(0, react.useEffect)(() => {\n\t\t\t\tconst viewport = groupsRef.current;\n\t\t\t\tif (viewport === null) return;\n\t\t\t\treturn (0, _deepseek_ai_dsh_client_ui_primitives.observeStickyMenuGroups)(viewport);\n\t\t\t}, [\n\t\t\t\tavailable,\n\t\t\t\topen,\n\t\t\t\tpane,\n\t\t\t\tfilteredGroups\n\t\t\t]);\n\t\t\t(0, react.useLayoutEffect)(() => {\n\t\t\t\tif (open && pane === \"model\" && activeModelIndex >= 0) itemRefs.current[activeModelIndex]?.scrollIntoView({ block: \"nearest\" });\n\t\t\t}, [\n\t\t\t\topen,\n\t\t\t\tpane,\n\t\t\t\tactiveModelIndex,\n\t\t\t\tvisibleModels\n\t\t\t]);\n\t\t\t(0, react.useLayoutEffect)(() => {\n\t\t\t\tif (!open) {\n\t\t\t\t\tsetMenuPos(null);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst place = () => {\n\t\t\t\t\t/* v8 ignore next 2 -- the trigger ref is attached whenever the menu is open. */\n\t\t\t\t\tconst rect = triggerRef.current?.getBoundingClientRect();\n\t\t\t\t\tif (rect === void 0) return;\n\t\t\t\t\tconst MARGIN = 12;\n\t\t\t\t\tconst lw = menuRef.current?.offsetWidth ?? 0;\n\t\t\t\t\tconst lh = menuRef.current?.offsetHeight ?? 0;\n\t\t\t\t\tlet x = rect.right - lw;\n\t\t\t\t\tlet y = rect.top - 8 - lh;\n\t\t\t\t\tif (lw > 0) x = Math.min(Math.max(x, MARGIN), window.innerWidth - lw - MARGIN);\n\t\t\t\t\tif (lh > 0) y = Math.min(Math.max(y, MARGIN), window.innerHeight - lh - MARGIN);\n\t\t\t\t\tsetMenuPos({\n\t\t\t\t\t\tleft: x,\n\t\t\t\t\t\ttop: y\n\t\t\t\t\t});\n\t\t\t\t};\n\t\t\t\tplace();\n\t\t\t\twindow.addEventListener(\"scroll\", place, true);\n\t\t\t\twindow.addEventListener(\"resize\", place);\n\t\t\t\treturn () => {\n\t\t\t\t\twindow.removeEventListener(\"scroll\", place, true);\n\t\t\t\t\twindow.removeEventListener(\"resize\", place);\n\t\t\t\t};\n\t\t\t}, [\n\t\t\t\topen,\n\t\t\t\tpane,\n\t\t\t\tstate,\n\t\t\t\tquery\n\t\t\t]);\n\t\t\tif (!available) return null;\n\t\t\tconst show = () => {\n\t\t\t\tsetSelectionFocus(false);\n\t\t\t\ttriggerRef.current?.focus();\n\t\t\t\tsetQuery(\"\");\n\t\t\t\tsetHighlightedIndex(null);\n\t\t\t\tif (state.current === null) paneFocus.current = \"drill\";\n\t\t\t\tsetPane(state.current === null ? \"model\" : \"root\");\n\t\t\t\tsetOpen(true);\n\t\t\t\treload();\n\t\t\t};\n\t\t\tconst changeQuery = (next) => {\n\t\t\t\tsetQuery(next);\n\t\t\t\tsetHighlightedIndex(0);\n\t\t\t};\n\t\t\tconst close = (restoreFocus = false) => {\n\t\t\t\tsetOpen(false);\n\t\t\t\tsetPane(\"root\");\n\t\t\t\tif (restoreFocus) queueMicrotask(() => {\n\t\t\t\t\ttriggerRef.current?.focus();\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst closeAfterSelection = () => {\n\t\t\t\tsetSelectionFocus(true);\n\t\t\t\tclose(true);\n\t\t\t};\n\t\t\tconst drill = (next) => {\n\t\t\t\tsetQuery(\"\");\n\t\t\t\tsetHighlightedIndex(null);\n\t\t\t\tpaneFocus.current = \"drill\";\n\t\t\t\tsetPane(next);\n\t\t\t};\n\t\t\t/** Leave a drilled pane for the root one, handing the keyboard back to its cell. */\n\t\t\tconst back = (from) => {\n\t\t\t\tpaneFocus.current = from;\n\t\t\t\tsetPane(\"root\");\n\t\t\t};\n\t\t\tconst moveFocus = (offset) => {\n\t\t\t\tconst items = itemRefs.current.filter((item) => item !== null);\n\t\t\t\tif (items.length === 0) return;\n\t\t\t\tconst active = items.findIndex((item) => item === document.activeElement);\n\t\t\t\titems[active === -1 ? offset > 0 ? 0 : items.length - 1 : (active + offset + items.length) % items.length]?.focus();\n\t\t\t};\n\t\t\tconst onRootKeyDown = (event) => {\n\t\t\t\tif (event.nativeEvent.isComposing) return;\n\t\t\t\tif (event.key === \"Escape\" && open) {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tif (pane !== \"root\" && state.current !== null) back(pane);\n\t\t\t\t\telse close(true);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (!open) return;\n\t\t\t\tif (pane === \"model\" && showSearch && (event.key === \"ArrowDown\" || event.key === \"ArrowUp\")) {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tif (!busy && visibleModels.length > 0) {\n\t\t\t\t\t\tsetHighlightedIndex((activeModelIndex + (event.key === \"ArrowDown\" ? 1 : -1) + visibleModels.length) % visibleModels.length);\n\t\t\t\t\t\tsearchRef.current?.focus();\n\t\t\t\t\t}\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (pane === \"model\" && showSearch && event.target instanceof HTMLInputElement && (event.key === \"Enter\" || event.key === \"Tab\" && !event.shiftKey)) {\n\t\t\t\t\tif (event.key === \"Tab\" && visibleModels.length === 0) return;\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tconst highlighted = visibleModels[activeModelIndex];\n\t\t\t\t\tif (!busy && highlighted !== void 0) choose(highlighted);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (event.key === \"Tab\") {\n\t\t\t\t\tif (event.shiftKey) {\n\t\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\t\tif (pane !== \"root\" && state.current !== null) back(pane);\n\t\t\t\t\t\telse close(true);\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tconst focused = document.activeElement;\n\t\t\t\t\tconst rows = itemRefs.current.filter((item) => item !== null);\n\t\t\t\t\tif (focused instanceof HTMLButtonElement && rows.includes(focused)) {\n\t\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\t\tfocused.click();\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tif (focused !== triggerRef.current) return;\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tif (pane === \"model\" && showSearch) {\n\t\t\t\t\t\tsetHighlightedIndex(null);\n\t\t\t\t\t\tsearchRef.current?.focus();\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\t(menuRef.current?.querySelector(\"[role=\\\"menuitemradio\\\"][aria-checked=\\\"true\\\"]:not([disabled])\") ?? rows.find((item) => !item.disabled))?.focus();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (event.key === \"ArrowDown\" || event.key === \"ArrowUp\") {\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tmoveFocus(event.key === \"ArrowDown\" ? 1 : -1);\n\t\t\t\t}\n\t\t\t};\n\t\t\tconst onBlur = (event) => {\n\t\t\t\tif (event.relatedTarget instanceof Node && (rootRef.current?.contains(event.relatedTarget) === true || menuRef.current?.contains(event.relatedTarget) === true)) return;\n\t\t\t\tclose();\n\t\t\t};\n\t\t\tconst settleSelection = (result) => {\n\t\t\t\tif (result === void 0) return;\n\t\t\t\tif (result.ok) {\n\t\t\t\t\tif (rootRef.current !== null) closeAfterSelection();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tconst { error } = result;\n\t\t\t\ttoastSeq.current += 1;\n\t\t\t\tsetToast({\n\t\t\t\t\tseq: toastSeq.current,\n\t\t\t\t\ttext: error.code === \"session/writer-held\" ? t(\"error.sessionInUse\") : t(\"error.action\", { message: `${error.code}: ${error.message}` })\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst submit = (selection) => {\n\t\t\t\tlastActionRef.current = \"select\";\n\t\t\t\tsetSelectionFocus(true);\n\t\t\t\ttriggerRef.current?.focus();\n\t\t\t\tselect(selection).then(settleSelection);\n\t\t\t};\n\t\t\tconst choose = (selection) => {\n\t\t\t\tif (state.current?.provider === selection.provider && state.current.model === selection.model) {\n\t\t\t\t\tcloseAfterSelection();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tsubmit(selection);\n\t\t\t};\n\t\t\tconst chooseEffort = (effort) => {\n\t\t\t\tif (state.current === null) return;\n\t\t\t\tif (effectiveEffort === effort) {\n\t\t\t\t\tcloseAfterSelection();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tsubmit({\n\t\t\t\t\tprovider: state.current.provider,\n\t\t\t\t\tmodel: state.current.model,\n\t\t\t\t\t...effort === void 0 ? {} : { reasoningEffort: effort }\n\t\t\t\t});\n\t\t\t};\n\t\t\tconst waiting = state.current === null && state.status === \"loading\";\n\t\t\tconst modelLabel = waiting ? t(\"trigger.loading\") : currentChoice?.model.name ?? (state.current === null ? t(\"trigger.fallback\") : `${state.current.provider}/${state.current.model}`);\n\t\t\tconst triggerLabel = effortLabel === void 0 ? modelLabel : `${modelLabel} · ${effortLabel}`;\n\t\t\tconst triggerAria = waiting ? t(\"trigger.loading\") : state.current === null ? t(\"trigger.selectAria\") : effortLabel === void 0 ? t(\"trigger.aria\", { model: modelLabel }) : t(\"trigger.ariaEffort\", {\n\t\t\t\tmodel: modelLabel,\n\t\t\t\teffort: effortLabel\n\t\t\t});\n\t\t\titemRefs.current = [];\n\t\t\tlet itemIndex = 0;\n\t\t\tlet modelIndex = 0;\n\t\t\tconst itemRef = () => {\n\t\t\t\tconst at = itemIndex++;\n\t\t\t\treturn (node) => {\n\t\t\t\t\titemRefs.current[at] = node;\n\t\t\t\t};\n\t\t\t};\n\t\t\treturn (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\tref: rootRef,\n\t\t\t\tclassName: ModelSelect_module_css_default.root,\n\t\t\t\tonKeyDown: onRootKeyDown,\n\t\t\t\tonBlur,\n\t\t\t\tonMouseDown: (event) => {\n\t\t\t\t\tif (event.target instanceof Element && event.target.closest(\"button\") !== null) event.preventDefault();\n\t\t\t\t},\n\t\t\t\tchildren: [\n\t\t\t\t\t(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\tref: triggerRef,\n\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.trigger,\n\t\t\t\t\t\t\"aria-label\": triggerAria,\n\t\t\t\t\t\t\"aria-haspopup\": \"menu\",\n\t\t\t\t\t\t\"aria-expanded\": open,\n\t\t\t\t\t\t\"aria-controls\": open ? `${id}-menu` : void 0,\n\t\t\t\t\t\ttitle: triggerLabel,\n\t\t\t\t\t\t\"aria-busy\": busy,\n\t\t\t\t\t\t\"data-selection-focus\": selectionFocus ? \"\" : void 0,\n\t\t\t\t\t\tonBlur: () => {\n\t\t\t\t\t\t\tsetSelectionFocus(false);\n\t\t\t\t\t\t},\n\t\t\t\t\t\tdisabled: locked,\n\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tif (open) close(true);\n\t\t\t\t\t\t\telse show();\n\t\t\t\t\t\t},\n\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDataOutlineRegular, {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerIcon,\n\t\t\t\t\t\t\t\tsize: 16\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerLabel,\n\t\t\t\t\t\t\t\tchildren: modelLabel\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\teffortLabel !== void 0 && (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.triggerEffort,\n\t\t\t\t\t\t\t\tchildren: effortLabel\n\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\tbusy ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: \"ongoing\" }) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { className: clsx(ModelSelect_module_css_default.chevron, open && ModelSelect_module_css_default.chevronOpen) })\n\t\t\t\t\t\t]\n\t\t\t\t\t}),\n\t\t\t\t\topen && (0, react_dom.createPortal)((0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.MenuSurface, {\n\t\t\t\t\t\tref: menuRef,\n\t\t\t\t\t\tid: `${id}-menu`,\n\t\t\t\t\t\tclassName: ModelSelect_module_css_default.menu,\n\t\t\t\t\t\tstyle: menuPos ?? MEASURE_STYLE,\n\t\t\t\t\t\trole: pane === \"model\" ? \"group\" : \"menu\",\n\t\t\t\t\t\t\"aria-label\": t(\"menu.aria\"),\n\t\t\t\t\t\t\"aria-busy\": state.status === \"loading\" || busy,\n\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\tpane === \"root\" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\trole: \"menuitem\",\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cell,\n\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\tdrill(\"model\");\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellLabel,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"menu.model\")\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellValue,\n\t\t\t\t\t\t\t\t\t\tchildren: modelLabel\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronRightOutlineRegular, { className: ModelSelect_module_css_default.cellChevron })\n\t\t\t\t\t\t\t\t]\n\t\t\t\t\t\t\t}), reasoning !== void 0 && (0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\trole: \"menuitem\",\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cell,\n\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\tdrill(\"effort\");\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\tchildren: [\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellLabel,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"menu.effort\")\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.cellValue,\n\t\t\t\t\t\t\t\t\t\tchildren: effortLabel\n\t\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronRightOutlineRegular, { className: ModelSelect_module_css_default.cellChevron })\n\t\t\t\t\t\t\t\t]\n\t\t\t\t\t\t\t})] }),\n\t\t\t\t\t\t\tpane === \"model\" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [\n\t\t\t\t\t\t\t\tshowSearch && (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.searchRow,\n\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {\n\t\t\t\t\t\t\t\t\t\tref: searchRef,\n\t\t\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.search, query !== \"\" && ModelSelect_module_css_default.searchWithQuery),\n\t\t\t\t\t\t\t\t\t\ttype: \"text\",\n\t\t\t\t\t\t\t\t\t\trole: \"searchbox\",\n\t\t\t\t\t\t\t\t\t\t\"aria-label\": t(\"search.placeholder\"),\n\t\t\t\t\t\t\t\t\t\t\"aria-controls\": `${id}-models`,\n\t\t\t\t\t\t\t\t\t\t\"aria-activedescendant\": activeModelIndex < 0 ? void 0 : `${id}-model-${activeModelIndex}`,\n\t\t\t\t\t\t\t\t\t\tplaceholder: t(\"search.placeholder\"),\n\t\t\t\t\t\t\t\t\t\tvalue: query,\n\t\t\t\t\t\t\t\t\t\treadOnly: busy,\n\t\t\t\t\t\t\t\t\t\tonChange: (event) => {\n\t\t\t\t\t\t\t\t\t\t\tchangeQuery(event.target.value);\n\t\t\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t\t\t}), query !== \"\" && (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.searchClear,\n\t\t\t\t\t\t\t\t\t\t\"aria-label\": t(\"search.clear\"),\n\t\t\t\t\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\t\t\tchangeQuery(\"\");\n\t\t\t\t\t\t\t\t\t\t\tsearchRef.current?.focus();\n\t\t\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseFillRegular, {})\n\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.status === \"loading\" && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.status,\n\t\t\t\t\t\t\t\t\tchildren: t(\"status.loading\")\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.error !== null && lastActionRef.current === \"load\" && (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.error,\n\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"error.action\", { message: state.error }) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.failures.map((failure) => (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.warning,\n\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"warning.groupLoad\", {\n\t\t\t\t\t\t\t\t\t\tname: failure.id === \"deepseek-account\" ? t(\"provider.account\") : failure.name,\n\t\t\t\t\t\t\t\t\t\tmessage: failure.message\n\t\t\t\t\t\t\t\t\t}) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\t\t\t\tchildren: t(\"retry\")\n\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t}, failure.id)),\n\t\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\tref: groupsRef,\n\t\t\t\t\t\t\t\t\tid: `${id}-models`,\n\t\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.groups, \"scrollable\"),\n\t\t\t\t\t\t\t\t\trole: \"menu\",\n\t\t\t\t\t\t\t\t\t\"aria-label\": t(\"menu.model\"),\n\t\t\t\t\t\t\t\t\thidden: filteredGroups.length === 0,\n\t\t\t\t\t\t\t\t\tchildren: filteredGroups.map((group) => {\n\t\t\t\t\t\t\t\t\t\treturn (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MenuGroup, {\n\t\t\t\t\t\t\t\t\t\t\tlabel: group.id === \"deepseek-account\" ? t(\"provider.account\") : group.name,\n\t\t\t\t\t\t\t\t\t\t\tchildren: group.models.map((model) => {\n\t\t\t\t\t\t\t\t\t\t\t\tconst index = modelIndex++;\n\t\t\t\t\t\t\t\t\t\t\t\tconst selected = state.current?.provider === group.id && state.current.model === model.id;\n\t\t\t\t\t\t\t\t\t\t\t\treturn (0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\t\t\t\t\trole: \"menuitemradio\",\n\t\t\t\t\t\t\t\t\t\t\t\t\t\"aria-checked\": selected,\n\t\t\t\t\t\t\t\t\t\t\t\t\tid: `${id}-model-${index}`,\n\t\t\t\t\t\t\t\t\t\t\t\t\ttabIndex: showSearch ? -1 : 0,\n\t\t\t\t\t\t\t\t\t\t\t\t\tonFocus: () => {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tsetHighlightedIndex(index);\n\t\t\t\t\t\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\t\t\t\t\t\t\"data-highlighted\": index === activeModelIndex ? \"\" : void 0,\n\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.option, ModelSelect_module_css_default.modelOption, selected && ModelSelect_module_css_default.selected, index === activeModelIndex && ModelSelect_module_css_default.optionActive),\n\t\t\t\t\t\t\t\t\t\t\t\t\tonMouseMove: busy || index === activeModelIndex ? void 0 : () => {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tif (showSearch) setHighlightedIndex(index);\n\t\t\t\t\t\t\t\t\t\t\t\t\t\telse itemRefs.current[index]?.focus();\n\t\t\t\t\t\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\t\t\t\t\t\ttitle: model.name,\n\t\t\t\t\t\t\t\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tchoose({\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tprovider: group.id,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tmodel: model.id\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t});\n\t\t\t\t\t\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.optionCopy,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.modelName,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: model.name\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.check,\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tchildren: pending?.provider === group.id && pending.model === model.id ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: \"ongoing\" }) : selected ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutlineRegular, {}) : null\n\t\t\t\t\t\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t\t\t\t\t\t}, model.id);\n\t\t\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t\t\t}, group.id);\n\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t}),\n\t\t\t\t\t\t\t\tstate.status === \"ready\" && filteredGroups.length === 0 && (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\t\t\t\trole: \"status\",\n\t\t\t\t\t\t\t\t\tchildren: t(choices.length === 0 ? \"empty.models\" : \"search.empty\")\n\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t] }),\n\t\t\t\t\t\t\tpane === \"effort\" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [state.error !== null && lastActionRef.current === \"load\" && (0, react_jsx_runtime.jsxs)(\"div\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.error,\n\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", { children: t(\"error.action\", { message: state.error }) }), (0, react_jsx_runtime.jsx)(\"button\", {\n\t\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.retry,\n\t\t\t\t\t\t\t\t\tonClick: reload,\n\t\t\t\t\t\t\t\t\tchildren: t(\"action.reload\")\n\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t}), effortChoices.length === 0 ? (0, react_jsx_runtime.jsx)(\"div\", {\n\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.empty,\n\t\t\t\t\t\t\t\tchildren: t(\"empty.efforts\")\n\t\t\t\t\t\t\t}) : effortChoices.map((level) => (0, react_jsx_runtime.jsxs)(\"button\", {\n\t\t\t\t\t\t\t\tref: itemRef(),\n\t\t\t\t\t\t\t\ttype: \"button\",\n\t\t\t\t\t\t\t\trole: \"menuitemradio\",\n\t\t\t\t\t\t\t\t\"aria-checked\": effectiveEffort === level.effort,\n\t\t\t\t\t\t\t\tclassName: clsx(ModelSelect_module_css_default.option, effectiveEffort === level.effort && ModelSelect_module_css_default.selected),\n\t\t\t\t\t\t\t\tdisabled: busy,\n\t\t\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\t\t\tchooseEffort(level.effort);\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.optionCopy,\n\t\t\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.modelName,\n\t\t\t\t\t\t\t\t\t\tchildren: level.label\n\t\t\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"span\", {\n\t\t\t\t\t\t\t\t\tclassName: ModelSelect_module_css_default.check,\n\t\t\t\t\t\t\t\t\tchildren: pending !== null && pending.provider === state.current?.provider && pending.model === state.current.model && pending.reasoningEffort === level.effort ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: \"ongoing\" }) : effectiveEffort === level.effort ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutlineRegular, {}) : null\n\t\t\t\t\t\t\t\t})]\n\t\t\t\t\t\t\t}, level.key))] })\n\t\t\t\t\t\t]\n\t\t\t\t\t}), document.body),\n\t\t\t\t\ttoast !== null && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Toast, {\n\t\t\t\t\t\ttext: toast.text,\n\t\t\t\t\t\ticon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutlineRegular, {}),\n\t\t\t\t\t\tanchor: rootRef.current?.closest(\"[data-composer-card]\") ?? null,\n\t\t\t\t\t\tonDone: () => {\n\t\t\t\t\t\t\tsetToast(null);\n\t\t\t\t\t\t}\n\t\t\t\t\t}, toast.seq)\n\t\t\t\t]\n\t\t\t});\n\t\t}\n\t\t//#endregion" // [批次189] 0.2.0-rc.2 原生 ModelSelect 区段(23761B,脚本自 0.2.0-rc.2 种子树活体提取,提取法经 0.1.7-rc.2==V17 逐字自校验)
 const MSEL2_ZH = "\t\t\t\"search.placeholder\": \"搜索模型…\",\n\t\t\t\"search.clear\": \"清除搜索\",\n\t\t\t\"section.pinned\": \"置顶\",\n\t\t\t\"section.recent\": \"最近使用\",\n\t\t\t\"section.results\": \"搜索结果\",\n\t\t\t\"empty.search\": \"没有匹配的模型。\",\n\t\t\t\"pin.add\": \"置顶 {model}\",\n\t\t\t\"pin.remove\": \"取消置顶 {model}\","
 const MSEL2_EN = "\t\t\t\"search.placeholder\": \"Search models…\",\n\t\t\t\"search.clear\": \"Clear search\",\n\t\t\t\"section.pinned\": \"Pinned\",\n\t\t\t\"section.recent\": \"Recent\",\n\t\t\t\"section.results\": \"Results\",\n\t\t\t\"empty.search\": \"No matching models.\",\n\t\t\t\"pin.add\": \"Pin {model}\",\n\t\t\t\"pin.remove\": \"Unpin {model}\","
 const MSEL2_MAP = "\t\t\t\"searchRow\": \"{P}_searchRow\",\n\t\t\t\"searchIcon\": \"{P}_searchIcon\",\n\t\t\t\"search\": \"{P}_search\",\n\t\t\t\"searchClear\": \"{P}_searchClear\",\n\t\t\t\"effortRow\": \"{P}_effortRow\",\n\t\t\t\"effortLabel\": \"{P}_effortLabel\",\n\t\t\t\"seg\": \"{P}_seg\",\n\t\t\t\"segBtn\": \"{P}_segBtn\",\n\t\t\t\"segBtnOn\": \"{P}_segBtnOn\",\n\t\t\t\"section\": \"{P}_section\",\n\t\t\t\"sectionTitle\": \"{P}_sectionTitle\",\n\t\t\t\"row\": \"{P}_row\",\n\t\t\t\"rowMain\": \"{P}_rowMain\",\n\t\t\t\"hitHint\": \"{P}_hitHint\",\n\t\t\t\"pin\": \"{P}_pin\",\n\t\t\t\"pinOn\": \"{P}_pinOn\""
-const MSEL2_CSS = ".{P}_searchRow{display:flex;align-items:center;gap:6px;height:30px;margin:0 0 4px;padding:0 8px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}\n.{P}_searchIcon{flex:none;color:var(--dsw-alias-label-tertiary)}\n.{P}_search{flex:1;min-width:0;border:none;outline:none;background:0 0;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}\n.{P}_search::placeholder{color:var(--dsw-alias-label-tertiary)}\n.{P}_searchClear{flex:none;display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;border-radius:9px;background:0 0;color:var(--dsw-alias-label-tertiary);cursor:pointer}\n.{P}_searchClear:hover{background:var(--dsw-alias-border-l1)}\n.{P}_effortRow{display:flex;align-items:center;gap:8px;padding:2px 8px 6px;margin-bottom:2px}\n.{P}_effortLabel{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}\n.{P}_seg{display:flex;align-items:center;gap:2px;margin-left:auto;padding:2px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}\n.{P}_segBtn{padding:2px 8px;border:none;border-radius:8px;background:0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}\n.{P}_segBtn:hover:not(:disabled){background:var(--dsw-alias-border-l1)}\n.{P}_segBtnOn{background:var(--dsw-specific-menu);color:var(--dsw-alias-label-primary);box-shadow:0 0 0 1px var(--dsw-alias-border-l1)}\n.{P}_segBtn:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}\n.{P}_section{margin-bottom:2px}\n.{P}_sectionTitle{z-index:1;position:sticky;top:0;background:var(--dsw-specific-menu);padding:6px 8px 2px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}\n.{P}_row{display:flex;align-items:center;gap:2px;border-radius:10px}\n.{P}_row:hover{background:var(--dsw-alias-interactive-bg-hover)}\n.{P}_rowMain{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:5px 8px;border:none;border-radius:10px;background:0 0;color:var(--dsw-alias-label-primary);font-size:14px;line-height:20px;text-align:left;cursor:pointer}\n.{P}_rowMain:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}\n.{P}_hitHint{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}\n.{P}_pin{flex:none;display:flex;align-items:center;justify-content:center;width:22px;height:22px;margin-right:2px;padding:0;border:none;border-radius:8px;background:0 0;color:var(--dsw-alias-label-dimmed);cursor:pointer;opacity:0}\n.{P}_row:hover .{P}_pin{opacity:1}\n.{P}_pinOn{opacity:1;color:var(--dsw-alias-label-primary)}\n.{P}_pin:hover{background:var(--dsw-alias-interactive-bg-hover)}"
+const MSEL2_CSS = ".{P}_searchRow{display:flex;align-items:center;gap:6px;height:30px;margin:0 0 4px;padding:0 8px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}\n.{P}_searchIcon{flex:none;color:var(--dsw-alias-label-tertiary)}\n.{P}_search{flex:1;min-width:0;border:none;outline:none;background:0 0;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}\n.{P}_search::placeholder{color:var(--dsw-alias-label-tertiary)}\n.{P}_searchClear{flex:none;display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;border-radius:9px;background:0 0;color:var(--dsw-alias-label-tertiary);cursor:pointer}\n.{P}_searchClear:hover{background:var(--dsw-alias-border-l1)}\n.{P}_effortRow{display:flex;align-items:center;gap:8px;padding:2px 8px 6px;margin-bottom:2px}\n.{P}_effortLabel{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}\n.{P}_seg{display:flex;align-items:center;gap:2px;margin-left:auto;padding:2px;border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}\n.{P}_segBtn{padding:2px 8px;border:none;border-radius:8px;background:0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer}\n.{P}_segBtn:hover:not(:disabled){background:var(--dsw-alias-border-l1)}\n.{P}_segBtnOn{background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-2,#fff));color:var(--dsw-alias-label-primary);box-shadow:0 0 0 1px var(--dsw-alias-border-l1)}\n.{P}_segBtn:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}\n.{P}_section{margin-bottom:2px}\n.{P}_sectionTitle{z-index:1;position:sticky;top:0;background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-2,#fff));padding:6px 8px 2px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}\n.{P}_row{display:flex;align-items:center;gap:2px;border-radius:10px}\n.{P}_row:hover{background:var(--dsw-alias-interactive-bg-hover)}\n.{P}_rowMain{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:5px 8px;border:none;border-radius:10px;background:0 0;color:var(--dsw-alias-label-primary);font-size:14px;line-height:20px;text-align:left;cursor:pointer}\n.{P}_rowMain:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}\n.{P}_hitHint{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}\n.{P}_pin{flex:none;display:flex;align-items:center;justify-content:center;width:22px;height:22px;margin-right:2px;padding:0;border:none;border-radius:8px;background:0 0;color:var(--dsw-alias-label-dimmed);cursor:pointer;opacity:0}\n.{P}_row:hover .{P}_pin{opacity:1}\n.{P}_pinOn{opacity:1;color:var(--dsw-alias-label-primary)}\n.{P}_pin:hover{background:var(--dsw-alias-interactive-bg-hover)}.{P}_menu{background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-2,#fff));border-radius:20px}"
 
 // ---- [MSEL2] 模型选择面板重构: 搜索 + 置顶/最近 + 紧凑分组 + 内联思考强度挡位(2026-09-16 用户需求) ----
 //   症状: 模型数量膨胀后「选择模型」两级菜单(先点「模型」、再翻长列表)效率低;思考强度藏在二级
@@ -4496,23 +4581,32 @@ const MSEL2_CSS = ".{P}_searchRow{display:flex;align-items:center;gap:6px;height
 //   生效面: client-hmr 每 500ms 轮询 bundle 的 mtime/size → 落盘即热换,无需重启;刷新页面同样生效。
 //   @param target - 可选沙盒路径(默认活体路径),供离线校验使用。
 function patchModelSelectionMenu(target) {
-  const p = target ?? path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
-  if (!fs.existsSync(p)) return [{ file: 'model-selection/lib/client.js', missing: true }]
-  let ver = 'profile'
-  try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
-  const head = fs.readFileSync(p, 'utf8')
-  if (head.includes(MSEL2_MARK)) return [{ file: 'model-selection/lib/client.js', ok: true, already: true, version: ver }]
-  // 形态判据: 座位机制在场才适用;更老副本无此机制 → 安全跳过,不算 FAIL。
-  if (!head.includes('ModelDirectoryResolver') || !head.includes('conversation.input.model')) {
-    return [{ file: 'model-selection/lib/client.js', ok: true, skipped: true, reason: '插件形态不含预期座位机制', version: ver }]
-  }
-  const { rep, failures } = makeCtx('model-selection/lib/client.js')
-  const apply = (c) => {
-    const prefix = /"warning": "([A-Za-z0-9_]+)_warning"/.exec(c)?.[1]
-    if (prefix === undefined) { failures.push('[model-selection/lib/client.js] msel2-prefix: CSS 类名前缀未识别'); return c }
-    const bind = (text) => text.split('{P}').join(prefix)
-    // (1) 区域交换: 整个 ModelSelect 文档注释 + 函数 + region 结束符
-    c = rep(c, MSEL2_OLD_REGION, bind(MSEL2_REGION), 1, 'msel2-region')
+  const results = []
+  for (const { label, p } of modelSelectionRoots(target)) {
+    const file = 'model-selection/lib/client.js@' + label
+    if (!fs.existsSync(p)) { results.push({ file, missing: true }); continue }
+    const ver = modelSelectionVersion(p)
+    const head = fs.readFileSync(p, 'utf8')
+    if (head.includes(MSEL2_MARK)) { results.push({ file, ok: true, already: true, version: ver }); continue }
+    // 形态判据: 座位机制在场才适用;更老副本无此机制 → 安全跳过,不算 FAIL。
+    if (!head.includes('ModelDirectoryResolver') || !head.includes('conversation.input.model')) {
+      results.push({ file, ok: true, skipped: true, reason: '插件形态不含预期座位机制', version: ver })
+      continue
+    }
+    // 上游区段双形态:0.1.5 轨(MSEL2_OLD_REGION)/ 0.1.7-rc.2 轨(MSEL2_OLD_REGION_V17);
+    // 两者都不在场 = 未知形态(如 0.1.7-rc.1 的 paneFocus 版)→ 跳过,不写盘也不算 FAIL。
+    if (!head.includes(MSEL2_OLD_REGION) && !head.includes(MSEL2_OLD_REGION_V17) && !head.includes(MSEL2_OLD_REGION_V20)) { // [批次189] +0.2.0-rc.2 轨(V20)
+      results.push({ file, ok: true, skipped: true, reason: '上游 ModelSelect 形态未识别(非 0.1.5 也非 0.1.7-rc.2 轨)', version: ver })
+      continue
+    }
+    const { rep, failures } = makeCtx(file)
+    const apply = (c) => {
+      const prefix = /"warning": "([A-Za-z0-9_]+)_warning"/.exec(c)?.[1]
+      if (prefix === undefined) { failures.push('[' + file + '] msel2-prefix: CSS 类名前缀未识别'); return c }
+      const bind = (text) => text.split('{P}').join(prefix)
+      // (1) 区域交换: 整个 ModelSelect 文档注释 + 函数 + region 结束符(按在场形态选基底)
+      const regionOld = c.includes(MSEL2_OLD_REGION) ? MSEL2_OLD_REGION : c.includes(MSEL2_OLD_REGION_V20) ? MSEL2_OLD_REGION_V20 : MSEL2_OLD_REGION_V17 // [批次189] 0.2.0 原生区段(V20)优先于 V17
+      c = rep(c, regionOld, bind(MSEL2_REGION), 1, 'msel2-region')
     // (2) zh 字典新增键
     c = rep(c, '\t\t\t"action.reload": "重新加载",', '\t\t\t"action.reload": "重新加载",\n' + MSEL2_ZH, 1, 'msel2-zh')
     // (3) en 字典新增键
@@ -4529,8 +4623,11 @@ function patchModelSelectionMenu(target) {
       1, 'msel2-css-def')
     c = rep(c, '\t\t\ttag.textContent = css;', '\t\t\ttag.textContent = css + MSEL2_CSS_TEXT;', 1, 'msel2-css-apply')
     return c
+    }
+    results.push({ ...rewriteFresh(p, '.bak-msel2', apply, failures, MSEL2_MARK), file, version: ver })
   }
-  return [{ ...rewriteFresh(p, '.bak-msel2', apply, failures, MSEL2_MARK), version: ver }]
+  if (!results.length) results.push({ file: 'model-selection/lib/client.js', missing: true })
+  return results
 }
 
 // [M2 2026-09-11] pi-ai openai-completions: 发送前兼容性矫正(GLM/智谱模板硬约束)。
@@ -4711,7 +4808,7 @@ function patchBetterSidebarBrowserLinkNav() {
     const current = fs.readFileSync(p, 'utf8')
     if (current.includes(MARK)) { results.push({ file: FILE, version: ver, ok: true, already: true }); continue }
     if (!current.includes('api.browserProbe(url)')) {
-      results.push({ file: FILE, version: ver, ok: true, skipped: true, reason: '该副本无内置浏览器模块(版本/入口不同),无需守护' })
+      results.push({ file: FILE, version: ver, ok: true, retired: true, reason: '该副本无内置浏览器模块(0.21.x 已整体移除 browserProbe/embed 判定),守护退役' })
       continue
     }
     let c = rep(current, A_FROM, A_TO, 1, 'surface-params-path')
@@ -4761,7 +4858,7 @@ function patchBetterSidebarEmbedAllow() {
     const current = fs.readFileSync(p, 'utf8')
     if (current.includes(MARK)) { results.push({ file: FILE, version: ver, ok: true, already: true }); continue }
     if (!current.includes('api.browserProbe(url)')) {
-      results.push({ file: FILE, version: ver, ok: true, skipped: true, reason: '该副本无内置浏览器模块(版本/入口不同),无需守护' })
+      results.push({ file: FILE, version: ver, ok: true, retired: true, reason: '该副本无内置浏览器模块(0.21.x 已整体移除 browserProbe/embed 判定),守护退役' })
       continue
     }
     const c = rep(current, FROM, TO, 1, 'embed-probe-verdict')
@@ -5008,7 +5105,7 @@ function patchBetterSidebarAgentTermSideCard() {
     const current = fs.readFileSync(p, 'utf8')
     if (current.includes('if (patch.title !== void 0) put(id, next);')) { results.push({ file: FILE, version: ver, ok: true, already: true, form: 'v3' }); continue }
     if (!current.includes('reconcileAgentTerminals(s, list)')) {
-      results.push({ file: FILE, version: ver, ok: true, skipped: true, reason: '该副本无 agent-terminals 模块(版本/入口不同),无需守护' })
+      results.push({ file: FILE, version: ver, ok: true, retired: true, reason: '该副本无 agent-terminals 模块(0.21.x 已移除 reconcileAgentTerminals 全链),守护退役' })
       continue
     }
     const wasV1 = current.includes('const AGENT_TERM_TRACK =')
@@ -5044,7 +5141,7 @@ function patchBetterSidebarAgentTermSideCard() {
       const current = fs.readFileSync(p, 'utf8')
       if (current.includes('dshOwnedNatively')) results.push({ file: FILE, version: ver, ok: true, already: true })
       else if (!current.includes('const tabStillOpen = store.tabOpen(scope.sessionId, tabId);')) {
-        results.push({ file: FILE, version: ver, ok: true, skipped: true, reason: '该副本无 terminal 卸载清理块(版本/入口不同),无需守护' })
+        results.push({ file: FILE, version: ver, ok: true, retired: true, reason: '该副本无 terminal 卸载清理块(0.21.x 已移除),守护退役' })
       } else {
         const c = rep(current, F1_FROM, F1_TO, 1, 'terminal-unmount-close-gate')
         if (failures.length) results.push({ file: FILE, version: ver, ok: false, failures: [...failures], kept: true })
@@ -5139,6 +5236,10 @@ function patchConversationHeightGate() {
 //             故本家族 null 哨兵 + 各自指纹短路(批次161 K12 同款教训: 哨兵快速通道
 //             会把先到家族的哨兵误当本家族补丁态)。
 //       生效面: 刷新页面(SW 缓存教训: 需二次强刷确认)。
+//       [状态 2026-09-25] 0.1.7 线此项退役:上游把插件页重写为 tab 化(settings.plugins.tab,
+//         顺序由声明的 order 稳定决定)+ keyed 卡片槽(settings.plugin.item)全包无消费面
+//         ⇒ rc.1/rc.2 树报「守护退役」(见下方形态门槛分支);0.1.5-rc.3 树仍为补丁态。
+//         ②折叠(browser-playwright 卡默认收起)不受影响,全树在效。
 function patchPluginCardOrder() {
   const results = []
   // ① 顺序: 内置 settings-plugins 包(rc.1+ seed = .pnpm 提升层;旧布局平铺顶层也扫,
@@ -5165,8 +5266,13 @@ function patchPluginCardOrder() {
     // 形态门槛: keyed-namespace 机制(served.has)是本补丁的唯一适用形态;更老的
     // list-槽副本(0.1.0-rc.6 等)没有这条发布路径,锚点必然 0 命中 —— 安全跳过,
     // 不算 FAIL(防止陈旧 npx 缓存副本连坐守护器)。机制在场而锚点漂移才 FAIL。
+    // [R103 三界对账 2026-09-25] 0.1.7 线(rc.1/rc.2):上游把插件页整体重写为 tab 化
+    //   (settings.plugins.tab,排序由声明的 order 稳定决定),原 keyed 卡片槽
+    //   (settings.plugin.item)在 0.1.7 全包扫描中**无消费面**(注册该槽的第三方卡片在
+    //   当前版本无渲染面,属上游面收窄)——「卡片顺序随插件加载竞态浮动」的面不存在了。
+    //   故本分支对 0.1.7 树如实报「守护退役」而非「锚点不适配」。
     if (!head.includes('served.has(entry.options.key)')) {
-      results.push({ file: label, ok: true, skipped: true, version: ver })
+      results.push({ file: label, ok: true, retired: true, version: ver, reason: '上游已重写插件页(keyed 卡片槽与加载序竞态面不存在),R103 定序无需守护' })
       continue
     }
     const { rep, failures } = makeCtx(label)
@@ -5434,9 +5540,20 @@ function patchArchiveRestore(rootsOverride) {
         try { return JSON.parse(fs.readFileSync(path.join(root, '@deepseek-ai', pkg, 'package.json'), 'utf8')).version } catch { return undefined }
       })()
       const fileTag = `${label}@${path.basename(path.dirname(path.dirname(root)))}`
-      if (ver !== R105_PKG_VERSION) { results.push({ file: fileTag, ok: true, skipped: true, reason: `版本 ${String(ver)} 非 ${R105_PKG_VERSION},安全跳过`, version: String(ver) }); continue }
       const current = fs.readFileSync(f, 'utf8')
-      if (current.includes(R105_MARK) || current.includes(R105_SIG)) { results.push({ file: fileTag, ok: true, already: true, version: ver }); touched++; continue }
+      // [R105 能力判据 2026-09-25(替换版本钉)] 判据从「版本字符串 === 0.1.5-rc.2」改为**内容能力**,
+      // 家族随当前版本自适应,判序:
+      //   · 本族哨兵在场 → 已是补丁态(唯一写盘前短路);
+      //   · 上游原生 unarchiveSession 在场 → 上游已达成(0.1.7-rc.1/rc.2 实测五件全链:registry 方法/
+      //     宿主命令+装饰器/客户端 Model+Service/聚合描述符 + UI 调用面 19 处,实现与本族同构、
+      //     并含 archiveRequestSeq 竞态守护)——版本字符串与此判据解耦,未来版本原生回归自动让位;
+      //   · 两者皆无 → 无原生:仅 0.1.5-rc.2(历史验证形态)可补链;其余(0.1.5-rc.3 实测锚点全命中,
+      //     但客户端产物重锚未做隔离复测,先例见 r105-rc3-port-rollback)留缺口提示、不写盘。
+      if (current.includes(R105_MARK)) { results.push({ file: fileTag, ok: true, already: true, version: String(ver) }); touched++; continue }
+      if (current.includes(R105_SIG)) { results.push({ file: fileTag, ok: true, superseded: true, version: String(ver), reason: '上游已原生提供 unarchiveSession(含 UI/typert/竞态守护),本族无需守护' }); continue }
+      if (ver !== R105_PKG_VERSION) {
+        results.push({ file: fileTag, ok: true, skipped: true, gap: true, reason: `版本 ${String(ver)} 无原生 unarchiveSession 且非已验证的 ${R105_PKG_VERSION} 形态(0.1.5-rc.3 实测锚点全命中,但重锚需隔离复测),安全跳过`, version: String(ver) }); continue
+      }
       const { rep, failures } = makeCtx(label)
       const apply = buildApply(rep, failures)
       // [q99] rewriteFresh: 哨兵快路径 + 上游漂移刷新基底 + FAIL 不写盘;apply 为纯函数
@@ -5449,12 +5566,223 @@ function patchArchiveRestore(rootsOverride) {
   return results
 }
 
+// ---- [G2] 权限预设字形补全(preset-glyphs,0.1.7 线 2026-09-25) ----
+//   症状(主人截图): 权限弹层五行中「工作区内自动修改」「Auto review」两行无图标(其余三档有)。
+//   根因: 0.1.7 把 composer 弹层从 conversation 插件迁到 dsh-client-ui-permission-presets,其
+//     permissionGlyphs 表只覆盖设计集三档(read-only / workspace-write / FULL_ACCESS_PRESET =
+//     "danger-full-access",均取 primitives 的 PermissionIcon*Regular);本机 overlay 预设
+//     workspace-write-auto(见 ~/.dsh/cordis.patch.yml)与官方实验预设 auto(= Auto review,
+//     dsh-experimental-auto-review 注入)不在表内 ⇒ permissionGlyph(value) 得 undefined ⇒ 无图标。
+//   修法: 表尾补两枚内联字形(与既有三枚同 16×16 / currentColor / 1px 描边语言):
+//     ① workspace-write-auto = 盾形轮廓 + 实心闪电 —— rc3 时代 [wwa-glyph] 家族同款美术,原样回归;
+//     ② auto = 盾形轮廓 + 放大镜 —— 逐调用审查语义(Auto review = 无沙箱 + 每次原生/PTC 调用先经同模型审查)。
+//   幂等: 自有哨兵 preset-glyphs-v2;锚点失配 = FAIL 不写盘;首写留 .bak-preset-glyphs。
+//   载体: 全部 _npx 树(平铺/提升/虚拟仓三布局)+ 本地 monorepo 产物(有锚点才打,漂移报 skipped)。
+//   生效面: 客户端 bundle —— 刷新页面(host hmr 轮询重建后新 rev 自动带新码)。
+const PRESET_GLYPHS_MARK = '/*dsh-local-patch:preset-glyphs-v2*/'
+// 盾形轮廓 = 0.1.7 primitives 设计集同款(ReadOnly/FullAccess 共用的那条);闪电 = rc3 原路径。
+const PRESET_GLYPHS_SHIELD = 'M6.59624 2.14853C7.50155 1.80917 8.49914 1.80919 9.40444 2.14859L13.9245 3.84317V7.11961C13.9245 11.6089 10.5565 13.5975 8.00035 14.5779C5.44423 13.5975 2.07544 11.6089 2.07544 7.11961V3.84317L6.59624 2.14853Z'
+const PRESET_GLYPHS_FROM = '\t\t\t[FULL_ACCESS_PRESET, (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.PermissionIconFullAccessRegular, {})]\n\t\t]);'
+const PRESET_GLYPHS_TO = '\t\t\t[FULL_ACCESS_PRESET, (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.PermissionIconFullAccessRegular, {})],\n' +
+  '\t\t\t' + PRESET_GLYPHS_MARK + '\n' +
+  '\t\t\t// [preset-glyphs-v2] ① 工作区内自动修改 = rc3 同款「盾+闪电」;② Auto review = 「盾+放大镜」(逐调用审查)。\n' +
+  '\t\t\t["workspace-write-auto", (0, react_jsx_runtime.jsxs)("svg", {\n' +
+  '\t\t\t\twidth: "16",\n\t\t\t\theight: "16",\n\t\t\t\tviewBox: "0 0 16 16",\n\t\t\t\tfill: "none",\n\t\t\t\t"aria-hidden": true,\n\t\t\t\tstrokeWidth: "1",\n' +
+  '\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("path", {\n\t\t\t\t\td: "' + PRESET_GLYPHS_SHIELD + '",\n\t\t\t\t\tstroke: "currentColor",\n\t\t\t\t\tstrokeLinejoin: "round"\n\t\t\t\t}), (0, react_jsx_runtime.jsx)("path", {\n\t\t\t\t\td: "M9 4L5.9 8.7H7.8L7.3 12.2L10.6 7.4H8.6Z",\n\t\t\t\t\tfill: "currentColor"\n\t\t\t\t})]\n\t\t\t})],\n' +
+  '\t\t\t["auto", (0, react_jsx_runtime.jsxs)("svg", {\n' +
+  '\t\t\t\twidth: "16",\n\t\t\t\theight: "16",\n\t\t\t\tviewBox: "0 0 16 16",\n\t\t\t\tfill: "none",\n\t\t\t\t"aria-hidden": true,\n\t\t\t\tstrokeWidth: "1",\n' +
+  '\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("path", {\n\t\t\t\t\td: "' + PRESET_GLYPHS_SHIELD + '",\n\t\t\t\t\tstroke: "currentColor",\n\t\t\t\t\tstrokeLinejoin: "round"\n\t\t\t\t}), (0, react_jsx_runtime.jsx)("circle", {\n\t\t\t\t\tcx: "7.3",\n\t\t\t\t\tcy: "7.1",\n\t\t\t\t\tr: "2.1",\n\t\t\t\t\tstroke: "currentColor"\n\t\t\t\t}), (0, react_jsx_runtime.jsx)("path", {\n\t\t\t\t\td: "M8.8 8.6L10.35 10.15",\n\t\t\t\t\tstroke: "currentColor",\n\t\t\t\t\tstrokeLinecap: "round"\n\t\t\t\t})]\n\t\t\t})]\n' +
+  '\t\t]);'
+function patchPermissionPresetGlyphs() {
+  const results = []
+  const REL = ['@deepseek-ai', 'dsh-client-ui-permission-presets', 'lib', 'client.js']
+  const seen = new Set()
+  const add = (p, label) => {
+    if (typeof p !== 'string' || !p || seen.has(p)) return
+    seen.add(p)
+    if (!fs.existsSync(p)) return
+    let ver = 'local'
+    try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(PRESET_GLYPHS_MARK)) { results.push({ file: label, ok: true, already: true, version: ver }); return }
+    if (!current.includes(PRESET_GLYPHS_FROM)) {
+      results.push({ file: label, ok: true, skipped: true, version: ver, reason: '该副本无 permissionGlyphs 表(0.1.5 及更早形态或本地旧构建),字形补全不适用' })
+      return
+    }
+    const { rep, failures } = makeCtx(label)
+    const c = rep(current, PRESET_GLYPHS_FROM, PRESET_GLYPHS_TO, 1, 'preset-glyphs-v2')
+    if (failures.length) { results.push({ file: label, ok: false, failures: [...failures] }); return }
+    const bak = p + '.bak-preset-glyphs'
+    if (!fs.existsSync(bak)) fs.copyFileSync(p, bak)
+    fs.writeFileSync(p, c, 'utf8')
+    results.push({ file: label, ok: true, already: false, version: ver })
+  }
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      add(path.join(npxRoot, h, 'node_modules', ...REL), 'permission-glyphs/client.js@flat@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', ...REL), 'permission-glyphs/client.js@hoist@' + h.slice(0, 6))
+      const pnpmDir = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmDir)) continue
+      for (const d of fs.readdirSync(pnpmDir)) {
+        if (!d.startsWith('@deepseek-ai+dsh-client-ui-')) continue
+        add(path.join(pnpmDir, d, 'node_modules', ...REL), 'permission-glyphs/client.js@pnpm@' + d.slice(-8))
+      }
+    }
+  }
+  for (const lp of ['D:\\deepseek harness\\deepseek-harness\\packages\\client\\ui-permission-presets\\lib\\client.js',
+    path.join(os.homedir(), 'deepseek-harness', 'packages', 'client', 'ui-permission-presets', 'lib', 'client.js')]) {
+    add(lp, 'permission-glyphs/client.js@L')
+  }
+  if (!results.length) results.push({ file: 'permission-glyphs/client.js', missing: true })
+  return results
+}
+
+// ---- [K14] 插件图标族兼容(plugin-icon-compat,2026-09-24) ----
+//   症状(0.1.7-rc.2 实证):设置页「侧边卡片」整页空白 —— 槽位边界落 data-slot-error,
+//   且失败态**粘滞**(首次崩后切走再切回只见空壳,不再重复报错);点击当场触发 600+ 次异常。
+//   根因:上游 primitives(客户端注册表同源 dsh-client-ui-primitives)在 0.1.7 线把图标收敛为
+//   <Name>/<Name>Regular/<Name>Medium/<Name>Artwork,删掉了尺寸后缀族(...16/...14/...20);
+//   rc.3 期编译的插件仍按旧名取用 ⇒ jsx(undefined) ⇒ React #130(vm: type=undefined)。
+//   实测受影响产物: dsh-better-sidebar(client.js / client-registry.js / client-editor.js /
+//   client-mermaid.js)、dsh-xiaomi-tts、dsh-joi-channel-theme。
+//   修法:require 行后插一层只读 Proxy 回退(原名缺 → 去 (Fill)?(14|16|20) 后缀 + Regular
+//   → 再退基名);命中既有导出则原样透传 —— 插件日后改用新名,本层自然空转,零副作用。
+//   幂等:文件级 PIC_MARK 哨兵。回退:摘掉该段 + 哨兵,或重装对应插件包。
+const PIC_MARK = '/*dsh-local-patch:plugin-icon-compat*/'
+// 别名因产物而异(better-sidebar/joi: _deepseek_ai_…;xiaomi-tts: __deepseek_ai_…),按捕获组动态绑定
+const PIC_REQUIRE_RE = /(?:let|var|const) (_?[A-Za-z0-9_$]*deepseek_ai_dsh_client_ui_primitives) = require\("@deepseek-ai\/dsh-client-ui-primitives"\);/
+const picShim = (alias) => [
+  PIC_MARK,
+  '\t\t// [K14] 0.1.7 线 primitives 删除尺寸后缀图标族(...16/...14/...20,并入 <Name>Regular/Medium/Artwork);',
+  '\t\t// rc.3 期编译的插件仍引用旧名 ⇒ undefined ⇒ React #130 整段崩。以下为只读回退层。',
+  '\t\t' + alias + ' = new Proxy(' + alias + ', {',
+  '\t\t\tget(target, key) {',
+  '\t\t\t\tconst value = target[key];',
+  '\t\t\t\tif (value !== void 0 || typeof key !== "string") return value;',
+  '\t\t\t\tconst stripped = key.replace(/(Fill)?(14|16|20)$/, "$1");',
+  '\t\t\t\treturn target[stripped + "Regular"] ?? target[stripped];',
+  '\t\t\t}',
+  '\t\t});',
+].join('\n')
+function patchPluginIconCompat() {
+  const results = []
+  const libs = []
+  const pushPkg = (name) => {
+    const lib = path.join(PLUGINS, name, 'lib')
+    if (!fs.existsSync(lib)) return
+    let ver = 'profile'
+    try { ver = JSON.parse(fs.readFileSync(path.join(PLUGINS, name, 'package.json'), 'utf8')).version } catch {}
+    libs.push({ name, lib, ver })
+  }
+  let entries = []
+  try { entries = fs.readdirSync(PLUGINS, { withFileTypes: true }) } catch { return [{ file: 'plugin-icon-compat', missing: true }] }
+  for (const ent of entries) {
+    if (!ent.isDirectory()) continue
+    if (ent.name.startsWith('@')) {
+      try { for (const sub of fs.readdirSync(path.join(PLUGINS, ent.name))) pushPkg(ent.name + '/' + sub) } catch {}
+      continue
+    }
+    pushPkg(ent.name)
+  }
+  for (const { name, lib, ver } of libs) {
+    let files = []
+    try { files = fs.readdirSync(lib) } catch { continue }
+    for (const f of files) {
+      if (!f.endsWith('.js')) continue
+      const p = path.join(lib, f)
+      let st
+      try { st = fs.statSync(p) } catch { continue }
+      if (st.size > 12e6 || st.size < 512) continue
+      const rel = name + '/lib/' + f
+      let current
+      try { current = fs.readFileSync(p, 'utf8') } catch { continue }
+      if (current.includes(PIC_MARK)) { results.push({ file: rel, ok: true, already: true, version: ver }); continue }
+      // 只碰「引用 primitives 且用到尺寸后缀图标名」的产物,其余静默跳过(不进 items)
+      const m = PIC_REQUIRE_RE.exec(current)
+      if (m === null) continue
+      const alias = m[1]
+      if (!new RegExp('\\b' + alias.replace(/\$/g, '\\$') + '\\.\\w+(?:14|16|20)\\b').test(current)) continue
+      const { rep, failures } = makeCtx(rel)
+      const patched = rep(current, m[0], m[0] + '\n' + picShim(alias), 1, 'pic-shim')
+      if (failures.length) { results.push({ file: rel, ok: false, failures: [...failures], kept: true, version: ver }); continue }
+      fs.writeFileSync(p, patched, 'utf8')
+      results.push({ file: rel, ok: true, version: ver })
+    }
+  }
+  return results
+}
+
+// ---- [Y] mcp-client 启动非阻塞(批次191,2026-10-07) ----
+//   症状: dsh spawn→端口就绪 7.7-9.1s / spawn→printUrl(整树 settle) 12.8s(中位,抛荒 N=3)。
+//   归因(抛荒 A/B,MCP 全禁 vs 全开,diag/b191-boot-timing.mjs): MCP 握手占端口就绪 ~2.9s、
+//   占整树 settle ~3.6s(中位);pi-ai providers/all(~100ms)与 heal(全程 ~290ms)经测量排除。
+//   根因: apply() 尾部 `await connection.ready` —— 全部 mcp-client 条目(本机 10 条:9 stdio
+//   + 1 远程 HTTP)的 spawn+initialize+tools/list 都串进整树 settle 窗口,最慢者决定揭窗。
+//   修法: failOnStartupError=false(本机 10 条全默认)时连接改后台等待,失败 ctx.logger.warn
+//   留痕;true 时保持原语义(await + throw)。逃生门: env DSH_MCP_SYNC_STARTUP=1 恢复阻塞
+//   语义(免重放回滚)。已知取舍: 启动后头几秒内发出的首条请求可能暂缺 MCP 工具(连接完成
+//   自动入列,无需重启);接受。
+//   形态: 自实现 MARK 家族(手册 §2.10);内容门 = 锚点字节逐字在场,不认版本号。
+//   载体: 全部 _npx 树(flat/hoist/pnpm 视图,同 inode 时后续视图报 already)+ 本地 monorepo
+//   lib(@L,漂移按 replayAll 的 @L 规则降级不 FAIL)。
+//   生效面: host 面 → 重启 dsh。回退: 摘除本族注册行重放,或单文件还原 .bak-mcpasync。
+const MCP_ASYNC_MARK = '/*dsh-local-patch:mcp-async-startup-v1*/'
+const MCP_ASYNC_FROM = "\tconst outcome = await connection.ready;\n\tif (outcome.error !== void 0 && config.failOnStartupError) throw new Error(`mcp-client(${config.serverName}): initial connection or tool synchronization failed`, { cause: outcome.error });"
+const MCP_ASYNC_TO = "\t/*dsh-local-patch:mcp-async-startup-v1*/if (config.failOnStartupError || process.env.DSH_MCP_SYNC_STARTUP) {\n\t\tconst outcome = await connection.ready;\n\t\tif (outcome.error !== void 0) throw new Error(`mcp-client(${config.serverName}): initial connection or tool synchronization failed`, { cause: outcome.error });\n\t} else {\n\t\tvoid connection.ready.then((outcome) => {\n\t\t\ttry {\n\t\t\t\tif (outcome.error !== void 0) ctx.logger.warn(`mcp-client(${config.serverName}): initial connection or tool synchronization failed: ${String(outcome.error)} [mcp-async-startup: 连接在后台完成,启动不再等待]`);\n\t\t\t} catch {}\n\t\t});\n\t}"
+function patchMcpAsyncStartup() {
+  const results = []
+  const REL = ['@deepseek-ai', 'dsh-mcp-client', 'lib', 'index.js']
+  const seen = new Set()
+  const add = (p, label) => {
+    if (typeof p !== 'string' || !p || seen.has(p)) return
+    seen.add(p)
+    if (!fs.existsSync(p)) return
+    let ver = 'local'
+    try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+    const current = fs.readFileSync(p, 'utf8')
+    if (current.includes(MCP_ASYNC_MARK)) { results.push({ file: label, ok: true, already: true, version: ver }); return }
+    if (!current.includes(MCP_ASYNC_FROM)) {
+      results.push({ file: label, ok: true, skipped: true, version: ver, reason: '该副本无 connection.ready 启动阻塞形态(上游已改/版本不同),安全跳过' })
+      return
+    }
+    const { rep, failures } = makeCtx(label)
+    const c = rep(current, MCP_ASYNC_FROM, MCP_ASYNC_TO, 1, 'mcp-async-startup')
+    if (failures.length) { results.push({ file: label, ok: false, failures: [...failures] }); return }
+    const bak = p + '.bak-mcpasync'
+    if (!fs.existsSync(bak)) fs.copyFileSync(p, bak)
+    fs.writeFileSync(p, c, 'utf8')
+    results.push({ file: label, ok: true, already: false, version: ver })
+  }
+  const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+  if (fs.existsSync(npxRoot)) {
+    for (const h of fs.readdirSync(npxRoot)) {
+      add(path.join(npxRoot, h, 'node_modules', ...REL), 'mcp-client/lib/index.js@flat@' + h.slice(0, 6))
+      add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', ...REL), 'mcp-client/lib/index.js@hoist@' + h.slice(0, 6))
+      const pnpmDir = path.join(npxRoot, h, 'node_modules', '.pnpm')
+      if (!fs.existsSync(pnpmDir)) continue
+      for (const d of fs.readdirSync(pnpmDir)) {
+        if (!d.startsWith('@deepseek-ai+dsh-mcp-client')) continue
+        add(path.join(pnpmDir, d, 'node_modules', ...REL), 'mcp-client/lib/index.js@pnpm@' + d.slice(-8))
+      }
+    }
+  }
+  add('D:\\deepseek harness\\deepseek-harness\\packages\\mcp\\mcp-client\\lib\\index.js', 'mcp-client/lib/index.js@L')
+  if (!results.length) results.push({ file: 'mcp-client/lib/index.js', missing: true })
+  return results
+}
+
+// 家族链序纪律(2026-09-24 修正): 设置页链在**新树**上必须按 历史真实链序 重放 ——
+//   patchSettingsNest(v8 卡片页/子行) → K9/K10/K11(皮肤子页,含 settings-general 的 skin 子行 +
+//   SEL 路由) → patchGeneralOtherV9(「其它」入口,其 sel-show 锚点要求 SEL 已含 sub:skin-*) →
+//   patchSettingsNavK13(表情包迁入「其它」)。此前 K9 组排在 v9 之后,已补丁态副本靠哨兵短路看不出;
+//   上游一旦重写,新树上 v9 会先于 K9 打而锚点失配 → 「其它」整页静默缺失(本批 rc.1 移植时发现并修正)。
 function replayAll(log = () => {}) {
   const out = { ok: true, items: [] }
-  for (const r of [...patchBetterSidebar(), ...patchBetterSidebarBrowserLinkNav(), ...patchBetterSidebarEmbedAllow(), ...patchBetterSidebarAgentTermSideCard(), ...patchPresentedCardRedirect(), ...patchPresentedMentionSidebar(), ...patchCommandContributionGuard(), ...patchSlashMenuGroupTitles(), ...patchSlashMenuGroupTitleWording(), ...patchNodeNav(), ...patchNodeNavHost(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchEgoBrowserWorkerSpawn(), ...patchEgoBrowserCastWorker(), ...patchEgoBrowserWorkerSelfKill(), ...patchEgoBrowserUrlTargetRelease(), ...patchEgoBrowserHeadlessHost(), ...patchEgoBrowserHeadlessRuntime(), ...patchEgoBrowserHeadlessCopy(), ...patchSystemPromptPersona(), ...patchConversation(), ...patchUiChatThinkCollapse(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchVisionRouterPortal(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchGeneralOtherV9(), ...patchSkinSubpages(), ...patchSkinSubpagesK10(), ...patchSkinSubpagesK11(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchPluginCardOrder(), ...patchMnemonProjection(), ...patchMnemonClockGate(), ...patchBetterSidebarClockGate(), ...patchConversationHeightGate(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchConversationPlusQuickActions(), ...patchBlankSessionDup(), ...patchSessionFormatV0Lenient(), ...patchModelSelectionSessionGone(), ...patchModelSelectionMenu(), ...patchModelSelectionKeepOpen(), ...patchModelSelectionUiPolish(), ...patchPiAiMergeConsecutiveMessages(), ...patchSessionTopicHoverCard(), ...patchRightbarDefaultRatio(), ...patchWhaleWidget(), ...patchArchiveRestore()]) {
+  for (const r of [...patchBetterSidebar(), ...patchBetterSidebarBrowserLinkNav(), ...patchBetterSidebarEmbedAllow(), ...patchBetterSidebarAgentTermSideCard(), ...patchPresentedCardRedirect(), ...patchPresentedMentionSidebar(), ...patchCommandContributionGuard(), ...patchSlashMenuGroupTitles(), ...patchSlashMenuGroupTitleWording(), ...patchNodeNav(), ...patchNodeNavHost(), ...patchTurnRewind(), ...patchEgoBrowserSettings(), ...patchEgoBrowserWorkerSpawn(), ...patchEgoBrowserCastWorker(), ...patchEgoBrowserWorkerSelfKill(), ...patchEgoBrowserUrlTargetRelease(), ...patchEgoBrowserHeadlessHost(), ...patchEgoBrowserHeadlessRuntime(), ...patchEgoBrowserHeadlessCopy(), ...patchSystemPromptPersona(), ...patchConversation(), ...patchUiChatThinkCollapse(), ...patchEntrySmooth(), ...patchDshmarket(), ...patchSettingsInfoArch(), ...patchGitGraph(), ...patchPresets(), ...patchProfileSidebarDedup(), ...patchTurnReview(), ...patchJoiTheme(), ...patchVisionRouter(), ...patchVisionRouterPortal(), ...patchMobileGlassSw(), ...patchSettingsNest(), ...patchSkinSubpages(), ...patchSkinSubpagesK10(), ...patchSkinSubpagesK11(), ...patchGeneralOtherV9(), ...patchSettingsNavK13(), ...patchMemeModalLayer(), ...patchAgentTeamsTab(), ...patchPluginSettingsItemId(), ...patchPluginCardOrder(), ...patchMnemonProjection(), ...patchMnemonClockGate(), ...patchBetterSidebarClockGate(), ...patchBetterSidebarHeldId(), ...patchConversationHeightGate(), ...patchNewSessionFallback(), ...patchWorkspaceNoPickEntry(), ...patchUngroupedGroupBlank(), ...patchSessionDeleteEntry(), ...patchHeroNoWorkspaceInert(), ...patchBlankSessionDup(), ...patchSessionFormatV0Lenient(), ...patchModelSelectionSessionGone(), ...patchModelSelectionMenu(), ...patchModelSelectionKeepOpen(), ...patchModelSelectionUiPolish(), ...patchPiAiMergeConsecutiveMessages(), ...patchSessionTopicHoverCard(), ...patchRightbarDefaultRatio(), ...patchWhaleWidget(), ...patchArchiveRestore(), ...patchPermissionPresetGlyphs(), ...patchPluginIconCompat(), ...patchSettingsScopeCompat(), ...patchBrowserPlaywrightSettings(), ...patchVisionRouterLocalSettingsScope(), ...patchMcpAsyncStartup()]) {
     if (r.missing) { log(`[patches] ${r.file}: 未安装,跳过`); continue }
     out.items.push(r)
-    if (r.ok) log(`[patches] ${r.file}@${r.version}: ${r.skipped ? '锚点不适配,安全跳过' : r.already ? '已是补丁态' : '已恢复本地定制'}`)
+    if (r.ok) log(`[patches] ${r.file}@${r.version}: ${r.retired ? '上游已移除该功能,守护退役' : r.superseded ? '上游已达成,补丁退役' : r.gap ? '上游缺口(锚点全命中,待隔离复测),安全跳过' : r.skipped ? '锚点不适配,安全跳过' : r.already ? '已是补丁态' : '已恢复本地定制'}`)
     // [P3fix/G2c 2026-09-13] 本地 monorepo 副本(@L / version:'local')锚点漂移降级:官方 npx 轨
     // 为活体时,@L 是并行开发重建的移动目标(其补丁仅本地轨消费),失配留痕不算 FAIL——否则
     // 每次漂移都会把守护器/启动重放打成 FAIL(启动通知+日志风暴),而活体副本毫发无损。
@@ -5479,8 +5807,8 @@ const MSEL3_CSS_APPLY_FROM = "\t\t\ttag.textContent = css + MSEL2_CSS_TEXT;"
 const MSEL3_CSS_APPLY_TO = "\t\t\ttag.textContent = css + MSEL2_CSS_TEXT + MSEL3_CSS_TEXT;"
 const MSEL3_LIVE_FROM = "\t\t\t\t\t\"aria-busy\": state.status === \"loading\" || busy,\n\t\t\t\t\tchildren: ["
 const MSEL3_LIVE_TO = "\t\t\t\t\t\"aria-busy\": state.status === \"loading\" || busy,\n\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)(\"div\", { ref: switchAnnounceRef, \"aria-live\": \"polite\", role: \"status\", style: { position: \"absolute\", width: 1, height: 1, overflow: \"hidden\", clip: \"rect(0 0 0 0)\", whiteSpace: \"nowrap\" } }), "
-const MSEL3_REFS_FROM = "\t\t\tconst busy = state.status === \"selecting\";"
-const MSEL3_REFS_TO = "\t\t\tconst switchAnnounceRef = (0, react.useRef)(null);\n\t\t\tconst effortRowRef = (0, react.useRef)(null);\n\t\t\tconst segRef = (0, react.useRef)(null);\n\t\t\tconst busy = state.status === \"selecting\";"
+const MSEL3_REFS_FROM = "\t\t\tconst busy = state.status === \"selecting\" || (state.pending ?? null) !== null;"
+const MSEL3_REFS_TO = "\t\t\tconst switchAnnounceRef = (0, react.useRef)(null);\n\t\t\tconst effortRowRef = (0, react.useRef)(null);\n\t\t\tconst segRef = (0, react.useRef)(null);\n\t\t\tconst busy = state.status === \"selecting\" || (state.pending ?? null) !== null;"
 const MSEL3_CSS = ".{P}_effortFlash{animation:{P}_m3flash 1s ease-out 1}\n@keyframes {P}_m3flash{0%{outline:1px solid var(--dsw-alias-border-l3);outline-offset:2px;background:var(--dsw-alias-interactive-bg-hover)}100%{outline:1px solid transparent;outline-offset:0;background:transparent}}\n@media (prefers-reduced-motion:reduce){.{P}_effortFlash{animation:none}}"
 
 // ---- [MSEL3] 模型选择器联动: 切模型面板保活 + 档位重绑高亮/播报/焦点直达(2026-09-15 方案落地) ----
@@ -5500,14 +5828,15 @@ const MSEL3_CSS = ".{P}_effortFlash{animation:{P}_m3flash 1s ease-out 1}\n@keyfr
 //   单轨声明: 与 [MSEL2] 同载体同轨(profile 活体单文件),无双轨。
 //   回退: 摘除本族注册行,活体从 .bak-msel2 基底重放 MSEL2 即回到现状,零中间态。
 function patchModelSelectionKeepOpen(target) {
-	const p = target ?? path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
-	if (!fs.existsSync(p)) return [{ file: 'model-selection/lib/client.js', missing: true }]
-	let ver = 'profile'
-	try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+	const results = []
+	for (const { label, p } of modelSelectionRoots(target)) {
+	const file = 'model-selection/lib/client.js@' + label
+	if (!fs.existsSync(p)) { results.push({ file, missing: true }); continue }
+	const ver = modelSelectionVersion(p)
 	const current = fs.readFileSync(p, 'utf8')
-	if (current.includes(MSEL3_MARK)) return [{ file: 'model-selection/lib/client.js', ok: true, already: true, version: ver }]
-	if (!current.includes('search.placeholder')) return [{ file: 'model-selection/lib/client.js', ok: true, skipped: true, reason: 'MSEL2 单面板形态不在场,无从叠打', version: ver }]
-	const { rep, failures } = makeCtx('model-selection/lib/client.js')
+	if (current.includes(MSEL3_MARK)) { results.push({ file, ok: true, already: true, version: ver }); continue }
+	if (!current.includes('search.placeholder')) { results.push({ file, ok: true, skipped: true, reason: 'MSEL2 单面板形态不在场,无从叠打', version: ver }); continue }
+	const { rep, failures } = makeCtx(file)
 	const apply = (c) => {
 		const prefix = /"warning": "([A-Za-z0-9_]+)_warning"/.exec(c)?.[1]
 		if (prefix === undefined) { failures.push('[model-selection/lib/client.js] msel3-prefix: CSS 类名前缀未识别'); return c }
@@ -5531,12 +5860,16 @@ function patchModelSelectionKeepOpen(target) {
 		return c
 	}
 	const patched = apply(current)
-	if (failures.length) return [{ file: 'model-selection/lib/client.js', ok: false, failures: [...failures], kept: true, version: ver }]
+	if (failures.length) { results.push({ file, ok: false, failures: [...failures], kept: true, version: ver }); continue }
 	if (patched !== current) {
 		fs.writeFileSync(p, patched + '\n/*dsh-local-patch:msel3*/\n', 'utf8')
-		return [{ file: 'model-selection/lib/client.js', ok: true, already: false, version: ver }]
+		results.push({ file, ok: true, already: false, version: ver })
+	} else {
+		results.push({ file, ok: true, already: true, version: ver })
 	}
-	return [{ file: 'model-selection/lib/client.js', ok: true, already: true, version: ver }]
+	}
+	if (!results.length) results.push({ file: 'model-selection/lib/client.js', missing: true })
+	return results
 }
 
 const MSEL4_MARK = '/*dsh-local-patch:msel4*/'
@@ -5563,14 +5896,15 @@ const MSEL4_CSS = ".{P}_rowSelected{background:var(--dsw-alias-interactive-bg-ho
 //         之后;CSS 沿用 {P} 前缀绑定;锚点全部取自活体字节(2026-09-16 直读)。
 //   回退: 摘除注册行 + 活体从 .bak-msel2 基底重放 MSEL2/MSEL3 链,零中间态。
 function patchModelSelectionUiPolish(target) {
-	const p = target ?? path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
-	if (!fs.existsSync(p)) return [{ file: 'model-selection/lib/client.js', missing: true }]
-	let ver = 'profile'
-	try { ver = JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(p)), 'package.json'), 'utf8')).version } catch {}
+	const results = []
+	for (const { label, p } of modelSelectionRoots(target)) {
+	const file = 'model-selection/lib/client.js@' + label
+	if (!fs.existsSync(p)) { results.push({ file, missing: true }); continue }
+	const ver = modelSelectionVersion(p)
 	const current = fs.readFileSync(p, 'utf8')
-	if (current.includes(MSEL4_MARK)) return [{ file: 'model-selection/lib/client.js', ok: true, already: true, version: ver }]
-	if (!current.includes('switch.announce')) return [{ file: 'model-selection/lib/client.js', ok: true, skipped: true, reason: 'MSEL3 输出态不在场,无从叠打', version: ver }]
-	const { rep, failures } = makeCtx('model-selection/lib/client.js')
+	if (current.includes(MSEL4_MARK)) { results.push({ file, ok: true, already: true, version: ver }); continue }
+	if (!current.includes('switch.announce')) { results.push({ file, ok: true, skipped: true, reason: 'MSEL3 输出态不在场,无从叠打', version: ver }); continue }
+	const { rep, failures } = makeCtx(file)
 	const apply = (c) => {
 		const prefix = /"warning": "([A-Za-z0-9_]+)_warning"/.exec(c)?.[1]
 		if (prefix === undefined) { failures.push('[model-selection/lib/client.js] msel4-prefix: CSS 类名前缀未识别'); return c }
@@ -5593,15 +5927,236 @@ function patchModelSelectionUiPolish(target) {
 		return c
 	}
 	const patched = apply(current)
-	if (failures.length) return [{ file: 'model-selection/lib/client.js', ok: false, failures: [...failures], kept: true, version: ver }]
+	if (failures.length) { results.push({ file, ok: false, failures: [...failures], kept: true, version: ver }); continue }
 	if (patched !== current) {
 		fs.writeFileSync(p, patched + '\n/*dsh-local-patch:msel4*/\n', 'utf8')
-		return [{ file: 'model-selection/lib/client.js', ok: true, already: false, version: ver }]
+		results.push({ file, ok: true, already: false, version: ver })
+	} else {
+		results.push({ file, ok: true, already: true, version: ver })
 	}
-	return [{ file: 'model-selection/lib/client.js', ok: true, already: true, version: ver }]
+	}
+	if (!results.length) results.push({ file: 'model-selection/lib/client.js', missing: true })
+	return results
 }
 
-module.exports = { replayAll, patchArchiveRestore, patchModelSelectionMenu, patchModelSelectionKeepOpen, patchModelSelectionUiPolish }
+
+// ---- [R107 2026-09-24] settingsScope 兼容桥:0.1.7 起上游删除 settingsScope(仅存 configForms),
+// 在用插件 browser-playwright / turn-rewind / vision-router inject 旧名 → 激活卡 pending
+// (「Failed to load plugins」,声明级兼容预检看不出这类运行时服务落地)。
+// 做法: 在设置客户端 bundle 尾部同址补一张透传层——bind(spec) → configForms.get(namespace),
+// 快照形状与旧 SettingsScopeController 对齐(status/value/base/user/revision/writable)并补
+// get()(vision-router 直读);不改上游语义,摘除本家族重放即回到无桥态。
+// 幂等: 哨兵 SSC_MARK;内容门: 文件仍含 "settingsScope" 的树(≤0.1.5-rc.3)整体跳过零副作用。
+// 生效面: 浏览器客户端 bundle——导入后刷新页面即取新码,无需重启宿主。
+const SSC_MARK = "/*dsh-local-patch:settings-scope-compat*/"
+const SSC_FROM = "\t\texports.apply = apply;\n\t\texports.inject = inject;\n\t\treturn module.exports;"
+const SSC_TO = "\t\t/*dsh-local-patch:settings-scope-compat*/\n\t\t// 0.1.7 起上游移除 settingsScope(仅存 configForms);为旧消费方(browser-playwright /\n\t\t// turn-rewind / vision-router)按旧名补一张只读/可写透传层:bind(spec) → configForms.get(namespace),\n\t\t// 快照形状与旧 SettingsScopeController 一致(status/value/base/user/revision/writable)。\n\t\tvar SettingsScopeCompat = class extends _deepseek_ai_cordis.Service {\n\t\t\tconstructor(ctx) { super(ctx, \"settingsScope\"); this.compatOwner = ctx; }\n\t\t\tcompatForms() { return this.compatOwner.get(\"configForms\"); }\n\t\t\tdescribe() { return this.compatForms()?.describe(); }\n\t\t\tbind(spec) {\n\t\t\t\tconst namespace = typeof spec === \"string\" ? spec : spec && spec.namespace;\n\t\t\t\tconst form = this.compatForms()?.get(namespace);\n\t\t\t\tif (form === void 0) return void 0;\n\t\t\t\treturn {\n\t\t\t\t\tgetSnapshot: () => form.getSnapshot(),\n\t\t\t\t\tsubscribe: (listener) => form.subscribe(listener),\n\t\t\t\t\tset: (field, value) => form.set(field, value),\n\t\t\t\t\tunset: (field) => form.unset(field),\n\t\t\t\t\tmutate: (ops, revision) => form.mutate(ops, revision),\n\t\t\t\t\tget: () => form.getSnapshot()?.value,\n\t\t\t\t\twatch: (listener) => form.subscribe(listener),\n\t\t\t\t\tdispose: () => form.dispose(),\n\t\t\t\t\tform\n\t\t\t\t};\n\t\t\t}\n\t\t};\n\t\texports.apply = ((_apply) => (ctx) => { _apply(ctx); new SettingsScopeCompat(ctx); })(apply);\n\t\texports.inject = inject;\n\t\treturn module.exports;"
+function patchSettingsScopeCompat() {
+	const results = []
+	const REL = ['@deepseek-ai', 'dsh-client-ui-settings', 'lib', 'client.js']
+	const seen = new Set()
+	const add = (p, label) => {
+		let real = p
+		try { real = fs.realpathSync(p) } catch { return }
+		if (seen.has(real) || !fs.existsSync(real)) return
+		seen.add(real)
+		const ver = (() => {
+			try { return JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(real)), 'package.json'), 'utf8')).version } catch { return undefined }
+		})()
+		const current = fs.readFileSync(real, 'utf8')
+		if (current.includes(SSC_MARK)) { results.push({ file: label, ok: true, already: true, version: ver }); return }
+		if (current.includes('"settingsScope"')) { results.push({ file: label, ok: true, skipped: true, reason: '上游仍提供 settingsScope,无需兼容层', version: ver }); return }
+		const { rep, failures } = makeCtx(label)
+		const apply = (c) => rep(c, SSC_FROM, SSC_TO, 1, 'settings-scope-compat')
+		results.push({ ...rewriteFresh(real, '.bak-sscope', apply, failures, SSC_MARK), file: label, version: ver })
+	}
+	const npxRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.npm-cache'), 'npm-cache', '_npx')
+	if (fs.existsSync(npxRoot)) {
+		for (const h of fs.readdirSync(npxRoot)) {
+			add(path.join(npxRoot, h, 'node_modules', ...REL), 'settings-scope-compat/flat@' + h.slice(0, 6))
+			add(path.join(npxRoot, h, 'node_modules', '.pnpm', 'node_modules', ...REL), 'settings-scope-compat/hoist@' + h.slice(0, 6))
+			const pnpmRoot = path.join(npxRoot, h, 'node_modules', '.pnpm')
+			if (!fs.existsSync(pnpmRoot)) continue
+			for (const d of fs.readdirSync(pnpmRoot)) {
+				if (!d.startsWith('@deepseek-ai+dsh-client-ui-')) continue
+				add(path.join(pnpmRoot, d, 'node_modules', ...REL), 'settings-scope-compat/pnpm@' + d.slice(-8))
+			}
+		}
+	}
+	add(path.join(os.homedir(), '.dsh', 'profiles', 'node_modules', ...REL), 'settings-scope-compat/devlink')
+	if (!results.length) results.push({ file: 'settings-scope-compat', missing: true })
+	return results
+}
+
+// ---- [R108 2026-09-25] @yeesy369/dsh-browser-playwright 服务端 settings API 移植(0.1.7 新契约) ----
+//   症状: 0.1.7 上游删除 settings.register —— settings 服务整体换成 dsh-settings 的 SettingsForms:
+//         不再由插件自注册命名空间,而是**按 profile 条目的 Config schema 自动投影表单**。该插件
+//         服务端 apply 首行即 settings.register(...) → TypeError → 条目「失败」;其客户端设置卡
+//         (孤儿槽 settings.plugin.item,已由壳桥接 + settingsScope 兼容层兜住)因命名空间无人服务
+//         而渲染空壳 ⇒ 六家孤儿卡里唯一「真坏」的一家。
+//   新契约三点(逐字取自 rc.2 活体字节):
+//     ① 表单可见性 = 字段的 schema.meta.volatile(schema.ts volatileForm:无 volatile 字段 → 无表单);
+//     ② 表单标识 = profile 条目 id(此处 cordis.patch.yml 的 insert id 即 "browser-playwright",
+//        与客户端卡 bind 的 namespace 同名 ⇒ 桥一接即对上);
+//     ③ 写入落 profile patch 后由 Loader 重载该条目(config-editor.edit → reconcileProfilePatches),
+//        本函数以新 config 重跑 = 旧 applies:'restart' 语义,无需重启宿主。
+//   改动面: lib/index.js 单文件三处 —— Config 六字段补 .volatile();apply 改直读自身 config;
+//           摘掉随之失去意义的 inject=['settings'](旧注释只服务于 register 等待)。
+//   幂等: 哨兵 PWB_MARK;内容门: 文件已无 settings.register ⇒ 上游自愈,报「守护退役」零副作用。
+//   回退: 摘除本族注册行即回到现状;基底备份 lib/index.js.bak-settingsv2。
+const PWB_MARK = '/*dsh-local-patch:browser-playwright-settings-v2*/'
+const PWB_APPLY_FROM = "export function apply(ctx, config) {\n    const settings = ctx.get('settings');\n    const scope = settings.register(name, Config, {\n        base: config,\n        applies: 'restart',\n        expose: 'web',\n    });\n    ctx.plugin(PlaywrightBrowserRuntime, scope.get());\n}"
+const PWB_APPLY_TO = PWB_MARK + "\n// [dsh-desktop R108] 0.1.7 上游移除 settings.register —— settings 服务改为按 profile 条目的 Config\n// schema 自动投影表单(字段须 .volatile(),见上方六字段),插件不再自注册命名空间、直读自身 config;\n// 表单写入落 profile patch → Loader 重载本条目 → 本条 apply 以新 config 重跑(≈ 旧 applies:'restart')。\nexport function apply(ctx, config) {\n    ctx.plugin(PlaywrightBrowserRuntime, config);\n}"
+const PWB_INJECT_FROM = "/** Wait for Host settings so `register(..., { expose: 'web' })` actually runs. */\nexport const inject = ['settings'];"
+const PWB_INJECT_TO = "// [dsh-desktop R108] 原 inject=['settings'] 只为等 settings.register 到位;新契约下表单由设置服务\n// 自动投影,本插件不再依赖该服务,摘除以免在无 settings 的组合里整体不激活。"
+function patchBrowserPlaywrightSettings() {
+	const results = []
+	const dir = path.join(PLUGINS, '@yeesy369', 'dsh-browser-playwright')
+	const p = path.join(dir, 'lib', 'index.js')
+	const label = 'browser-playwright/index.js'
+	if (!fs.existsSync(p)) { results.push({ file: label, missing: true }); return results }
+	const ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version
+	const head = fs.readFileSync(p, 'utf8')
+	if (head.includes(PWB_MARK)) { results.push({ file: label, ok: true, already: true, version: ver }); return results }
+	if (!head.includes('settings.register')) { results.push({ file: label, ok: true, retired: true, reason: '上游已按新契约改写(无 settings.register)', version: ver }); return results }
+	const { rep, failures } = makeCtx(label)
+	const apply = (c) => {
+		c = rep(c, "windowVisibility: Schema.union(['visible', 'hidden', 'headless'])", "windowVisibility: Schema.union(['visible', 'hidden', 'headless']).volatile()", 1, 'volatile:windowVisibility')
+		c = rep(c, 'stealth: Schema.boolean().default(true)', 'stealth: Schema.boolean().default(true).volatile()', 1, 'volatile:stealth')
+		c = rep(c, 'allowFakeIp: Schema.boolean().default(true)', 'allowFakeIp: Schema.boolean().default(true).volatile()', 1, 'volatile:allowFakeIp')
+		c = rep(c, 'headless: Schema.boolean()', 'headless: Schema.boolean().volatile()', 1, 'volatile:headless')
+		c = rep(c, "channel: Schema.union(['chrome', 'msedge'])", "channel: Schema.union(['chrome', 'msedge']).volatile()", 1, 'volatile:channel')
+		c = rep(c, 'profileDir: Schema.string()', 'profileDir: Schema.string().volatile()', 1, 'volatile:profileDir')
+		c = rep(c, PWB_APPLY_FROM, PWB_APPLY_TO, 1, 'apply:new-settings-api')
+		c = rep(c, PWB_INJECT_FROM, PWB_INJECT_TO, 1, 'inject:dropped')
+		return c
+	}
+	results.push({ ...rewriteFresh(p, '.bak-settingsv2', apply, failures, PWB_MARK), file: label, version: ver })
+	return results
+}
+
+// ---- [R109 2026-09-25] dsh-vision-router 本地设置 scope 兜底(0.1.7 客户端) ----
+//   症状: 设置 → 通用设置 → Vision Router 子页整页退化为「远程设置通道不可用 / 无法读取
+//         Vision Router 的远程设置」(无「重试」钮,活体实测)。
+//   活体取证: 卡片的 props.scope 是本机 settingsScope 兼容桥(R107)的产物
+//         (键含 mutate/get/watch/form),getSnapshot().status === 'unavailable';
+//         而插件自带本地桥 GET /_dsh/vision-router/local-settings 实测 200 且带完整
+//         value/revision/writable ⇒ 服务端一切正常,坏的只是 scope 接线。
+//   根因(逐字节核查 @deepseek-ai/dsh-client-modules/lib/client.js): 0.1.7 客户端模块系统在
+//         boot 时整体**替换** __ModuleLoader__.load(target.load = (registration) => this.register(...))。
+//         该插件 2.2.2 的兼容前奏(settings-client-017-compat.js)是「赋值前挂钩」式:它包装的是
+//         boot 前那个 queue 模式的 load,替换即失效 → patchCreate 里的 wrapContext 永不生效 →
+//         插件自己的 syntheticBinder(把 'vision-router' 指到本地桥 scope)没机会接上。
+//         插件 Config 刻意不声明 volatile(configForms 对本命名空间恒 unavailable),R107 桥
+//         于是交回一个不可用 scope ⇒ 退化成远程回退页。
+//   改动面: lib/client.js 单文件一处 —— `const localScope = ctx.settingsScope.bind(...)` 一行
+//         替换为「原生 scope 可用则让位(有 __visionRouterWritePlan 或 status==='ready'),
+//         否则就地起一张本地桥 scope」。桥契约逐字对齐插件自己的 createScope/planOps:
+//         GET 取 view{ns,value,base,user,revision,applies,writable} → 快照 status/value/base/
+//         user/revision/writable;写 = POST {ops:[{op:'set'|'unset',path:[key],value}],
+//         expectedRevision} 单事务;批量保存走 __visionRouterWritePlan(plan 项 {key,run:{clear,value}})。
+//   幂等: 哨兵 VRB_MARK;内容门: 文件已无 settingsScope.bind({ namespace: 'vision-router' })
+//         ⇒ 上游改写,报「守护退役」零副作用。
+//   生效面: 客户端 bundle —— **刷新页面即生效,无需重启宿主**(与 [R108] 的服务端改动不同)。
+//   回退: 摘除本族注册行即回到现状;基底备份 lib/client.js.bak-vrbridge。
+const VRB_MARK = '/*dsh-local-patch:vision-router-local-bridge-scope*/'
+const VRB_FROM = "      const localScope = ctx.settingsScope.bind({ namespace: 'vision-router' })"
+const VRB_TO = VRB_MARK + "\n" + [
+	"      // [dsh-desktop R109] 0.1.7 客户端模块系统 boot 时整体替换 __ModuleLoader__.load(client-modules:",
+	"      // target.load = (registration) => this.register(registration)),本插件前奏的『赋值前挂钩』因此失效 →",
+	"      // 它自带的本地 ConfigEditor 桥(/_dsh/vision-router/local-settings)接不上;而 0.1.7 的 configForms",
+	"      // 对该命名空间恒为 unavailable(插件 Config 刻意不声明 volatile)⇒ 卡片拿到不可用 scope,整页退化成",
+	"      // 「远程设置通道不可用」。此处按插件自己的 createScope/planOps 契约就地补一张本地桥 scope;",
+	"      // 原生 scope 可用(有 __visionRouterWritePlan 或 status==='ready')时原样让位。",
+	"      const createVisionRouterLocalBridgeScope = () => {",
+	"        const ENDPOINT = '/_dsh/vision-router/local-settings'",
+	"        const listeners = new Set()",
+	"        let snapshot = Object.freeze({ status: 'loading', value: undefined, base: undefined, user: undefined, revision: undefined, writable: false, mode: 'host' })",
+	"        let inFlight",
+	"        let writeTail = Promise.resolve()",
+	"        const publish = (next) => { snapshot = Object.freeze(next); for (const listener of [...listeners]) { try { listener() } catch (_) {} } }",
+	"        const accept = (view) => {",
+	"          if (!view || !view.value || typeof view.value !== 'object' || Array.isArray(view.value) || !Number.isInteger(view.revision) || view.revision < 0) throw new Error('Vision Router local settings returned an invalid view')",
+	"          publish({ status: 'ready', value: view.value, base: view.base, user: view.user, revision: view.revision, writable: view.writable === true, mode: 'host' })",
+	"        }",
+	"        const request = async (method, payload) => {",
+	"          const response = await fetch(ENDPOINT, { method, headers: { accept: 'application/json', ...(method === 'POST' ? { 'content-type': 'application/json' } : {}) }, cache: 'no-store', credentials: 'same-origin', ...(method === 'POST' ? { body: JSON.stringify(payload) } : {}) })",
+	"          let body",
+	"          try { body = await response.json() } catch (_) { body = undefined }",
+	"          if (!response.ok || !body || body.ok !== true) throw new Error('Vision Router local settings request failed (HTTP ' + response.status + ')')",
+	"          return body.value",
+	"        }",
+	"        const load = (restart) => {",
+	"          if (!restart && inFlight) return inFlight",
+	"          const task = request('GET').then(accept, (error) => {",
+	"            publish({ status: 'unavailable', value: undefined, base: undefined, user: undefined, revision: undefined, writable: false, mode: 'host', error: error && error.message ? error.message : String(error) })",
+	"            throw error",
+	"          })",
+	"          const held = task.finally(() => { if (inFlight === held) inFlight = undefined })",
+	"          inFlight = held",
+	"          return held",
+	"        }",
+	"        const planOps = (items) => {",
+	"          if (!Array.isArray(items) || items.length === 0) throw new TypeError('settings plan must be a non-empty array')",
+	"          return items.map((item) => {",
+	"            if (!item || typeof item.key !== 'string' || item.key.length === 0 || !item.run) throw new TypeError('settings plan item is invalid')",
+	"            return item.run.clear ? { op: 'unset', path: [item.key] } : { op: 'set', path: [item.key], value: item.run.value }",
+	"          })",
+	"        }",
+	"        const writeOps = (ops) => {",
+	"          if (!Array.isArray(ops) || ops.length === 0) return Promise.reject(new TypeError('settings operations must be a non-empty array'))",
+	"          const task = writeTail.then(async () => {",
+	"            if (snapshot.status !== 'ready' || !Number.isInteger(snapshot.revision)) await load(true)",
+	"            if (snapshot.status !== 'ready' || !Number.isInteger(snapshot.revision)) throw new Error('Vision Router local settings are not ready')",
+	"            if (!snapshot.writable) throw new Error('Vision Router settings provider is read-only')",
+	"            try { accept(await request('POST', { ops, expectedRevision: snapshot.revision })) }",
+	"            catch (error) { try { await load(true) } catch (_) {} throw error }",
+	"          })",
+	"          writeTail = task.catch(() => {})",
+	"          return task",
+	"        }",
+	"        void load(false).catch(() => {})",
+	"        return {",
+	"          getSnapshot: () => snapshot,",
+	"          subscribe: (listener) => { if (typeof listener !== 'function') return () => {}; listeners.add(listener); return () => listeners.delete(listener) },",
+	"          load: () => load(false),",
+	"          reload: () => load(true),",
+	"          set: (field, value) => writeOps([{ op: 'set', path: [field], value }]),",
+	"          unset: (field) => writeOps([{ op: 'unset', path: [field] }]),",
+	"          __visionRouterWritePlan: (items) => writeOps(planOps(items)),",
+	"          dispose: async () => { listeners.clear() },",
+	"        }",
+	"      }",
+	"      const nativeVisionScope = (() => { try { return ctx.settingsScope && typeof ctx.settingsScope.bind === 'function' ? ctx.settingsScope.bind({ namespace: 'vision-router' }) : undefined } catch (_) { return undefined } })()",
+	"      const localScope = (() => {",
+	"        try {",
+	"          if (nativeVisionScope && typeof nativeVisionScope.__visionRouterWritePlan === 'function') return nativeVisionScope",
+	"          const snap = nativeVisionScope && typeof nativeVisionScope.getSnapshot === 'function' ? nativeVisionScope.getSnapshot() : undefined",
+	"          if (snap && snap.status === 'ready') return nativeVisionScope",
+	"        } catch (_) {}",
+	"        return createVisionRouterLocalBridgeScope()",
+	"      })()",
+].join("\n")
+function patchVisionRouterLocalSettingsScope() {
+	const results = []
+	const dir = path.join(PLUGINS, 'dsh-vision-router')
+	const p = path.join(dir, 'lib', 'client.js')
+	const label = 'vision-router/client.js'
+	if (!fs.existsSync(p)) { results.push({ file: label, missing: true }); return results }
+	const ver = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version
+	const head = fs.readFileSync(p, 'utf8')
+	if (head.includes(VRB_MARK)) { results.push({ file: label, ok: true, already: true, version: ver }); return results }
+	if (!head.includes("ctx.settingsScope.bind({ namespace: 'vision-router' })")) { results.push({ file: label, ok: true, retired: true, reason: '上游已自行接上本地 scope(无 settingsScope.bind 锚点)', version: ver }); return results }
+	const { rep, failures } = makeCtx(label)
+	const apply = (c) => {
+		c = rep(c, VRB_FROM, VRB_TO, 1, 'localScope:local-bridge-fallback')
+		return c
+	}
+	results.push({ ...rewriteFresh(p, '.bak-vrbridge', apply, failures, VRB_MARK), file: label, version: ver })
+	return results
+}
+
+module.exports = { replayAll, patchModelSelectionMenu, patchModelSelectionKeepOpen, patchModelSelectionUiPolish, patchPluginIconCompat, patchSettingsScopeCompat, patchBrowserPlaywrightSettings, patchVisionRouterLocalSettingsScope, patchBetterSidebarHeldId }
 if (require.main === module) {
   const r = replayAll((l) => console.log(l))
   console.log(r.ok ? 'ALL PATCHES OK' : 'PATCH FAILURES — see above')
@@ -5710,59 +6265,25 @@ function _applyGenuiBridge() {
       + failed.map(f => path.basename(f.file) + ' ' + (f.error || f.status)).join('; '))
   }
 }
-try { _applyGenuiBridge() } catch (e) { failures.push('[genui-bridge] unexpected: ' + String(e)) }
-
-// [P0-v2 2026-09-16] genui-registry early 创建：修复 v1 桥的时序缺陷。
-// v1 在 CodeBlock 分发点惰性创建 __DSH_FENCE_RENDERERS__，但插件激活早于任何
-// fence 渲染 → boot 探测必 undefined → 永远回退 dom 通道。v2 在 entry bundle
-// 文件头（模块求值最早期）创建 registry，插件 boot 即可探测到。
-// 幂等: 哨兵 /*dsh-local-patch:genui-registry-early-v2*/;文件缺失 = FAIL。
-function _applyGenuiRegistryEarly() {
-  const fs = require('node:fs')
-  const path = require('node:path')
-  const MARK = '/*dsh-local-patch:genui-registry-early-v2*/'
-  const PRELUDE = MARK
-    + 'globalThis.__DSH_FENCE_RENDERERS__??=(()=>{const m=new Map();'
-    + 'return{register:(l,r)=>{m.set(l,r)},get:l=>m.get(l),has:l=>m.has(l)}})();\n'
-  const results = []
-  const targets = []
-  targets.push(path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx',
-    'c40503fdf38a82ea', 'node_modules', '@deepseek-ai', 'dsh-web-frontend',
-    'dist', 'assets', 'index-BKQ_L1z6.js'))
-  try {
-    const seedRoot = path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx',
-      'dsh-0.1.5-rc.2-pnpm-seed', 'node_modules', '.pnpm')
-    for (const dir of fs.readdirSync(seedRoot)) {
-      if (!dir.startsWith('@deepseek-ai+dsh-web-app@')) continue
-      const assets = path.join(seedRoot, dir, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets')
-      for (const f of fs.readdirSync(assets)) {
-        if (/^index-[A-Za-z0-9_-]+\.js$/.test(f)) targets.push(path.join(assets, f))
-      }
-    }
-  } catch (_) {}
-  for (const file of targets) {
-    try {
-      if (!fs.existsSync(file)) { results.push({ file, status: 'missing' }); continue }
-      const src = fs.readFileSync(file, 'utf8')
-      if (src.includes(MARK)) { results.push({ file, status: 'already' }); continue }
-      const bak = file + '.bak-genui-bridge'
-      if (!fs.existsSync(bak)) fs.copyFileSync(file, bak)
-      fs.writeFileSync(file, PRELUDE + src)
-      results.push({ file, status: 'patched' })
-    } catch (e) {
-      results.push({ file, status: 'FAIL', error: String((e && e.message) || e) })
-    }
-  }
-  for (const r of results) {
-    console.log('[genui-registry-early] ' + r.status + ' :: ' + r.file + (r.error ? ' :: ' + r.error : ''))
-  }
-  const failed = results.filter(r => r.status === 'FAIL' || r.status === 'missing')
-  if (failed.length > 0) {
-    failures.push('[genui-registry-early] ' + failed.length + ' file(s) failed: '
-      + failed.map(f => path.basename(f.file) + ' ' + (f.error || f.status)).join('; '))
+// [批次189b 2026-10-06 退役] genui-bridge(v1) + genui-registry-early(v2)：
+//   上游已达成——genui 0.11.x 自带双通道自适配（apply 处 console "fence-channel=registry|dom"，
+//   无宿主 API 时走自带 dom 通道渲染），0.1.7/0.2.0 宿主全树无 registerFenceRenderer API、
+//   无 __DSH_FENCE_RENDERERS__ 消费面 ⇒ 桥（宿主半+客户半）在现役轨上恒 inert；
+//   活体佐证：0.2.0-rc.2 页面实测 DIV.genui-dom-fence 在场（dom 通道真实渲染中）。
+//   复活条件：genui 降级到无 "fence-channel=" 双通道标记的版本（内容门，不认版本号）。
+//   原实现保留在下方两个 _applyGenui* 函数体内，仅入口让位。
+{
+  const __genuiClient = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', '@changfenhuang', 'dsh-genui', 'lib', 'client.js')
+  let __genuiDual = false
+  try { __genuiDual = fs.readFileSync(__genuiClient, 'utf8').includes('fence-channel=') } catch { }
+  if (__genuiDual) {
+    console.log('[genui-bridge] retired :: genui 双通道自适配(dom/registry),宿主无消费面,桥退役(批次189b)')
+  } else {
+    try { _applyGenuiBridge() } catch (e) { failures.push('[genui-bridge] unexpected: ' + String(e)) }
+    try { _applyGenuiRegistryEarly() } catch (e) { failures.push('[genui-registry-early] unexpected: ' + String(e)) }
   }
 }
-try { _applyGenuiRegistryEarly() } catch (e) { failures.push('[genui-registry-early] unexpected: ' + String(e)) }
+
 
 // [v3 2026-09-17] genui 桥分发点语言守卫:修复「任意非流式围栏被 dsh-ui 渲染器误接管」。
 // v1 桥的分发条件只查注册表 has("dsh-ui"),未校验当前围栏语言 a —— yaml/text/无标签围栏
@@ -5851,10 +6372,10 @@ function _applyPermissionGlyphWwa() {
     } catch (_) {}
   }
   try {
-    walk(path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx', 'c40503fdf38a82ea'), 4)
+    // [2026-09-25] 扫全部 _npx 树(原先只扫 pnpm-seed + 硬编码 c40503,平铺树如 0.1.5-rc.3 漏网;
+    //   该树 0.1.5 线弹层仍走 conversation ⇒ 补上后切回 0.1.5 轨也有 wwa 图标)。
     const npxRoot = path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx')
     for (const dir of fs.readdirSync(npxRoot)) {
-      if (!/pnpm-seed$/.test(dir)) continue
       walk(path.join(npxRoot, dir), 4)
       walk(path.join(npxRoot, dir, 'node_modules', '.pnpm'), 4)
     }
@@ -5866,7 +6387,9 @@ function _applyPermissionGlyphWwa() {
       const anchor = src.indexOf('const permissionGlyphs = new Map([')
       const close = anchor === -1 ? -1 : src.indexOf(']);', anchor)
       if (close === -1 || !src.slice(anchor, close).includes('"read-only"')) {
-        results.push({ file, status: 'missing', error: 'permissionGlyphs anchor not found' }); continue
+        // [2026-09-25] 0.1.7 起 composer 弹层迁 dsh-client-ui-permission-presets(该表在那里,
+        // 由 [G2] preset-glyphs 家族补全),conversation 里这张表整体退役 —— 无锚点属预期,不再当 missing。
+        results.push({ file, status: 'skip', error: '旧形态: conversation 无 permissionGlyphs 表(弹层已迁,见 [G2] preset-glyphs)' }); continue
       }
       const head = src.slice(0, close).replace(/[ \t]*\n[ \t]*$/, '')
       const out = head + ',\n\t\t\t' + MARK + '\n\t\t\t' + ENTRY + '\n\t\t' + src.slice(close)
@@ -5881,10 +6404,137 @@ function _applyPermissionGlyphWwa() {
   for (const r of results) {
     console.log('[wwa-glyph] ' + r.status + ' :: ' + r.file + (r.error ? ' :: ' + r.error : ''))
   }
-  const failed = results.filter(r => r.status === 'FAIL' || r.status === 'missing')
+  const failed = results.filter(r => r.status === 'FAIL')
   if (failed.length > 0) {
     console.error('[wwa-glyph] ' + failed.length + ' file(s) failed: '
       + failed.map(f => path.basename(f.file) + ' ' + (f.error || f.status)).join('; '))
   }
 }
 try { _applyPermissionGlyphWwa() } catch (e) { console.error('[wwa-glyph] unexpected: ' + String(e)) }
+
+// ---- [q204 2026-09-22] 表格 A+ 家族:v1 markdown 观感统一 + v2 与 genui 逐项对齐 ----
+//   依据: reports/2026-09-22-genui表格渲染统一可行性评估.md 第 8/9/10 章(方案 A+ 与业界先例)。
+//   症状(v1): 正文 markdown 表格(ui-primitives renderTable)与 dsh-ui 围栏表格(genui .tableWrap)是两套观感 ——
+//             前者无线框/无斑马纹/首列不加粗/无导出,后者是圆角描边卡片表。
+//   症状(v2): v1 给卡片加了 padding:0 12px → 表头灰底与斑马纹左右各留 12px 白沟(主人实测「左右两侧填充不完全」);
+//             表头首列非全对比色、行分隔线偏重、字号/内边距体系与 genui 有差、工具条落在卡片外。
+//             宿主渲染器 renderTable 对每张表都挂 [class*=tableScroll] + (md-table-wide | [class*=tableFill]),
+//             窄表走 tableFill{width:100%} → 表格本就该铺满卡片,白沟纯粹是卡片内边距造成的。
+//   做法: 纯 client 侧,向宿主 web bundle 尾部追加 assets/table-aplus-v3.js 的注入体(不改 React 树、不改上游源码):
+//         ① hash 无关选择器 [class*="tableScroll"] 注入 <style>,配方与 genui 现网 .V1MMBW_table* 逐项同值 ——
+//            卡片零内边距 + 1px 12% label 描边 + 8px 圆角;th 12.5px/700/uppercase/.06em + 2.5% 灰底、首列 label-primary;
+//            td 13.5px/1.5 + 10px 12px + 4% 极淡分隔线 + tabular-nums + vertical-align:middle;斑马 2.5% / hover 4% 挂 tr;
+//         ② 工具条放卡片内首位(genui 的 .tableWrap 内含 .tableTools),胶囊按钮(1px 4% 描边 / 999px / 12.5px 次级灰);
+//         ③ 「复制 Markdown / 复制 CSV」;整列可解析为数值的列打 dsh-t-num 右对齐(GFM :---: 的作者显式对齐优先,不动);
+//         ④ 流式避让:宿主 [data-streaming] 在场时不挂工具条;MutationObserver 定稿后补挂,并把被 React 挤走的工具条拽回首位;
+//         ⑤ 作用域限 [class*="markdown"] 内,排除 genui 与原生 UI 的 [class*="tableWrap"]。
+//   症状(v3): 主人截图 1554x1009 实测 —— 卡片右边界处一条硬裁切线(连卡片上边框线也止于此),
+//             第二颗胶囊「复制 CSV」的盒子越过该线约 45 CSS px、文字被切成「复制」+ 半个字:
+//             工具条盒子的实际宽度 > 卡片可视宽度(成因可能是插件/主题/祖先 overflow 任一);沙箱用
+//             真实 dist CSS + 真实 DOM 形态复现不了原状,但 v3 对两类机制都做了兜底(见下)。
+//   做法(v3): 在同配方基础上加固工具条,不赌「到底是谁把它撑宽了」:
+//         ⑥ 盒子钳制: .dsh-table-tools 显式 width:100% / max-width:100% / box-sizing:border-box / min-width:0;
+//         ⑦ 胶囊不压缩: .dsh-table-tool 加 flex:0 0 auto + white-space:nowrap(实测 flex-shrink 会把胶囊压到
+//            74.8/51.2 而文字不变 → 文字溢出胶囊,越界即被祖先裁掉),工具条改 flex-wrap:wrap 用换行代替压缩;
+//         ⑧ 运行时自愈 fit(): 每轮把内联 max-width 设为 min(100%, min(卡片右边界, 所有会裁切祖先右边界) - 卡片左 - 2),
+//            该值只是几何的函数、与工具条当前状态无关 → 不会「设了又清」抖动;被 React 挤走时依旧拽回首位。
+//   纪律: 哨兵 /*dsh-local-patch:table-aplus-v3*/(payload 首行 + bundle 幂等判据);写前 .bak-table-aplus(仅首次,保住原版);
+//         v2/v1→v3 升级 = 同一次写盘内先按旧哨兵 indexOf 摘掉尾段旧块再追加 v3,绝不两套样式同页共存;
+//         目标双树(c40503 树 + rc.2 seed 的 @deepseek-ai+dsh-web-app@*),index-*.js 通配不绑哈希;
+//         payload 从 __dirname/assets/ 或 ~/.dsh/assets/ 读取,缺文件即记 FAIL 且不写盘(绝不注入半截文本)。
+//   双副本: dsh-desktop/patches.cjs ↔ ~/.dsh/patches.cjs;dsh-desktop/assets/table-aplus-v3.js ↔ ~/.dsh/assets/table-aplus-v3.js。
+//   回退: 从 .bak-table-aplus 还原 bundle,或摘除本族注册行后重放。
+const TABLE_APLUS_MARK = '/*dsh-local-patch:table-aplus-v3*/'
+const TABLE_APLUS_LEGACY = '/*dsh-local-patch:table-aplus-v2*/'
+function _applyTableAPlus() {
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const os = require('node:os')
+  const candidates = [
+    path.join(__dirname, 'assets', 'table-aplus-v3.js'),
+    path.join(os.homedir(), '.dsh', 'assets', 'table-aplus-v3.js'),
+  ]
+  let payload = null
+  let payloadPath = ''
+  for (const c of candidates) {
+    try { if (!fs.existsSync(c)) continue } catch (_) { continue }
+    const text = fs.readFileSync(c, 'utf8').trim()
+    if (text.indexOf(TABLE_APLUS_MARK) !== 0) continue
+    payload = text
+    payloadPath = c
+    break
+  }
+  if (payload === null) {
+    failures.push('[table-aplus] payload 缺失或首行哨兵不符(需 dsh-desktop/assets/table-aplus-v3.js 与 ~/.dsh/assets/table-aplus-v3.js),未写盘')
+    return
+  }
+  const results = []
+  const targets = []
+  const pushAssets = (assets) => {
+    try {
+      for (const f of fs.readdirSync(assets)) {
+        if (/^index-[A-Za-z0-9_-]+\.js$/.test(f)) targets.push(path.join(assets, f))
+      }
+    } catch (_) {}
+  }
+  try {
+    const npxRoot = path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx')
+    for (const dir of fs.readdirSync(npxRoot)) {
+      // 目标双树:c40503 活体树 + rc.2 seed(其它历史 *-pnpm-seed 树是僵尸缓存,不打)
+      if (dir !== 'c40503fdf38a82ea' && dir !== 'dsh-0.1.5-rc.2-pnpm-seed') continue
+      const root = path.join(npxRoot, dir)
+      pushAssets(path.join(root, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets'))
+      try {
+        const pnpm = path.join(root, 'node_modules', '.pnpm')
+        for (const sub of fs.readdirSync(pnpm)) {
+          if (!sub.startsWith('@deepseek-ai+dsh-web-app@')) continue
+          pushAssets(path.join(pnpm, sub, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets'))
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  for (const file of targets) {
+    try {
+      if (!fs.existsSync(file)) { results.push({ file, status: 'missing' }); continue }
+      const src = fs.readFileSync(file, 'utf8')
+      const at = src.indexOf(TABLE_APLUS_MARK)
+      if (at >= 0) {
+        /* 已在当前版(v3):再做内容比对 —— 资产改过而哨兵未变时(a.k.a. 假幂等:报 already 却没刷新)重写尾段。
+           保护:尾段在本版块之后若还挂着别的补丁哨兵,说明后面还有家族追加过内容 → 一律不动。 */
+        const tail = src.slice(at)
+        const otherAfter = /\/\*dsh-local-patch:(?!table-aplus-v3)[a-z0-9-]+\*\//i.test(tail.slice(TABLE_APLUS_MARK.length))
+        if (tail.trim() === payload || otherAfter) { results.push({ file, status: 'already' }); continue }
+        const bakR = file + '.bak-table-aplus'
+        if (!fs.existsSync(bakR)) fs.copyFileSync(file, bakR)
+        fs.writeFileSync(file, src.slice(0, at).replace(/\s+$/, '') + '\n' + payload + '\n')
+        results.push({ file, status: 'refreshed (asset 变更)' })
+        continue
+      }
+      /* 旧版(v2/v1)→v3 升级:同一次写盘内先摘掉尾段旧注入体再追加,避免两套 A+ 样式同页共存 */
+      let next = src
+      let upgraded = false
+      const legacyAt = next.indexOf(TABLE_APLUS_LEGACY)
+      if (legacyAt >= 0) { next = next.slice(0, legacyAt).replace(/\s+$/, ''); upgraded = true }
+      else {
+        const v1At = next.indexOf('/*dsh-local-patch:table-aplus-v1*/')
+        if (v1At >= 0) { next = next.slice(0, v1At).replace(/\s+$/, ''); upgraded = true }
+      }
+      const bak = file + '.bak-table-aplus'
+      if (!fs.existsSync(bak)) fs.copyFileSync(file, bak)
+      fs.writeFileSync(file, next + '\n' + payload + '\n')
+      results.push({ file, status: upgraded ? 'upgraded v2/v1->v3' : 'patched' })
+    } catch (e) {
+      results.push({ file, status: 'FAIL', error: String((e && e.message) || e) })
+    }
+  }
+  for (const r of results) {
+    console.log('[table-aplus] ' + r.status + ' :: ' + r.file + (r.error ? ' :: ' + r.error : ''))
+  }
+  console.log('[table-aplus] payload 源: ' + payloadPath)
+  const failed = results.filter(r => r.status === 'FAIL' || r.status === 'missing')
+  if (failed.length > 0) {
+    failures.push('[table-aplus] ' + failed.length + ' file(s) failed: '
+      + failed.map(f => path.basename(f.file) + ' ' + (f.error || f.status)).join('; '))
+  }
+}
+try { _applyTableAPlus() } catch (e) { failures.push('[table-aplus] unexpected: ' + String(e)) }

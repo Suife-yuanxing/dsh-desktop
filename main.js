@@ -31,18 +31,12 @@ const http = require('node:http')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-// [问题99 2026-08-23] 补丁重放器单一事实来源:优先加载 ~/.dsh/patches.cjs(壳外部署面,
+// [问题99 2026-08-23] 补丁重放器单一事实来源:优先 ~/.dsh/patches.cjs(壳外部署面,
 // 升级重放器无需重建/重新部署 asar),不存在或损坏时回退 asar 内嵌副本。
-// 背景:运行中壳曾从 Temp 目录的旧 asar 启动(8-21 02:55 构建,内嵌 0.13 时代锚点),
-// 壳每次启动旧重放器对 0.15.1 全 FAIL 后按「还原 base」设计把新补丁整体抹掉——
-// 侧边栏显示/入口随机回退原生形态且修复后复发的直接元凶。哨兵机制(见 patches.cjs)
-// 已让新旧副本互不误伤,本通道再把「更新重放器必须重建 asar」这一结构根因消除。
-let replayLocalPatches
-try {
-  replayLocalPatches = require(path.join(os.homedir(), '.dsh', 'patches.cjs')).replayAll
-} catch {
-  replayLocalPatches = require('./patches.cjs').replayAll
-}
+// [批次191] 正本不再在启动模块加载段加载(655KB,壳模块加载 0.67s 的大头之一):
+// 全部重放路径收口到 patches-replay-sync.cjs / patches-replay-worker.cjs 两个助手
+// 模块(HOME 正本的动态加载与 asar 回退都封装在助手内,按需触发);主进程不再持有
+// 启动期常驻的重放器引用。
 // [P3fix/G5 2026-09-13] startDsh spawn 前同步重放助手(字面量 require,动态加载收拢在
 // 助手模块 patches-replay-sync.cjs 内):运行期重放已全部挪入 worker 线程,仅此一处
 // 保留主进程同步执行。
@@ -58,7 +52,9 @@ const { replaySync } = require('./patches-replay-sync.cjs')
 // 未揭,且补丁必须先于服务进程加载插件产物落位)。worker 启动失败/超时回退同步路径。
 const { Worker } = require('node:worker_threads')
 const REPLAY_WORKER_TIMEOUT_MS = 120_000
-function runReplayInWorker({ timeoutMs = REPLAY_WORKER_TIMEOUT_MS } = {}) {
+// [批次191] skipFastpath:守护线程传 true 保持「每轮真验证」原语义;boot/复用/重启路径
+// 默认 false,由 worker 内的内容哨兵快速通道决定是否整轮跳过(见 patches-replay-fastpath.cjs)。
+function runReplayInWorker({ timeoutMs = REPLAY_WORKER_TIMEOUT_MS, skipFastpath = false } = {}) {
   return new Promise((resolve) => {
     let w = null
     let settled = false
@@ -72,12 +68,13 @@ function runReplayInWorker({ timeoutMs = REPLAY_WORKER_TIMEOUT_MS } = {}) {
     }
     timer = setTimeout(() => finish({ result: null, logs: [], error: `worker 超时(>${timeoutMs}ms),已终止` }), timeoutMs)
     try {
-      w = new Worker(path.join(__dirname, 'patches-replay-worker.cjs'))
+      w = new Worker(path.join(__dirname, 'patches-replay-worker.cjs'), { workerData: { skipFastpath: !!skipFastpath } })
     } catch (e) {
       // worker 起不来:回退同步重放(asar 内嵌正本;HOME 正本加载在 worker 内完成)
-      try {
-        const r = replayLocalPatches(() => {})
-        finish({ result: r, logs: [], error: null, fallbackSync: true })
+    try {
+      // [批次191] 回退路径复用同步助手(HOME 正本惰性加载 + asar 回退 + 快速通道语义一致)
+      const r = replaySync(() => {})
+      finish({ result: r, logs: [], error: null, fallbackSync: true })
       } catch (e2) {
         finish({ result: null, logs: [], error: String((e2 && e2.message) || e2) })
       }
@@ -133,9 +130,11 @@ function startPatchGuardian(intervalMs = 45_000) {
       // [P3fix/G5 2026-09-13] 重放经 worker 线程执行(见 runReplayInWorker):主进程事件循环
       // 不再被 ~4-8s 同步重放阻塞;worker 新 isolate 每轮读 HOME 正本,q194 热重载语义由
       // 隔离性天然满足。in-flight 期间跳过新 tick(重放时长>轮询间隔时防堆积)。
+      // [批次191] 守护线程跳过快速通道:守护的职责是「每轮真验证」,其指示文件签名门
+      // 已经足够快;强制轮的兜底语义保持不变。
       if (replayInFlight) return
       replayInFlight = true
-      runReplayInWorker().then(({ result, error }) => {
+      runReplayInWorker({ skipFastpath: true }).then(({ result, error }) => {
         replayInFlight = false
         const r = result || { ok: false, items: [] }
         lastSig = sig
@@ -193,6 +192,9 @@ let dshWebUrl = null
 let dshUrlReloadTimer = null
 function dshUrl() { return dshWebUrl || DSH_URL }
 const START_TIMEOUT_MS = 120_000 // 首次 npx 需下载包,给足时间
+// [R106 2026-09-24] 缓存被清后的 npx 冷装实测 ~4 分钟(250+ 包、注册表逐包 20-30s),
+// 120s 预算必被误判失败弹错误页(2026-09-24 事故首因)。冷路径单独给 10 分钟预算。
+const COLD_START_TIMEOUT_MS = 600_000
 const SWITCH_TIMEOUT_MS = 60_000 // 版本切换的就绪预算,超时自动回滚
 const DSH_HOME = path.join(os.homedir(), '.dsh')
 const LOG_DIR = path.join(DSH_HOME, 'logs')
@@ -440,6 +442,47 @@ function resolveNodeExe() {
   return nodeExeMemo
 }
 
+// [R106 2026-09-24] 运行时金库:活动运行树的本地快照(~/.dsh/runtimes/dsh-<ver>)。
+// 2026-09-24 事故:npm 缓存被整体清空 → _npx 下所有运行树消失 → 被迫 npx 冷装,
+// 超预算弹错误页,且 home 插件依赖软链悬空致 dsh 崩溃循环。金库让冷启动不再依赖
+// npm 缓存与网络:npx 树缺失时直接跑快照。快照由 ensureRuntimeVault 在 dsh 就绪后
+// 后台补齐,含补丁态(与活树同源,不做增量合并);一份/版本,不自动清理(手工删可选)。
+const RUNTIME_VAULT_ROOT = path.join(DSH_HOME, 'runtimes')
+const VAULT_MARKER = '.vault-ready.json'
+function vaultDirFor(version) { return path.join(RUNTIME_VAULT_ROOT, `dsh-${version}`) }
+function readVaultMarker(version) {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(vaultDirFor(version), VAULT_MARKER), 'utf8'))
+    return m && m.version === version ? m : null
+  } catch { return null }
+}
+
+// <host>/node_modules/@deepseek-ai/dsh 内按版本取 bin.js 绝对路径;版本不符/缺件返 null
+function dshBinInHostDir(hostDir, version) {
+  const pkgDir = path.join(hostDir, 'node_modules', '@deepseek-ai', 'dsh')
+  const pj = path.join(pkgDir, 'package.json')
+  if (!fs.existsSync(pj)) return null
+  let pkg
+  try { pkg = JSON.parse(fs.readFileSync(pj, 'utf8')) } catch { return null }
+  if (pkg.version !== version) return null
+  const binRel = typeof pkg.bin === 'string' ? pkg.bin : (pkg.bin && pkg.bin.dsh)
+  if (!binRel) return null
+  const binAbs = path.join(pkgDir, binRel)
+  return fs.existsSync(binAbs) ? binAbs : null
+}
+
+// bin.js → 其宿主目录(含 node_modules 的那层);bin 相对深度不定,按 node_modules 名上溯
+function hostDirOfBin(binJs) {
+  let d = path.dirname(binJs)
+  for (let i = 0; i < 8; i++) {
+    if (path.basename(d) === 'node_modules') return path.dirname(d)
+    const up = path.dirname(d)
+    if (up === d) break
+    d = up
+  }
+  return null
+}
+
 // [问题55] 快速启动:在 npx 缓存内找与锁定版本一致的 dsh,返回其 bin.js 绝对路径。
 // 命中则壳直接 `node bin.js web`,省去 npx 包装层的解析/校验开销(实测约 1s)。
 // 未命中(未缓存/版本不符)返 null,回退 npx(带 -y 自动安装)。
@@ -447,18 +490,16 @@ function resolveCachedDshBin(version) {
   const v = version || cfg.dshVersion
   try {
     const npxRoot = path.join(process.env.LOCALAPPDATA || '', 'npm-cache', '_npx')
-    if (!fs.existsSync(npxRoot)) return null
-    for (const h of fs.readdirSync(npxRoot)) {
-      const pkgDir = path.join(npxRoot, h, 'node_modules', '@deepseek-ai', 'dsh')
-      const pj = path.join(pkgDir, 'package.json')
-      if (!fs.existsSync(pj)) continue
-      let pkg
-      try { pkg = JSON.parse(fs.readFileSync(pj, 'utf8')) } catch { continue }
-      if (pkg.version !== v) continue
-      const binRel = typeof pkg.bin === 'string' ? pkg.bin : (pkg.bin && pkg.bin.dsh)
-      if (!binRel) continue
-      const binAbs = path.join(pkgDir, binRel)
-      if (fs.existsSync(binAbs)) return binAbs
+    if (fs.existsSync(npxRoot)) {
+      for (const h of fs.readdirSync(npxRoot)) {
+        const binAbs = dshBinInHostDir(path.join(npxRoot, h), v)
+        if (binAbs) return binAbs
+      }
+    }
+    // [R106] 金库兜底:npx 树整片缺失(缓存被清)时跑本地快照,避免联网冷装
+    if (readVaultMarker(v)) {
+      const binAbs = dshBinInHostDir(vaultDirFor(v), v)
+      if (binAbs) return binAbs
     }
   } catch { /* 回退 npx */ }
   return null
@@ -601,8 +642,65 @@ function preheatDshFiles() {
 }
 // 触发点:启动/重启/自动恢复就绪后 5s 起跑;之后每 10 分钟补一次(文件已被
 // 缓存时只是 RAM 读,开销可忽略),对冲长时间空闲后的缓存逐出。
-function schedulePreheat() { setTimeout(preheatDshFiles, 5_000) }
-function startPreheatLoop() { schedulePreheat(); const t = setInterval(preheatDshFiles, 600_000); if (t.unref) t.unref() }
+function schedulePreheat() { setTimeout(preheatDshFiles, 5_000); scheduleVaultEnsure() }
+function startPreheatLoop() {
+  schedulePreheat()
+  const t = setInterval(() => { preheatDshFiles(); ensureRuntimeVault().catch(() => {}) }, 600_000)
+  if (t.unref) t.unref()
+}
+
+// [R106] 金库补齐与预热同源(就绪后起跑);单飞 + 失败静默,预热轮会再试
+function scheduleVaultEnsure() {
+  setTimeout(() => { ensureRuntimeVault().catch(() => {}) }, 20_000).unref?.()
+}
+let vaultEnsuring = false
+// [批次191] 失败退避:本机 symlink EPERM(需管理员/开发者模式)恒败,每次尝试都要
+// 先 cp 部分 node_modules 才在 junction 处爆掉(实测 4-5s IO 空转)且每 10 分钟重复、
+// 每次就绪后 +20s 再来一轮 —— 恰好都压在 dsh 冷启窗口附近。连续 2 次失败后本壳会话
+// 内停试,直到 dshVersion 变化或壳重启;成功清零计数。
+let vaultFailStreak = 0
+let vaultDisabledForVersion = null
+async function ensureRuntimeVault() {
+  if (vaultEnsuring || quitting) return
+  const v = cfg.dshVersion
+  if (vaultDisabledForVersion === v) return
+  // 已有且可用才跳过:标记在但树被删/缺件时重建
+  if (readVaultMarker(v) && dshBinInHostDir(vaultDirFor(v), v)) return
+  // 源 = 本次实际拉起用的活树;已在金库内(说明本次就是金库启动)则无需快照
+  const binJs = lastLaunchBin || resolveCachedDshBin(v)
+  const vaultNorm = path.normalize(RUNTIME_VAULT_ROOT) + path.sep
+  if (!binJs || path.normalize(binJs).startsWith(vaultNorm)) return
+  const hostDir = hostDirOfBin(binJs)
+  if (!hostDir) return
+  const finalDir = vaultDirFor(v)
+  const tmpDir = `${finalDir}.inflight-${process.pid}`
+  vaultEnsuring = true
+  const t0 = Date.now()
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+    fs.mkdirSync(tmpDir, { recursive: true })
+    await fs.promises.cp(path.join(hostDir, 'node_modules'), path.join(tmpDir, 'node_modules'), { recursive: true, force: true })
+    fs.writeFileSync(path.join(tmpDir, VAULT_MARKER), JSON.stringify({ version: v, source: binJs, createdAt: new Date().toISOString() }, void 0, 2))
+    fs.rmSync(finalDir, { recursive: true, force: true })
+    fs.renameSync(tmpDir, finalDir)
+    vaultFailStreak = 0
+    log(`[R106] 运行时金库已就绪: ${finalDir}(源 ${binJs},耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s)`)
+  } catch (e) {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* 残留下次覆盖 */ }
+    vaultFailStreak += 1
+    if (vaultFailStreak >= 2 && vaultDisabledForVersion !== v) {
+      vaultDisabledForVersion = v
+      log(`[R106] 金库补齐连续 ${vaultFailStreak} 次失败(${e.message.split('\n')[0]});本会话内停试,版本变更或重启壳后重试`)
+    } else {
+      log(`[R106] 运行时金库补齐失败(不影响本次运行): ${e.message}`)
+    }
+  } finally { vaultEnsuring = false }
+}
+
+// [R106] 上次拉起记录:运行树来源与是否冷路径(npx 需下载),供就绪预算与金库补齐使用
+let lastLaunchBin = null
+let lastLaunchCold = false
+function startWaitBudgetMs() { return lastLaunchCold ? COLD_START_TIMEOUT_MS : START_TIMEOUT_MS }
 
 function startDsh({ skipReplay = false } = {}) {
   // [问题88] 每次启动 dsh 前重放本地补丁守护:市场更新/外部整写可能在壳运行期改掉
@@ -631,6 +729,8 @@ function startDsh({ skipReplay = false } = {}) {
     // official 轨的 npx 树由其自身装配处理,不受影响。
     cmd = runtime.node
     args = ['--expose-internals', runtime.bin, 'web']
+    lastLaunchBin = runtime.bin
+    lastLaunchCold = false
     log(`启动 dsh(本地构建): ${cmd} ${args.join(' ')}`)
   } else {
     // [问题55] 快速路径:npx 缓存命中锁定版本 → 直接 node bin.js web,省去 npx 包装层
@@ -643,6 +743,8 @@ function startDsh({ skipReplay = false } = {}) {
       // 故仅在版本 ≥0.1.0-rc.8 时追加(配置层已由 profile patch web-runtime 行兜底)。
       const noOpen = semverGt(cfg.dshVersion, '0.1.0-rc.7') ? ['--no-open'] : []
       args = [binJs, 'web', ...noOpen]
+      lastLaunchBin = binJs
+      lastLaunchCold = false
       log(`启动 dsh(快速路径,绕过 npx): ${cmd} ${args.join(' ')}`)
     } else {
       const npx = resolveNpxCommand()
@@ -665,6 +767,10 @@ function startDsh({ skipReplay = false } = {}) {
         args = [...REGISTRY_ARGS, '--prefer-offline', '-y', spec, 'web', ...noOpen]
       }
       log(`启动 dsh(npx): ${cmd} ${args.join(' ')}`)
+      // [R106] 冷路径标记:就绪预算放宽到 10 分钟(冷装实测 ~4 分钟),避免误判失败弹错误页
+      lastLaunchBin = null
+      lastLaunchCold = true
+      log(`缓存未命中,本次为冷启动(依赖下载可能数分钟,就绪预算 ${COLD_START_TIMEOUT_MS / 60000} 分钟)`)
     }
   }
   dshChild = spawn(cmd, args, {
@@ -745,7 +851,7 @@ async function scheduleRecovery() {
       return
     }
     const child = dshChild // 锁定本次恢复拉起的进程,防止后续恢复周期替换后误清零计数
-    const ok = await waitForPort(START_TIMEOUT_MS)
+    const ok = await waitForPort(startWaitBudgetMs())
     if (ok) {
       // 端口监听不代表 boot 完成:插件树加载失败会让进程在 listen 后 1-2s 退出。
       // 先刷页面保住 UX,退避计数留待稳定期确认后再清零——否则每次崩溃循环都把
@@ -887,7 +993,7 @@ function requestRestart(source) {
 
 // [问题121] 落定时刻记录:无论哪条调用链(托盘/API/切换/回滚),restartDsh 一落定
 // 就武装冷却期,防止紧随其后的重复触发把刚拉起的服务再杀一遍。
-async function restartDsh(timeoutMs = START_TIMEOUT_MS) {
+async function restartDsh(timeoutMs = startWaitBudgetMs()) {
   try {
     await restartDshInner(timeoutMs)
   } finally {
@@ -4070,7 +4176,8 @@ async function boot() {
   }
   stage('wait')
   log('等待 dsh 服务就绪...')
-  const ok = await waitForPort(START_TIMEOUT_MS)
+  const bootBudgetMs = startWaitBudgetMs() // [R106] 冷路径(npx 下载)放宽预算
+  const ok = await waitForPort(bootBudgetMs)
   if (ok) {
     log(`dsh 服务就绪,加载 Web UI(壳启动至就绪 ${((Date.now() - bootT0) / 1000).toFixed(1)}s)`)
     restartAttempts = 0
@@ -4079,7 +4186,7 @@ async function boot() {
     showMain(dshUrl())
     startPreheatLoop()
   } else {
-    log(`等待超时(${START_TIMEOUT_MS / 1000}s),显示错误页`)
+    log(`等待超时(${bootBudgetMs / 1000}s),显示错误页`)
     closeSplash()
     const win = [...mainWindows][0]
     if (win) { win.loadFile('error.html', { query: { reason: 'timeout' } }); win.show() }
@@ -4150,8 +4257,12 @@ if (!app.requestSingleInstanceLock()) {
       // 就绪后异步拉版本列表(设置页更新区展示,无弹窗)。
       // 取消启动时自动检查 dsh 更新:版本锁落后于 npm 最新版时每次启动都会弹
       // 「dsh 有新版本」确认框;改为仅设置页手动检查(dsh-settings:check-dsh-update)。
-      fetchAvailableVersions()
-      if (autoUpdater) autoUpdater.checkForUpdates().catch((e) => log(`壳更新检查失败: ${e.message}`))
+      // [批次191] 两项网络尾巴延后 15s:它们本就与揭窗无关,但 packument 拉取与
+      // 更新器初始化会和 dsh 冷启/预热/金库补齐抢 CPU/网络;让位关键路径,功能不变。
+      setTimeout(() => {
+        fetchAvailableVersions()
+        if (autoUpdater) autoUpdater.checkForUpdates().catch((e) => log(`壳更新检查失败: ${e.message}`))
+      }, 15_000).unref?.()
     })
   })
 
@@ -4177,5 +4288,10 @@ if (!app.requestSingleInstanceLock()) {
 // scripts/check-boot-gate.mjs 同法抓取 bootGate 断言揭窗闸门各分支。
 // Electron 主进程里 process.versions.electron 存在 → 不导出,运行态零影响。
 if (!process.versions.electron && typeof module !== 'undefined' && module.exports) {
-  module.exports = { resolveDshRuntime, resolveDefaultLocalDir, bootGate }
+  // [R106] 金库家族一并导出,供 scripts/check-runtime-vault.mjs 断言
+  module.exports = {
+    resolveDshRuntime, resolveDefaultLocalDir, bootGate,
+    resolveCachedDshBin, readVaultMarker, vaultDirFor, dshBinInHostDir, hostDirOfBin,
+    ensureRuntimeVault, startWaitBudgetMs, runtimeVaultRoot: RUNTIME_VAULT_ROOT,
+  }
 }

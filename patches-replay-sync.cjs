@@ -5,8 +5,14 @@
 // 路径按 os.homedir() 自算,不接收外部传入代码/路径;缺失/损坏回退 asar 内嵌副本。
 const os = require('node:os')
 const path = require('node:path')
+// [批次191 2026-10-07] 内容哨兵快速通道:先比对目标树是否与上次成功重放后一致,
+// 一致则整轮跳过(replaySync 语义 = 补丁必先于 spawn 落位;树未变 ⇒ 落位已在,
+// 跳过等价)。不一致才加载 655KB 正本走全量,并由 runWithRecording 重建清单。
+// 状态文件/失败模式见 patches-replay-fastpath.cjs 头注。
+const fastpath = require('./patches-replay-fastpath.cjs')
 
 function replaySync(log) {
+  if (fastpath.shouldSkip(log)) return { ok: true, items: [], fastpath: true }
   let replayer
   try {
     // [q203 2026-09-22] require 缓存失效重读:壳是长驻进程,HOME 正本在运行期被编辑/
@@ -21,7 +27,7 @@ function replaySync(log) {
   } catch {
     replayer = require('./patches.cjs').replayAll
   }
-  return replayer(log)
+  return fastpath.runWithRecording(() => replayer(log), log)
 }
 
 module.exports = { replaySync }

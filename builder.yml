@@ -17,6 +17,9 @@ files:
   # 两文件为 09-13 P3fix/G5 新增,files 显式清单未同步是 dist-0.5.17 启动崩根因。
   - patches-replay-sync.cjs
   - patches-replay-worker.cjs
+  # [批次191 2026-10-07] 重放内容哨兵快速通道模块:sync/worker 助手均 require 本文件,
+  # files 显式清单未同步 = 与 dist-0.5.17 启动崩同型的 Cannot find module 根因。
+  - patches-replay-fastpath.cjs
   - dsh-plugin-compat.cjs
   - preload.js
   - error.html

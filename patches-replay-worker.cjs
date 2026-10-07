@@ -10,7 +10,11 @@
 // (与 main.js 同一正本),缺失/损坏时回退 asar 内嵌副本。
 const os = require('node:os')
 const path = require('node:path')
-const { parentPort } = require('node:worker_threads')
+const { parentPort, workerData } = require('node:worker_threads')
+// [批次191 2026-10-07] 内容哨兵快速通道(见 patches-replay-fastpath.cjs 头注):
+// boot/复用路径默认启用(workerData.skipFastpath=false),守护线程传 true 保持原语义;
+// CLI 模式 --force 跳过快速通道做全量。
+const fastpath = require('./patches-replay-fastpath.cjs')
 
 function loadReplayer() {
   try {
@@ -20,21 +24,28 @@ function loadReplayer() {
   }
 }
 
-function runReplay() {
+function runReplay(opts = {}) {
   const logs = []
-  const r = loadReplayer()((l) => { logs.push(l) })
-  return { result: r, logs }
+  const replayer = () => loadReplayer()((l) => { logs.push(l) })
+  if (!opts.skipFastpath) {
+    if (fastpath.shouldSkip((l) => { logs.push(l) })) {
+      return { result: { ok: true, items: [], fastpath: true }, logs, fastpathSkipped: true }
+    }
+    const r = fastpath.runWithRecording(replayer, (l) => { logs.push(l) })
+    return { result: r, logs }
+  }
+  return { result: replayer(), logs }
 }
 
 if (parentPort) {
   try {
-    parentPort.postMessage(runReplay())
+    parentPort.postMessage(runReplay(workerData || {}))
   } catch (e) {
     parentPort.postMessage({ result: null, logs: [], error: String((e && e.message) || e) })
   }
 } else if (require.main === module) {
   let out
-  try { out = runReplay() } catch (e) { out = { result: null, logs: [], error: String((e && e.message) || e) } }
+  try { out = runReplay({ skipFastpath: process.argv.includes('--force') }) } catch (e) { out = { result: null, logs: [], error: String((e && e.message) || e) } }
   process.stdout.write(JSON.stringify(out), () => {
     process.exit(out.result && out.result.ok ? 0 : 1)
   })
