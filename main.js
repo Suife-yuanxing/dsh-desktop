@@ -298,10 +298,22 @@ function log(msg) {
 // 主进程同步 IO 尖峰会拖慢全部窗口的输入响应(主进程负责 OS 级与输入分发,
 // P3 方案 §三.R1/§四.A5)。合批 500ms 单次异步追加,行内容与行序不变;
 // 关键行(启动 URL 捕获等)仍走同步 log() 立即落盘,两类行之间时序可能交错(可接受)。
+// [批次192 2026-10-07] 吞写根治:原实现的 .catch(() => {}) 把落盘失败整批静默吞掉,
+// 实测 desktop.log 自 2026-09-15 起 [dsh]/[patches] 行零落盘而同步 log() 正常,根因
+// 因此不可见。重写三保险:①异步写失败 → 同步降级重写同一批(批不丢)+ 把错误面包屑
+// 写进日志本身(根因可见);②appendFile 回调 10s 挂死看门狗 → 放行后续批次并同步降级
+// (防一次挂起永久断流;若迟到的真实回调后续完成可能产生重复行,可接受);③mkdir 失败
+// 不再丢弃整批,交给 flush 的同步降级兜底。
 let dshLogBuf = []
 let dshLogTimer = null
 let dshLogDirReady = false
 let dshLogChain = Promise.resolve()
+function dshLogFlushFallback(text, reason) {
+  try { fs.appendFileSync(LOG_FILE, text) } catch { /* 同步也失败:仅 console 可见 */ }
+  if (reason) {
+    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [dshLog] 异步落盘失败已同步降级(${reason})\n`) } catch { /* */ }
+  }
+}
 function dshLog(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`
   console.log(line)
@@ -313,8 +325,28 @@ function dshLog(msg) {
     dshLogBuf = []
     try {
       if (!dshLogDirReady) { fs.mkdirSync(LOG_DIR, { recursive: true }); dshLogDirReady = true }
-    } catch { return }
-    dshLogChain = dshLogChain.then(() => { rotateLogIfNeeded(); return fs.appendFile(LOG_FILE, text) }).catch(() => {})
+    } catch { /* 目录建不出不丢批:交给下方同步降级兜底 */ }
+    dshLogChain = dshLogChain.then(() => {
+      try { rotateLogIfNeeded() } catch { /* 不阻断 */ }
+      return new Promise((resolve) => {
+        let settled = false
+        const done = (err) => {
+          if (settled) return
+          settled = true
+          clearTimeout(watchdog)
+          if (err) dshLogFlushFallback(text, err.message)
+          resolve()
+        }
+        const watchdog = setTimeout(() => {
+          if (settled) return
+          settled = true
+          dshLogFlushFallback(text, 'appendFile 回调 10s 未回,看门狗放行')
+          resolve()
+        }, 10_000)
+        if (watchdog.unref) watchdog.unref()
+        try { fs.appendFile(LOG_FILE, text, done) } catch (e) { done(e) }
+      })
+    }).catch(() => { dshLogFlushFallback(text, '重放链断裂') })
   }, 500)
 }
 
